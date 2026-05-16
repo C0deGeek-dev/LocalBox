@@ -813,6 +813,16 @@ function Start-ClaudeWithLlamaCppModel {
     if (-not $DryRun -and -not $coexist) {
         Stop-OllamaModels
         Stop-OllamaApp
+
+        # Wait for Ollama processes to fully release GPU resources before
+        # launching llama.cpp.  Without this, llama-server can silently crash
+        # or hang when Ollama still holds the GPU (especially after a fresh
+        # restart or heavy prior use).
+        Write-Host "Waiting for Ollama to fully stop..." -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 1000
+        foreach ($p in @(Get-Process -Name 'ollama app', 'ollama' -ErrorAction SilentlyContinue)) {
+            try { $p.WaitForExit(5000) } catch { }
+        }
     }
 
     # Stop any prior llama-server we own.
@@ -1105,6 +1115,8 @@ function Start-ClaudeWithLlamaCppModel {
     Write-LaunchLog "llama-server: path=$serverPath port=$port gguf=$ggufPath mode=$Mode" 'SERVER'
 
     $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+    Write-Host "  PID      : $($proc.Id)" -ForegroundColor DarkGray
+    Write-LaunchLog "llama-server started: pid=$($proc.Id) port=$port" 'SERVER'
 
     $session = @{
         Backend  = 'llamacpp'

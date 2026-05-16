@@ -129,7 +129,8 @@ function Wait-LlamaServer {
             $elapsed = (Get-Date) - $start
             if ($elapsed.TotalSeconds -ge 5) {
                 if (-not $progressShownAt) {
-                    Write-Host -NoNewline "Waiting for llama-server" -ForegroundColor DarkGray
+                    $pidNote = if ($Process -and $Process.Id) { " (pid $($Process.Id))" } else { "" }
+                    Write-Host -NoNewline "Waiting for llama-server$pidNote" -ForegroundColor DarkGray
                     $progressShownAt = Get-Date
                 }
                 elseif (((Get-Date) - $progressShownAt).TotalSeconds -ge 2) {
@@ -137,6 +138,13 @@ function Wait-LlamaServer {
                     $progressShownAt = Get-Date
                 }
             }
+
+            # After ~30s of waiting, add context so the user knows the model is
+            # still loading (not stuck).
+            if ($elapsed.TotalSeconds -ge 30 -and $elapsed.TotalSeconds -lt 32) {
+                Write-Host -NoNewline " (loading model, this may take a minute...)" -ForegroundColor DarkGray
+            }
+
             Start-Sleep -Milliseconds 500
         }
     }
