@@ -54,6 +54,18 @@ function Resolve-BenchPilotRoot {
     $managed = Join-Path $HOME '.local-llm\tools\benchpilot'
     $candidates.Add([pscustomobject]@{ Source = 'managed'; Root = $managed; ModulePath = $null }) | Out-Null
 
+    if (-not [string]::IsNullOrWhiteSpace($script:LLMProfileRoot)) {
+        $launcherDir   = Split-Path -Parent $script:LLMProfileRoot
+        $workspaceDir  = Split-Path -Parent $launcherDir
+        if (-not [string]::IsNullOrWhiteSpace($workspaceDir)) {
+            $candidates.Add([pscustomobject]@{ Source = 'heuristic:workspace-sibling'; Root = (Join-Path $workspaceDir 'benchpilot'); ModulePath = $null }) | Out-Null
+        }
+    }
+
+    foreach ($folder in @('IdeaProjects', 'repos', 'projects', 'code', 'dev', 'src', 'git')) {
+        $candidates.Add([pscustomobject]@{ Source = "heuristic:$folder"; Root = (Join-Path $HOME "$folder\benchpilot"); ModulePath = $null }) | Out-Null
+    }
+
     foreach ($candidate in $candidates) {
         $modulePath = if ($candidate.ModulePath) { $candidate.ModulePath } else { Resolve-BenchPilotModulePath -Root $candidate.Root }
         if ($modulePath -and (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
