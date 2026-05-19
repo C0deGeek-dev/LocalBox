@@ -4,6 +4,7 @@ function llm     { Start-LLMWizard @args }
 function llmmenu { Start-LLMWizard @args }
 function llmc    { Start-LLMWizardClassic }
 function llms    { Start-LLMWizardSpectreExplicit }
+function llmremote { Start-LocalLLMRemoteGateway @args }
 function reloadllm { Reload-LocalLLMConfig }
 
 # llama.cpp: status + stop. The wizard handles launch interactively;

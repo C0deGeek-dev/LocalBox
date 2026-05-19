@@ -4,12 +4,21 @@
 
 $script:ClaudeEnvBackup = @{}
 $script:NoThinkProxyProcess = $null
+$script:RemoteGatewaySession = $null
 
 function Get-NoThinkProxyHealth {
-    param([Parameter(Mandatory = $true)][int]$Port)
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [string]$AuthToken
+    )
 
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 1 -ErrorAction Stop
+        $headers = @{}
+        if (-not [string]::IsNullOrWhiteSpace($AuthToken)) {
+            $headers['Authorization'] = "Bearer $AuthToken"
+        }
+
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/health" -Headers $headers -TimeoutSec 1 -ErrorAction Stop
         $content = [string]$response.Content
         try {
             return ($content | ConvertFrom-Json -AsHashtable)
@@ -27,10 +36,11 @@ function Test-NoThinkProxyTarget {
     param(
         [Parameter(Mandatory = $true)][int]$ListenPort,
         [Parameter(Mandatory = $true)][string]$TargetHost,
-        [Parameter(Mandatory = $true)][int]$TargetPort
+        [Parameter(Mandatory = $true)][int]$TargetPort,
+        [string]$AuthToken
     )
 
-    $health = Get-NoThinkProxyHealth -Port $ListenPort
+    $health = Get-NoThinkProxyHealth -Port $ListenPort -AuthToken $AuthToken
     if (-not $health) { return $null }
 
     $healthHost = if ($health.Contains('target_host')) { [string]$health.target_host } else { '' }
@@ -66,6 +76,77 @@ function Restore-ClaudeEnvBackup {
 
     $script:ClaudeEnvBackup = @{}
     Write-LaunchLog "Claude env vars restored." 'INFO'
+}
+
+function ConvertTo-LocalLLMBashDoubleQuoted {
+    param([AllowEmptyString()][string]$Value)
+    return '"' + (([string]$Value) -replace '\\', '\\' -replace '"', '\"' -replace '\$', '\$' -replace '`', '\`') + '"'
+}
+
+function ConvertTo-LocalLLMPowerShellDoubleQuoted {
+    param([AllowEmptyString()][string]$Value)
+    return '"' + (([string]$Value) -replace '`', '``' -replace '"', '`"') + '"'
+}
+
+function Get-LocalLLMRemoteClientEnvCommands {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Password
+    )
+
+    $vars = [ordered]@{
+        ANTHROPIC_BASE_URL   = $BaseUrl
+        ANTHROPIC_AUTH_TOKEN = $Password
+        ANTHROPIC_API_KEY    = $Password
+    }
+
+    $bash = @()
+    $powershell = @()
+    foreach ($name in $vars.Keys) {
+        $bash += ("export {0}={1}" -f $name, (ConvertTo-LocalLLMBashDoubleQuoted $vars[$name]))
+        $powershell += ('$env:{0} = {1}' -f $name, (ConvertTo-LocalLLMPowerShellDoubleQuoted $vars[$name]))
+    }
+
+    return [pscustomobject]@{
+        Bash       = $bash
+        PowerShell = $powershell
+    }
+}
+
+function Test-LocalLLMRemotePublicHttp {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$BaseUrl)
+
+    try {
+        $uri = [System.Uri]$BaseUrl
+    }
+    catch {
+        return $false
+    }
+
+    if ($uri.Scheme -ne 'http') { return $false }
+
+    $hostName = $uri.Host
+    if ([string]::IsNullOrWhiteSpace($hostName)) { return $false }
+    if ($hostName -ieq 'localhost') { return $false }
+
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse($hostName, [ref]$ip)) {
+        $bytes = $ip.GetAddressBytes()
+        if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+            if ($bytes[0] -eq 10) { return $false }
+            if ($bytes[0] -eq 127) { return $false }
+            if ($bytes[0] -eq 192 -and $bytes[1] -eq 168) { return $false }
+            if ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) { return $false }
+            if ($bytes[0] -eq 169 -and $bytes[1] -eq 254) { return $false }
+            return $true
+        }
+        if ([System.Net.IPAddress]::IsLoopback($ip)) { return $false }
+        return $true
+    }
+
+    return $true
 }
 
 function Set-ClaudeLocalEnv {
@@ -136,19 +217,37 @@ function Start-NoThinkProxy {
     # models from leaking <think> tags into the conversation or breaking
     # consumers that JSON.parse the response body.
     param(
+        [int]$ListenPort = $script:NoThinkProxyPort,
+        [string]$ListenHost = "127.0.0.1",
         [int]$TargetPort = 11434,
-        [string]$TargetHost = "127.0.0.1"
+        [string]$TargetHost = "127.0.0.1",
+        [string]$AuthToken,
+        [string]$OutLogPath,
+        [string]$ErrLogPath
     )
 
     $target = "${TargetHost}:${TargetPort}"
-    Write-LaunchLog "No-think proxy: target=$target port=$($script:NoThinkProxyPort)" 'PROXY'
-    $targetMatches = Test-NoThinkProxyTarget -ListenPort $script:NoThinkProxyPort -TargetHost $TargetHost -TargetPort $TargetPort
+    $authLabel = if ([string]::IsNullOrWhiteSpace($AuthToken)) { 'off' } else { 'on' }
+    $logsRequested = (-not [string]::IsNullOrWhiteSpace($OutLogPath)) -or (-not [string]::IsNullOrWhiteSpace($ErrLogPath))
+    Write-LaunchLog "No-think proxy: listen=$ListenHost`:$ListenPort target=$target auth=$authLabel" 'PROXY'
+    $targetMatches = Test-NoThinkProxyTarget -ListenPort $ListenPort -TargetHost $TargetHost -TargetPort $TargetPort -AuthToken $AuthToken
     if ($targetMatches -eq $true) {
-        Write-LaunchLog "No-think proxy already running for target=$target" 'PROXY'
-        return
+        if ($logsRequested) {
+            if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
+                Write-LaunchLog "Restarting owned no-think proxy so remote gateway logs are captured." 'PROXY'
+                Stop-NoThinkProxy
+            }
+            else {
+                throw "No-think proxy port $ListenPort is already running for target $target, but remote gateway logs were requested and this shell does not own that process. Stop the existing proxy with llm-stop or free the port, then start Remote again."
+            }
+        }
+        else {
+            Write-LaunchLog "No-think proxy already running for target=$target" 'PROXY'
+            return
+        }
     }
     if ($targetMatches -eq $false) {
-        throw "No-think proxy port $($script:NoThinkProxyPort) is already in use by a proxy for a different or unverifiable target. Stop that process or change NoThinkProxyPort."
+        throw "No-think proxy port $ListenPort is already in use by a proxy for a different or unverifiable target. Stop that process or change NoThinkProxyPort."
     }
 
     $proxyScript = Join-Path $HOME ".ollama-proxy\no-think-proxy.py"
@@ -158,15 +257,50 @@ function Start-NoThinkProxy {
         return
     }
 
-    Write-LaunchLog "Starting no-think proxy: python $proxyScript $($script:NoThinkProxyPort) $target" 'PROXY'
+    Write-LaunchLog "Starting no-think proxy: python $proxyScript $ListenPort $target $ListenHost" 'PROXY'
 
     if (-not (Test-Path $proxyScript)) {
         throw "No-think proxy not found: $proxyScript. Re-run install.ps1 so Claude/Unshackled launches do not point at a dead proxy URL."
     }
 
-    $script:NoThinkProxyProcess = Start-Process python `
-        -ArgumentList "`"$proxyScript`"", $script:NoThinkProxyPort, $target `
-        -PassThru -WindowStyle Hidden -ErrorAction Stop
+    $argList = @($proxyScript, [string]$ListenPort, $target, $ListenHost)
+    $oldAuthToken = $env:NO_THINK_PROXY_AUTH_TOKEN
+    try {
+        if ([string]::IsNullOrWhiteSpace($AuthToken)) {
+            Remove-Item Env:NO_THINK_PROXY_AUTH_TOKEN -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:NO_THINK_PROXY_AUTH_TOKEN = $AuthToken
+        }
+
+        $startArgs = @{
+            FilePath      = 'python'
+            ArgumentList  = $argList
+            PassThru      = $true
+            WindowStyle   = 'Hidden'
+            ErrorAction   = 'Stop'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($OutLogPath)) {
+            $startArgs.RedirectStandardOutput = $OutLogPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ErrLogPath)) {
+            $startArgs.RedirectStandardError = $ErrLogPath
+        }
+
+        $script:NoThinkProxyProcess = Start-Process @startArgs
+    }
+    finally {
+        if ([string]::IsNullOrWhiteSpace($oldAuthToken)) {
+            Remove-Item Env:NO_THINK_PROXY_AUTH_TOKEN -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:NO_THINK_PROXY_AUTH_TOKEN = $oldAuthToken
+        }
+    }
+
+    if (-not $script:NoThinkProxyProcess) {
+        throw "Failed to start no-think proxy process."
+    }
 
     $deadline = (Get-Date).AddSeconds(3)
     $ready = $false
@@ -174,7 +308,7 @@ function Start-NoThinkProxy {
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 150
 
-        $targetMatches = Test-NoThinkProxyTarget -ListenPort $script:NoThinkProxyPort -TargetHost $TargetHost -TargetPort $TargetPort
+        $targetMatches = Test-NoThinkProxyTarget -ListenPort $ListenPort -TargetHost $TargetHost -TargetPort $TargetPort -AuthToken $AuthToken
         if ($targetMatches -eq $true) {
             $ready = $true
             break
@@ -183,7 +317,7 @@ function Start-NoThinkProxy {
 
     if (-not $ready) {
         Stop-NoThinkProxy
-        throw "No-think proxy did not become ready on 127.0.0.1:$($script:NoThinkProxyPort) for target $target."
+        throw "No-think proxy did not become ready on 127.0.0.1:$ListenPort for target $target."
     }
 }
 
@@ -193,6 +327,552 @@ function Stop-NoThinkProxy {
     }
 
     $script:NoThinkProxyProcess = $null
+}
+
+function New-LocalLLMRemoteGatewayLogPaths {
+    $dir = Join-Path $HOME ".local-llm\logs"
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+    return @{
+        Out = Join-Path $dir "remote-gateway-$stamp.out.log"
+        Err = Join-Path $dir "remote-gateway-$stamp.err.log"
+    }
+}
+
+function Format-LocalLLMRemoteGatewayStatus {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][hashtable]$Session)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("Remote gateway running") | Out-Null
+    if ($Session.ContainsKey('Backend'))    { $lines.Add("Backend : $($Session.Backend)") | Out-Null }
+    if ($Session.ContainsKey('Model'))      { $lines.Add("Model   : $($Session.Model)") | Out-Null }
+    if ($Session.ContainsKey('GatewayPid')) { $lines.Add("Gateway : pid $($Session.GatewayPid)") | Out-Null }
+    if ($Session.ContainsKey('ListenHost') -and $Session.ContainsKey('ListenPort')) {
+        $lines.Add("Listen  : $($Session.ListenHost):$($Session.ListenPort)") | Out-Null
+    }
+    if ($Session.ContainsKey('BaseUrls') -and $Session.BaseUrls) {
+        foreach ($url in @($Session.BaseUrls)) {
+            $lines.Add("URL     : $url") | Out-Null
+        }
+    }
+    if ($Session.ContainsKey('StartedAt') -and $Session.StartedAt) {
+        try {
+            $uptime = (Get-Date) - ([datetime]$Session.StartedAt)
+            $lines.Add("Uptime  : {0:hh\:mm\:ss}" -f $uptime) | Out-Null
+        }
+        catch {}
+    }
+    if ($Session.ContainsKey('GatewayOutLog') -and $Session.GatewayOutLog) {
+        $lines.Add("Log out : $($Session.GatewayOutLog)") | Out-Null
+    }
+    if ($Session.ContainsKey('GatewayErrLog') -and $Session.GatewayErrLog) {
+        $lines.Add("Log err : $($Session.GatewayErrLog)") | Out-Null
+    }
+    if ($Session.ContainsKey('BackendOutLog') -and $Session.BackendOutLog) {
+        $lines.Add("Backend : $($Session.BackendOutLog)") | Out-Null
+    }
+    if ($Session.ContainsKey('BackendErrLog') -and $Session.BackendErrLog) {
+        $lines.Add("Backend : $($Session.BackendErrLog)") | Out-Null
+    }
+
+    return @($lines)
+}
+
+function Show-LocalLLMRemoteGatewayStatus {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][hashtable]$Session)
+
+    Write-Host ""
+    foreach ($line in (Format-LocalLLMRemoteGatewayStatus -Session $Session)) {
+        Write-Host $line -ForegroundColor Cyan
+    }
+}
+
+function Watch-LocalLLMRemoteGateway {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][hashtable]$Session)
+
+    Show-LocalLLMRemoteGatewayStatus -Session $Session
+    Write-Host ""
+    Write-Host "Controls: Q = return to menu and keep running, S = stop gateway/backend, R = reprint client env vars" -ForegroundColor Yellow
+    Write-Host "Gateway log follows: $($Session.GatewayOutLog)" -ForegroundColor DarkGray
+    Write-Host ""
+
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+        Write-Host "Non-interactive console detected; leaving remote gateway running. Use llm-stop to stop it." -ForegroundColor Yellow
+        return
+    }
+
+    $lastLineCount = 0
+    while ($true) {
+        if ($Session.GatewayOutLog -and (Test-Path -LiteralPath $Session.GatewayOutLog)) {
+            $lines = @(Get-Content -LiteralPath $Session.GatewayOutLog -ErrorAction SilentlyContinue)
+            if ($lines.Count -gt $lastLineCount) {
+                foreach ($line in @($lines | Select-Object -Skip $lastLineCount)) {
+                    Write-Host $line -ForegroundColor Gray
+                }
+                $lastLineCount = $lines.Count
+            }
+        }
+
+        $gatewayRunning = $true
+        if ($Session.GatewayPid) {
+            $gatewayRunning = $null -ne (Get-Process -Id $Session.GatewayPid -ErrorAction SilentlyContinue)
+        }
+        if (-not $gatewayRunning) {
+            Write-Host "Remote gateway process has exited. Check logs above." -ForegroundColor Red
+            return
+        }
+
+        $deadline = (Get-Date).AddMilliseconds(1000)
+        while ((Get-Date) -lt $deadline) {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true).Key
+                switch ($key) {
+                    'Q' {
+                        Write-Host "Remote gateway left running. Use llm-stop to stop it." -ForegroundColor Green
+                        return
+                    }
+                    'S' {
+                        Stop-LocalLLMRemoteGateway
+                        if ($Session.Backend -eq 'llamacpp') {
+                            Stop-LlamaServer -Quiet
+                        }
+                        elseif ($Session.Backend -eq 'ollama') {
+                            Stop-OllamaModels
+                            Stop-OllamaApp
+                            Reset-OllamaEnv
+                        }
+                        Write-Host "Remote gateway stopped." -ForegroundColor Yellow
+                        return
+                    }
+                    'R' {
+                        if ($Session.BaseUrls -and $Session.Password) {
+                            Show-LocalLLMRemoteClientInstructions -BaseUrls $Session.BaseUrls -Password $Session.Password
+                        }
+                    }
+                }
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
+
+function Get-LocalLLMRemoteAdvertiseHosts {
+    [CmdletBinding()]
+    param([string]$ListenHost)
+
+    if (-not [string]::IsNullOrWhiteSpace($ListenHost) -and $ListenHost -notin @('0.0.0.0', '*', '::')) {
+        return @($ListenHost)
+    }
+
+    $hosts = New-Object System.Collections.Generic.List[string]
+    try {
+        foreach ($addr in [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName())) {
+            if ($addr.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+            if ([System.Net.IPAddress]::IsLoopback($addr)) { continue }
+            $text = [string]$addr
+            if ($text -and -not $hosts.Contains($text)) {
+                $hosts.Add($text) | Out-Null
+            }
+        }
+    }
+    catch {}
+
+    if ($hosts.Count -eq 0) {
+        $hosts.Add('<server-ip>') | Out-Null
+    }
+
+    return @($hosts)
+}
+
+function Show-LocalLLMRemoteClientInstructions {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string[]]$BaseUrls,
+        [Parameter(Mandatory = $true)][string]$Password
+    )
+
+    $baseUrl = $BaseUrls[0]
+    $commands = Get-LocalLLMRemoteClientEnvCommands -BaseUrl $baseUrl -Password $Password
+
+    Write-Host ""
+    Write-Host "Remote gateway ready." -ForegroundColor Green
+    Write-Host "  Base URL : $baseUrl" -ForegroundColor DarkGray
+    if ($BaseUrls.Count -gt 1) {
+        Write-Host "  Other LAN URLs:" -ForegroundColor DarkGray
+        foreach ($url in @($BaseUrls | Select-Object -Skip 1)) {
+            Write-Host "    $url" -ForegroundColor Gray
+        }
+    }
+
+    if (Test-LocalLLMRemotePublicHttp -BaseUrl $baseUrl) {
+        Write-Host ""
+        Write-Host "WARNING: this is password-only HTTP on a public-looking address. Passwords and prompts are not encrypted." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "On the client, run normal Unshackled with:" -ForegroundColor Cyan
+    foreach ($line in $commands.Bash) {
+        Write-Host "  $line" -ForegroundColor Gray
+    }
+    Write-Host "  unshackled" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "PowerShell client equivalent:" -ForegroundColor Cyan
+    foreach ($line in $commands.PowerShell) {
+        Write-Host "  $line" -ForegroundColor Gray
+    }
+    Write-Host "  unshackled" -ForegroundColor Gray
+    Write-Host ""
+}
+
+function Start-LocalLLMOllamaRemoteBackend {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [switch]$UseQ8,
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$DryRun
+    )
+
+    $def = Get-ModelDef -Key $Key
+
+    if (-not $DryRun) {
+        Stop-LlamaServer -Quiet
+        Stop-OllamaModels
+        Stop-OllamaApp
+        Reset-OllamaEnv
+        Set-OllamaRuntimeEnv -UseQ8:$UseQ8
+        Start-OllamaApp
+        Wait-Ollama
+    }
+
+    $visionModulePath = ''
+    if ($UseVision -and -not $DryRun) {
+        $visionModulePath = Get-ModelVisionModulePath -Key $Key -Def $def -Backend ollama
+    }
+
+    $modelName = if ($DryRun) {
+        if ($Strict) {
+            Get-ModelStrictAliasName -Def $def
+        } else {
+            Get-ModelAliasName -Def $def -ContextKey $ContextKey
+        }
+    } elseif ($Strict) {
+        Ensure-ModelStrictAlias -Key $Key
+    } else {
+        Ensure-ModelAlias -Key $Key -ContextKey $ContextKey -VisionModulePath $(if ($visionModulePath) { $visionModulePath } else { '' })
+    }
+
+    return [pscustomobject]@{
+        Backend      = 'ollama'
+        Model        = $modelName
+        TargetHost   = '127.0.0.1'
+        TargetPort   = 11434
+        TargetBaseUrl = 'http://127.0.0.1:11434'
+    }
+}
+
+function Start-LocalLLMLlamaCppRemoteBackend {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$AutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [string[]]$ExtraArgs,
+        [switch]$DryRun
+    )
+
+    $def = Get-ModelDef -Key $Key
+    if ($def.SourceType -ne 'gguf') {
+        throw "Model '$Key' has SourceType=$($def.SourceType); llama.cpp remote mode only supports gguf-source models."
+    }
+
+    $coexist = if ($script:Cfg.Contains('LlamaCppCoexistOllama')) { [bool]$script:Cfg.LlamaCppCoexistOllama } else { $false }
+    if (-not $DryRun -and -not $coexist) {
+        Stop-OllamaModels
+        Stop-OllamaApp
+        Start-Sleep -Milliseconds 1000
+    }
+
+    if (-not $DryRun) {
+        Stop-LlamaServer -Quiet
+    }
+
+    if ($DryRun) {
+        $folder = Join-Path $script:Cfg.LlamaCppGgufRoot $def.Root
+        $fileName = Get-ModelFileName -Def $def
+        $ggufPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $fileName
+    }
+    else {
+        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def -Backend llamacpp
+    }
+
+    $defaultPort = if ($script:Cfg.Contains('LlamaCppPort')) { [int]$script:Cfg.LlamaCppPort } else { 8080 }
+    $port = if ($DryRun) { $defaultPort } else { Find-LlamaCppFreePort -StartPort $defaultPort }
+    $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
+
+    $agentParallel = if ($script:Cfg.Contains('LlamaCppAgentParallel')) {
+        try { [int]$script:Cfg.LlamaCppAgentParallel } catch { 1 }
+    } else {
+        1
+    }
+    $agentCacheReuse = if ($script:Cfg.Contains('LlamaCppAgentCacheReuse')) {
+        try { [int]$script:Cfg.LlamaCppAgentCacheReuse } catch { 256 }
+    } else {
+        256
+    }
+
+    $visionModulePath = ''
+    if ($UseVision -and -not $DryRun) {
+        $visionModulePath = Get-ModelVisionModulePath -Key $Key -Def $def -Backend llamacpp
+        if (-not $visionModulePath) {
+            Write-Warning "Vision requested but no mmproj found for $Key"
+        }
+    }
+
+    $buildParams = @{
+        Def              = $def
+        ContextKey       = $ContextKey
+        Mode             = $Mode
+        ModelArgPath     = $ggufPath
+        Port             = $port
+        ThinkingPolicy   = $thinkingPolicy
+        VisionModulePath = $(if ($visionModulePath) { $visionModulePath } else { '' })
+    }
+    if ($agentParallel -gt 0) { $buildParams.Parallel = $agentParallel }
+    if ($agentCacheReuse -gt 0) { $buildParams.CacheReuse = $agentCacheReuse }
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
+    if ($Strict)    { $buildParams.Strict = $true }
+    if ($ExtraArgs) { $buildParams.ExtraArgs = $ExtraArgs }
+
+    $autoBestLoadedProfile = $null
+    if ($AutoBest) {
+        $bestEntry = $null
+        $selectionProfile = if ($AutoBestProfile -in @('pure', 'balanced')) { $AutoBestProfile } else { 'auto' }
+        $promptProfileOverride = if ($AutoBestProfile -in @('short', 'long')) { $AutoBestProfile } else { $null }
+        $loadedProfile = $AutoBestProfile
+
+        if ($promptProfileOverride) {
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure
+            $loadedProfile = "pure/$promptProfileOverride"
+        } else {
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile
+            if ($preferred) {
+                $bestEntry = $preferred.Entry
+                $loadedProfile = "$($preferred.Profile)/$($preferred.PromptLength)"
+            }
+        }
+
+        if ($bestEntry -and $bestEntry.overrides) {
+            $autoBestLoadedProfile = $loadedProfile
+            Write-Host "AutoBest: loaded saved tuner config (profile=$loadedProfile, score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
+            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse')
+            foreach ($k in $tunable) {
+                if ($buildParams.ContainsKey($k)) { continue }
+                $val = $null
+                if ($bestEntry.overrides -is [System.Collections.IDictionary]) {
+                    if ($bestEntry.overrides.Contains($k)) { $val = $bestEntry.overrides[$k] }
+                } else {
+                    $prop = $bestEntry.overrides.PSObject.Properties[$k]
+                    if ($prop) { $val = $prop.Value }
+                }
+                if ($null -ne $val) { $buildParams[$k] = $val }
+            }
+        } elseif ($bestEntry) {
+            Write-Warning "AutoBest: matched saved entry has no 'overrides' field (older tuner version?). Skipping."
+        } else {
+            $profileHint = if ($promptProfileOverride) { $promptProfileOverride } else { 'long' }
+            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
+        }
+    }
+
+    $serverArgs = Build-LlamaServerArgs @buildParams
+    $backendOutLog = $null
+    $backendErrLog = $null
+
+    if ($DryRun) {
+        $serverPath = if ($Mode -eq 'turboquant') {
+            try { Find-TurboquantServerExe } catch { $null }
+        } else {
+            Find-LlamaServerExe
+        }
+        if (-not $serverPath) { $serverPath = '<not installed>' }
+    }
+    else {
+        $serverPath = if ($Mode -eq 'turboquant') {
+            Ensure-LlamaServerTurboquant
+        } else {
+            Ensure-LlamaServerNative
+        }
+    }
+
+    if (-not $DryRun) {
+        $logPaths = New-LlamaServerLogPaths
+        $backendOutLog = $logPaths.Out
+        $backendErrLog = $logPaths.Err
+        Write-Host ""
+        Write-Host "Starting llama-server remote backend for $($def.Root)..." -ForegroundColor Cyan
+        Write-Host "  Server   : $serverPath" -ForegroundColor DarkGray
+        Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+        Write-Host "  Port     : $port" -ForegroundColor DarkGray
+        Write-Host "  Logs     : $($logPaths.Out)" -ForegroundColor DarkGray
+        Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
+
+        $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+        Set-CurrentBackendSession -Session @{
+            Backend  = 'llamacpp'
+            Mode     = $Mode
+            Port     = $port
+            BaseUrl  = "http://localhost:$port"
+            Model    = $def.Root
+            GgufPath = $ggufPath
+            Pid      = $proc.Id
+            OutLog   = $logPaths.Out
+            ErrLog   = $logPaths.Err
+        }
+        try {
+            Wait-LlamaServer -Port $port -Process $proc -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+        }
+        catch {
+            Stop-LlamaServer -Quiet
+            throw
+        }
+    }
+
+    return [pscustomobject]@{
+        Backend       = 'llamacpp'
+        Mode          = $Mode
+        Model         = $def.Root
+        TargetHost    = '127.0.0.1'
+        TargetPort    = $port
+        TargetBaseUrl = "http://127.0.0.1:$port"
+        GgufPath      = $ggufPath
+        ServerPath    = $serverPath
+        ServerArgs    = $serverArgs
+        AutoBestProfile = $autoBestLoadedProfile
+        BackendOutLog = $backendOutLog
+        BackendErrLog = $backendErrLog
+    }
+}
+
+function Start-LocalLLMRemoteGateway {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Alias('Ctx')]
+        [AllowEmptyString()][string]$ContextKey = '',
+        [ValidateSet('ollama', 'llamacpp')][string]$Backend = 'ollama',
+        [ValidateSet('native', 'turboquant')][string]$LlamaCppMode = 'native',
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [switch]$UseQ8,
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$AutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [string]$ListenHost = '0.0.0.0',
+        [int]$ListenPort = $script:NoThinkProxyPort,
+        [string]$AdvertiseHost,
+        [string]$Password = $env:LOCAL_LLM_REMOTE_PASS,
+        [string[]]$ExtraArgs,
+        [switch]$NoMonitor,
+        [switch]$DryRun
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Password)) {
+        throw "Remote gateway password is required. Set `$env:LOCAL_LLM_REMOTE_PASS or pass -Password."
+    }
+
+    if ($ListenPort -le 0) {
+        $ListenPort = $script:NoThinkProxyPort
+    }
+
+    $backendInfo = if ($Backend -eq 'llamacpp') {
+        Start-LocalLLMLlamaCppRemoteBackend -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict -UseVision:$UseVision -AutoBest:$AutoBest -AutoBestProfile $AutoBestProfile -ExtraArgs $ExtraArgs -DryRun:$DryRun
+    } else {
+        Start-LocalLLMOllamaRemoteBackend -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Strict:$Strict -UseVision:$UseVision -DryRun:$DryRun
+    }
+
+    $hosts = if ([string]::IsNullOrWhiteSpace($AdvertiseHost)) {
+        Get-LocalLLMRemoteAdvertiseHosts -ListenHost $ListenHost
+    } else {
+        @($AdvertiseHost)
+    }
+    $baseUrls = @($hosts | ForEach-Object { "http://${_}:$ListenPort" })
+    $primaryBaseUrl = $baseUrls[0]
+
+    if ($DryRun) {
+        $commands = Get-LocalLLMRemoteClientEnvCommands -BaseUrl $primaryBaseUrl -Password $Password
+        $notes = @("Client command: $($commands.Bash -join '; '); unshackled")
+        if (Test-LocalLLMRemotePublicHttp -BaseUrl $primaryBaseUrl) {
+            $notes += "Password-only HTTP on a public-looking address is not encrypted."
+        }
+        if ($backendInfo.AutoBestProfile) {
+            $notes += "AutoBest: loaded saved tuner profile=$($backendInfo.AutoBestProfile) (overrides applied to server argv)"
+        }
+        $plan = @{
+            Title       = "remote gateway via $Backend"
+            Backend     = $Backend
+            Mode        = $backendInfo.Mode
+            Key         = $Key
+            Model       = $backendInfo.Model
+            BaseUrl     = $primaryBaseUrl
+            HealthCheck = "$primaryBaseUrl/health"
+            Port        = $ListenPort
+            GgufPath    = $backendInfo.GgufPath
+            ServerPath  = $backendInfo.ServerPath
+            ServerArgs  = $backendInfo.ServerArgs
+            Notes       = $notes
+        }
+        Show-LocalLLMLaunchPlan -Plan $plan
+        return
+    }
+
+    $gatewayLogs = New-LocalLLMRemoteGatewayLogPaths
+    Start-NoThinkProxy -ListenHost $ListenHost -ListenPort $ListenPort -TargetHost $backendInfo.TargetHost -TargetPort $backendInfo.TargetPort -AuthToken $Password -OutLogPath $gatewayLogs.Out -ErrLogPath $gatewayLogs.Err
+
+    $script:RemoteGatewaySession = @{
+        Backend    = $Backend
+        Model      = $backendInfo.Model
+        ListenHost = $ListenHost
+        ListenPort = $ListenPort
+        BaseUrls   = $baseUrls
+        Password   = $Password
+        StartedAt  = Get-Date
+        GatewayPid = if ($script:NoThinkProxyProcess) { $script:NoThinkProxyProcess.Id } else { $null }
+        GatewayOutLog = $gatewayLogs.Out
+        GatewayErrLog = $gatewayLogs.Err
+        BackendOutLog = $backendInfo.BackendOutLog
+        BackendErrLog = $backendInfo.BackendErrLog
+    }
+
+    Show-LocalLLMRemoteClientInstructions -BaseUrls $baseUrls -Password $Password
+
+    if (-not $NoMonitor) {
+        Watch-LocalLLMRemoteGateway -Session $script:RemoteGatewaySession
+    }
+}
+
+function Stop-LocalLLMRemoteGateway {
+    [CmdletBinding()]
+    param()
+
+    Stop-NoThinkProxy
+    $script:RemoteGatewaySession = $null
 }
 
 function Test-ClaudeLocalVisibleResponse {

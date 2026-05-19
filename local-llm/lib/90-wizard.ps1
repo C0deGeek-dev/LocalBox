@@ -199,6 +199,7 @@ function Select-LLMAction {
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
             [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
             [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "remote"; Label = "Remote"; Description = "Serve this model for remote Unshackled clients" },
             [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
             [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
             [pscustomobject]@{ Key = "resetbest"; Label = "Delete best settings"; Description = "Reset saved AutoBest config" },
@@ -209,6 +210,7 @@ function Select-LLMAction {
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
             [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
             [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "remote"; Label = "Remote"; Description = "Serve this model for remote Unshackled clients" },
             [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" },
             [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
             [pscustomobject]@{ Key = "benchmark"; Label = "Benchmark"; Description = "Run ospeed for selected alias" },
@@ -1250,6 +1252,13 @@ function Invoke-LLMSelection {
                     -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
             }
 
+            "remote" {
+                Start-LocalLLMRemoteGateway `
+                    -Key $ModelKey -ContextKey $ContextKey -Backend llamacpp -LlamaCppMode $LlamaCppMode `
+                    -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                    -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
+            }
+
             "setup" {
                 # Strict has no effect on the GGUF path — same file regardless.
                 $path = Get-ModelGgufPath -Key $ModelKey -Def $def -Backend llamacpp
@@ -1279,6 +1288,10 @@ function Invoke-LLMSelection {
 
         "unshackled" {
             Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun -UseVision:$UseVision
+        }
+
+        "remote" {
+            Start-LocalLLMRemoteGateway -Key $ModelKey -ContextKey $ContextKey -Backend ollama -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun -UseVision:$UseVision
         }
 
         "codex" {
@@ -1459,7 +1472,7 @@ function Start-LLMWizardClassic {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("chat", "unshackled", "claude", "codex")) {
+                if ($action -in @("chat", "unshackled", "claude", "codex", "remote")) {
                     if ($backend -eq 'llamacpp') {
                         $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {
@@ -1655,6 +1668,7 @@ function Select-LLMActionSpectre {
             "Claude Code  -  Local model behind Claude Code" = 'claude'
             "Codex       -  Local model behind OpenAI Codex"  = 'codex'
             "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+            "Remote      -  Serve this model for Unshackled clients" = 'remote'
             "Set llmdefault - Save this model/profile/target" = 'setdefault'
             "Find best settings - Auto-tune for this machine" = 'findbest'
             "Delete best settings - Reset saved AutoBest config" = 'resetbest'
@@ -1666,6 +1680,7 @@ function Select-LLMActionSpectre {
             "Claude Code  -  Local model behind Claude Code" = 'claude'
             "Codex       -  Local model behind OpenAI Codex"  = 'codex'
             "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+            "Remote      -  Serve this model for Unshackled clients" = 'remote'
             "Ollama chat  -  Plain ollama run"               = 'chat'
             "Set llmdefault - Save this model/profile/target" = 'setdefault'
             "Benchmark    -  Run ospeed for selected alias"  = 'benchmark'
@@ -2254,7 +2269,7 @@ function Start-LLMWizardSpectre {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("chat", "unshackled", "claude", "codex")) {
+                if ($action -in @("chat", "unshackled", "claude", "codex", "remote")) {
                     if ($backend -eq 'llamacpp') {
                         $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {

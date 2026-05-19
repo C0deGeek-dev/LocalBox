@@ -138,6 +138,37 @@ Use `-Unshackled` when you want the local model behind the Unshackled harness
 instead of Claude Code. The launcher treats it as a peer to Claude Code: same
 env stack, same proxy, same tool restrictions.
 
+### Remote Unshackled Gateway
+
+Choose `Remote` in `llm`, or use `llmremote`, to serve a model from this
+machine to normal Unshackled clients on another machine. The server starts the
+selected local backend and exposes only the LocalBox no-think gateway; Ollama
+and llama.cpp stay bound to localhost.
+
+```powershell
+$env:LOCAL_LLM_REMOTE_PASS = "chosenpass"
+llmremote -Key qcoder30 -ContextKey 32k -Backend ollama
+```
+
+After startup, LocalBox opens a remote monitor with the gateway status and live
+request log. Press `Q` to return to the menu while leaving the server running,
+or `S` to stop the gateway and backend. Use `llmremote -NoMonitor` for scripted
+or detached starts.
+
+On the client, no LocalBox helper is required. Set the Anthropic-compatible
+environment variables and start the regular Unshackled CLI:
+
+```bash
+export ANTHROPIC_BASE_URL="http://192.168.178.61:11435"
+export ANTHROPIC_AUTH_TOKEN="chosenpass"
+export ANTHROPIC_API_KEY="chosenpass"
+unshackled
+```
+
+Password-only HTTP is convenient for LAN testing. Over a public IP it is not
+encrypted: the password and prompts can be observed in transit unless you put a
+VPN or HTTPS reverse proxy in front of it.
+
 ### Strict overlay (engineering harness)
 
 Some models in the catalog have `Strict: true`. For those, `init` builds a

@@ -42,19 +42,53 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # handling). LocalBox compares this against NoThinkProxyRequiredVersion in
 # defaults.json and warns when the deployed proxy is older than the launcher
 # expects. Format: SemVer "MAJOR.MINOR.PATCH".
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 TARGET_HOST = "127.0.0.1"
 TARGET_PORT = 11434
+AUTH_TOKEN = ""
 
-THINK_OPEN = "<think>"
-THINK_CLOSE = "</think>"
+THINK_TAGS = {
+    "<think>": "</think>",
+    "<thinking>": "</thinking>",
+}
 # Hold back this many chars at the end of each chunk while not-in-think, in
 # case the trailing bytes are the start of an unclosed `<think>` tag we'd
 # otherwise emit early.
-_HOLDBACK_OPEN = len(THINK_OPEN) - 1
-_HOLDBACK_CLOSE = len(THINK_CLOSE) - 1
+_HOLDBACK_OPEN = max(len(tag) for tag in THINK_TAGS) - 1
+_HOLDBACK_CLOSE = max(len(tag) for tag in THINK_TAGS.values()) - 1
+
+
+def _header_value(headers, name):
+    if hasattr(headers, "get"):
+        value = headers.get(name)
+        if value is not None:
+            return value
+
+    lowered = name.lower()
+    for key, value in dict(headers).items():
+        if str(key).lower() == lowered:
+            return value
+
+    return None
+
+
+def is_request_authorized(headers, auth_token):
+    """Return True when no token is configured, or request headers carry it."""
+    if not auth_token:
+        return True
+
+    api_key = _header_value(headers, "x-api-key")
+    if api_key == auth_token:
+        return True
+
+    auth = _header_value(headers, "authorization") or ""
+    prefix = "bearer "
+    if auth.lower().startswith(prefix) and auth[len(prefix):] == auth_token:
+        return True
+
+    return False
 
 
 def strip_thinking_fields(value):
@@ -98,6 +132,7 @@ class ThinkStripper:
     def __init__(self):
         self.in_think = False
         self.buffer = ""
+        self.close_tag = None
 
     def feed(self, text):
         if not text:
@@ -108,7 +143,7 @@ class ThinkStripper:
 
         while True:
             if self.in_think:
-                idx = self.buffer.find(THINK_CLOSE)
+                idx = self.buffer.find(self.close_tag)
 
                 if idx == -1:
                     # No close tag yet. Keep enough tail to match a future split close tag.
@@ -117,11 +152,20 @@ class ThinkStripper:
                     break
 
                 # Drop everything through the close tag.
-                self.buffer = self.buffer[idx + len(THINK_CLOSE):]
+                self.buffer = self.buffer[idx + len(self.close_tag):]
                 self.in_think = False
+                self.close_tag = None
                 continue
 
-            idx = self.buffer.find(THINK_OPEN)
+            matches = [
+                (self.buffer.find(open_tag), open_tag, close_tag)
+                for open_tag, close_tag in THINK_TAGS.items()
+                if self.buffer.find(open_tag) != -1
+            ]
+            if matches:
+                idx, open_tag, close_tag = min(matches, key=lambda item: item[0])
+            else:
+                idx, open_tag, close_tag = -1, None, None
 
             if idx == -1:
                 # No open tag in buffer. Emit everything except a possible
@@ -139,8 +183,9 @@ class ThinkStripper:
 
             # Emit text before the open tag, then enter think mode.
             out_parts.append(self.buffer[:idx])
-            self.buffer = self.buffer[idx + len(THINK_OPEN):]
+            self.buffer = self.buffer[idx + len(open_tag):]
             self.in_think = True
+            self.close_tag = close_tag
 
         return "".join(out_parts)
 
@@ -150,6 +195,7 @@ class ThinkStripper:
         out = "" if self.in_think else self.buffer
         self.buffer = ""
         self.in_think = False
+        self.close_tag = None
         return out
 
 
@@ -196,6 +242,27 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
+
+    def _require_auth(self):
+        if is_request_authorized(self.headers, AUTH_TOKEN):
+            return True
+
+        self.log_message("unauthorized %s %s from %s", self.command, self.path, self.client_address[0])
+        self.send_response(401)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("WWW-Authenticate", "Bearer")
+        self.send_header("Connection", "close")
+        body = b"Unauthorized\n"
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+
+        try:
+            self.wfile.write(body)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+
+        return False
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -354,6 +421,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         return prefix_events + b"\n".join(out_lines) + b"\n\n"
 
     def _forward(self, method):
+        if not self._require_auth():
+            return
+
         body = self._read_body()
         body = self._clean_request_body(body)
 
@@ -481,10 +551,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 pass
 
     def do_GET(self):
+        if not self._require_auth():
+            return
+
         if self.path in {"/", "/health", "/healthz"}:
             body = json.dumps(
                 {
                     "status": "ok",
+                    "auth_required": bool(AUTH_TOKEN),
                     "target_host": TARGET_HOST,
                     "target_port": TARGET_PORT,
                     "target": f"{TARGET_HOST}:{TARGET_PORT}",
@@ -525,7 +599,7 @@ def _parse_target(spec):
 
 
 def main():
-    global TARGET_HOST, TARGET_PORT
+    global TARGET_HOST, TARGET_PORT, AUTH_TOKEN
 
     # --version is parsed before any other arg so the launcher can detect a
     # stale deployment without launching the server.
@@ -545,13 +619,26 @@ def main():
         else os.environ.get("NO_THINK_PROXY_TARGET", "127.0.0.1:11434")
     )
 
+    listen_host = (
+        sys.argv[3]
+        if len(sys.argv) > 3
+        else os.environ.get("NO_THINK_PROXY_LISTEN_HOST", "127.0.0.1")
+    )
+
+    AUTH_TOKEN = (
+        sys.argv[4]
+        if len(sys.argv) > 4
+        else os.environ.get("NO_THINK_PROXY_AUTH_TOKEN", "")
+    )
+
     TARGET_HOST, TARGET_PORT = _parse_target(target_spec)
 
-    server = ThreadingHTTPServer(("127.0.0.1", listen_port), ProxyHandler)
+    server = ThreadingHTTPServer((listen_host, listen_port), ProxyHandler)
     server.daemon_threads = True
 
+    auth_label = "auth=on" if AUTH_TOKEN else "auth=off"
     print(
-        f"no-think-proxy: 127.0.0.1:{listen_port} -> {TARGET_HOST}:{TARGET_PORT}",
+        f"no-think-proxy: {listen_host}:{listen_port} -> {TARGET_HOST}:{TARGET_PORT} ({auth_label})",
         flush=True,
     )
 
