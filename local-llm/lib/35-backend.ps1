@@ -59,6 +59,8 @@ function Invoke-Backend {
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs,
+        [AllowEmptyString()][string]$SpecType,
+        [int]$SpecDraftNMax,
         [switch]$DryRun
     )
 
@@ -112,6 +114,8 @@ function Invoke-Backend {
                         -AutoBestProfile $AutoBestProfile `
                         -ExtraArgs $ExtraArgs `
                         -ExtraUnshackledArgs $ExtraUnshackledArgs `
+                        -SpecType $SpecType `
+                        -SpecDraftNMax $SpecDraftNMax `
                         -DryRun:$DryRun
                 }
             }

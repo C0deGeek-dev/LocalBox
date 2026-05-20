@@ -592,12 +592,22 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         [switch]$AutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
+        [AllowEmptyString()][string]$SpecType,
+        [int]$SpecDraftNMax,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
     if ($def.SourceType -ne 'gguf') {
         throw "Model '$Key' has SourceType=$($def.SourceType); llama.cpp remote mode only supports gguf-source models."
+    }
+
+    # Resolve MTP params: per-call > per-model def > caller-provided default
+    if ([string]::IsNullOrWhiteSpace($SpecType)) {
+        $SpecType = if ($def.ContainsKey('SpecType') -and -not [string]::IsNullOrWhiteSpace($def.SpecType)) { [string]$def.SpecType } else { '' }
+    }
+    if ($SpecDraftNMax -le 0) {
+        $SpecDraftNMax = if ($def.ContainsKey('SpecDraftNMax') -and $null -ne $def.SpecDraftNMax) { [int]$def.SpecDraftNMax } else { 0 }
     }
 
     $coexist = if ($script:Cfg.Contains('LlamaCppCoexistOllama')) { [bool]$script:Cfg.LlamaCppCoexistOllama } else { $false }
@@ -658,6 +668,8 @@ function Start-LocalLLMLlamaCppRemoteBackend {
     if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
     if ($Strict)    { $buildParams.Strict = $true }
     if ($ExtraArgs) { $buildParams.ExtraArgs = $ExtraArgs }
+    if (-not [string]::IsNullOrWhiteSpace($SpecType))       { $buildParams.SpecType = $SpecType }
+    if ($SpecDraftNMax -gt 0)                                { $buildParams.SpecDraftNMax = $SpecDraftNMax }
 
     $autoBestLoadedProfile = $null
     if ($AutoBest) {
@@ -680,7 +692,7 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         if ($bestEntry -and $bestEntry.overrides) {
             $autoBestLoadedProfile = $loadedProfile
             Write-Host "AutoBest: loaded saved tuner config (profile=$loadedProfile, score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
-            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse')
+            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse','SpecType','SpecDraftNMax')
             foreach ($k in $tunable) {
                 if ($buildParams.ContainsKey($k)) { continue }
                 $val = $null
@@ -1471,10 +1483,20 @@ function Start-ClaudeWithLlamaCppModel {
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs,
+        [AllowEmptyString()][string]$SpecType,
+        [int]$SpecDraftNMax,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
+
+    # Resolve MTP params: per-call > per-model def > caller-provided default
+    if ([string]::IsNullOrWhiteSpace($SpecType)) {
+        $SpecType = if ($def.ContainsKey('SpecType') -and -not [string]::IsNullOrWhiteSpace($def.SpecType)) { [string]$def.SpecType } else { '' }
+    }
+    if ($SpecDraftNMax -le 0) {
+        $SpecDraftNMax = if ($def.ContainsKey('SpecDraftNMax') -and $null -ne $def.SpecDraftNMax) { [int]$def.SpecDraftNMax } else { 0 }
+    }
 
     if ($def.SourceType -ne 'gguf') {
         throw "Model '$Key' has SourceType=$($def.SourceType); llama.cpp only supports gguf-source models."
@@ -1589,6 +1611,8 @@ function Start-ClaudeWithLlamaCppModel {
     if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
     if ($Strict)    { $buildParams.Strict = $true }
     if ($ExtraArgs) { $buildParams.ExtraArgs = $ExtraArgs }
+    if (-not [string]::IsNullOrWhiteSpace($SpecType))       { $buildParams.SpecType = $SpecType }
+    if ($SpecDraftNMax -gt 0)                                { $buildParams.SpecDraftNMax = $SpecDraftNMax }
 
     # -AutoBest splats saved tuner overrides into Build-LlamaServerArgs.
     # Caller-supplied args (KvCacheK/KvCacheV/ExtraArgs above) take precedence
@@ -1625,7 +1649,7 @@ function Start-ClaudeWithLlamaCppModel {
                     Write-Warning "AutoBest: $reason"
                 }
             }
-            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse')
+            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse','SpecType','SpecDraftNMax')
             foreach ($k in $tunable) {
                 if ($buildParams.ContainsKey($k)) { continue }
                 $val = $null
@@ -1744,6 +1768,9 @@ function Start-ClaudeWithLlamaCppModel {
         if ($dryRunServerNote) { $notes += $dryRunServerNote }
         if ($AutoBest -and -not [string]::IsNullOrWhiteSpace($autoBestLoadedProfile)) {
             $notes += "AutoBest: loaded saved tuner profile=$autoBestLoadedProfile (overrides applied to argv)"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SpecType) -and $SpecDraftNMax -gt 0) {
+            $notes += "MTP: --spec-type $SpecType --spec-draft-n-max $SpecDraftNMax"
         }
 
         $plan = @{

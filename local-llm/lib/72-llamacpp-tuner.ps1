@@ -50,7 +50,7 @@ function Format-LlamaCppOverrides {
     param([Parameter(Mandatory = $true)]$Overrides)
 
     $parts = @()
-    foreach ($k in @('NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','FlashAttn','Mlock','NoMmap','KvK','KvV','SwaFull','CachePrompt','CacheReuse')) {
+    foreach ($k in @('NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','FlashAttn','Mlock','NoMmap','KvK','KvV','SwaFull','CachePrompt','CacheReuse','SpecType','SpecDraftNMax')) {
         $value = $null
         $hasValue = $false
 

@@ -76,7 +76,9 @@ function Build-LlamaServerArgs {
         [string]$ThinkingPolicy,
         [switch]$Strict,
         [string]$VisionModulePath,
-        [string[]]$ExtraArgs
+        [string[]]$ExtraArgs,
+        [AllowEmptyString()][string]$SpecType,
+        [int]$SpecDraftNMax
     )
 
     $argList = New-Object System.Collections.Generic.List[string]
@@ -232,6 +234,15 @@ function Build-LlamaServerArgs {
         foreach ($a in (Get-LlamaCppStrictSamplerArgs)) {
             $argList.Add($a) | Out-Null
         }
+    }
+
+    # MTP (Multi-Token Prediction) speculative decoding. Emitted only when both
+    # SpecType and SpecDraftNMax are provided — e.g. --spec-type mtp --spec-draft-n-max 2.
+    if (-not [string]::IsNullOrWhiteSpace($SpecType) -and $SpecDraftNMax -gt 0) {
+        $argList.Add('--spec-type')         | Out-Null
+        $argList.Add($SpecType)             | Out-Null
+        $argList.Add('--spec-draft-n-max')  | Out-Null
+        $argList.Add([string]$SpecDraftNMax) | Out-Null
     }
 
     # Per-model ExtraArgs first, then per-call ExtraArgs (call wins because it

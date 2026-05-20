@@ -252,6 +252,58 @@
         "apex-i-quality": "APEX-I-QUALITY · ~22.8 GB",
         "apex-quality": "APEX-QUALITY · ~22.8 GB"
       }
+    },
+    "q3535ba3bmtp": {
+      "DisplayName": "Qwen3.6-35B-A3B Native-MTP",
+      "Root": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved",
+      "SourceType": "gguf",
+      "Repo": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF",
+      "Quants": {
+        "bf16": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-BF16.gguf",
+        "q3kl": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q3_K_L.gguf",
+        "q3km": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q3_K_M.gguf",
+        "q4km": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf",
+        "q4ks": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_S.gguf",
+        "q5km": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q5_K_M.gguf",
+        "q5ks": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q5_K_S.gguf",
+        "q6k": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q6_K.gguf",
+        "q8_0": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q8_0.gguf"
+      },
+      "Quant": "q5km",
+      "Parser": "qwen36",
+      "LimitTools": true,
+      "Tier": "experimental",
+      "Contexts": {
+        "": 131072,
+        "32k": 32768,
+        "64k": 65536,
+        "128k": 131072
+      },
+      "Strict": true,
+      "SpecType": "mtp",
+      "SpecDraftNMax": 2,
+      "QuantSizesGB": {
+        "bf16": 71.1,
+        "q3kl": 18.7,
+        "q3km": 17.3,
+        "q4km": 21.8,
+        "q4ks": 20.4,
+        "q5km": 25.4,
+        "q5ks": 24.6,
+        "q6k": 29.3,
+        "q8_0": 37.8
+      },
+      "QuantNotes": {
+        "bf16": "BF16 · Full precision · ~71.1 GB",
+        "q3kl": "Q3_K_L · Low VRAM, decent quality · ~18.7 GB",
+        "q3km": "Q3_K_M · Low VRAM, smaller · ~17.3 GB",
+        "q4km": "Q4_K_M · Good for limited VRAM · ~21.8 GB",
+        "q4ks": "Q4_K_S · Smaller Q4 · ~20.4 GB",
+        "q5km": "Q5_K_M · Good balance · ~25.4 GB",
+        "q5ks": "Q5_K_S · Smaller Q5 · ~24.6 GB",
+        "q6k": "Q6_K · Excellent quality · ~29.3 GB",
+        "q8_0": "Q8_0 · Near-lossless, recommended · ~37.8 GB"
+      }
     }
   },
   "CommandAliases": {}

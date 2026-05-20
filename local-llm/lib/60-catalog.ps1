@@ -50,6 +50,8 @@ function Add-LocalLLMModel {
         [string[]]$Tags,
         [string[]]$ExtraArgs,
         [Nullable[bool]]$LlamaCppCompatible,
+        [AllowEmptyString()][string]$SpecType,
+        [int]$SpecDraftNMax,
         [switch]$Force
     )
 
@@ -258,6 +260,8 @@ function Add-LocalLLMModel {
     if ($PSBoundParameters.ContainsKey('LlamaCppCompatible') -and $null -ne $LlamaCppCompatible) {
         $entry.LlamaCppCompatible = [bool]$LlamaCppCompatible
     }
+    if (-not [string]::IsNullOrWhiteSpace($SpecType))                                      { $entry.SpecType      = $SpecType }
+    if ($PSBoundParameters.ContainsKey('SpecDraftNMax') -and $SpecDraftNMax -gt 0)         { $entry.SpecDraftNMax = $SpecDraftNMax }
 
     # Check for mmproj (multimodal vision module). Prompt the user to download.
     if ($PSBoundParameters.ContainsKey('Mmproj')) {
@@ -349,6 +353,8 @@ function addllm {
         [string[]]$ExtraArgs,
         [Nullable[bool]]$LlamaCppCompatible,
         [string]$Mmproj,
+        [AllowEmptyString()][string]$SpecType,
+        [int]$SpecDraftNMax,
         [switch]$Force
     )
 
