@@ -730,6 +730,15 @@ function Write-MtpTurboPrereqGuidance {
     Write-Host "After installing, re-launch this command. The build needs ~5 GB free disk and 15-30 min on a typical 4090 box." -ForegroundColor DarkGray
 }
 
+function Test-LocalBoxAutoBuildEnabled {
+    # When $env:LOCALBOX_AUTO_BUILD is 1/true/yes/on, allow mtpturbo prereq
+    # install and the build itself to proceed without confirmation, even when
+    # the caller passed -NonInteractive. Useful for BenchPilot sweeps and
+    # other automated invocations that can't answer Read-Host prompts.
+    if ([string]::IsNullOrWhiteSpace($env:LOCALBOX_AUTO_BUILD)) { return $false }
+    return ($env:LOCALBOX_AUTO_BUILD.Trim().ToLowerInvariant() -in @('1','true','yes','on'))
+}
+
 function Get-MtpTurboAutoInstallable {
     # Returns the subset of $Missing that we can auto-install via winget.
     # cuda-toolkit is intentionally manual: ~3 GB download, NVIDIA installer
@@ -792,7 +801,8 @@ function Invoke-MtpTurboPrereqAutoInstall {
         [switch]$NonInteractive
     )
 
-    if ($NonInteractive) { return @{ Ran = $false; Prereqs = $null } }
+    $autoConfirm = Test-LocalBoxAutoBuildEnabled
+    if ($NonInteractive -and -not $autoConfirm) { return @{ Ran = $false; Prereqs = $null } }
 
     $installable    = Get-MtpTurboAutoInstallable -Missing $Missing
     $notInstallable = @($Missing | Where-Object { $installable -notcontains $_ })
@@ -812,8 +822,12 @@ function Invoke-MtpTurboPrereqAutoInstall {
     if ($installable -contains 'msvc-buildtools') {
         Write-Host "Note: VS Build Tools is a ~2 GB download (multiple minutes); UAC may prompt." -ForegroundColor DarkGray
     }
-    $answer = (Read-Host "Install the auto-installable ones now? [Y/n]").Trim().ToLowerInvariant()
-    if ($answer -in @('n','no')) { return @{ Ran = $false; Prereqs = $null } }
+    if ($autoConfirm) {
+        Write-Host "LOCALBOX_AUTO_BUILD=1 -- installing without prompt." -ForegroundColor DarkGray
+    } else {
+        $answer = (Read-Host "Install the auto-installable ones now? [Y/n]").Trim().ToLowerInvariant()
+        if ($answer -in @('n','no')) { return @{ Ran = $false; Prereqs = $null } }
+    }
 
     foreach ($p in $installable) {
         Install-MtpTurboPrereq -Name $p | Out-Null
@@ -946,8 +960,15 @@ function Ensure-LlamaServerMtpTurbo {
     # Returns the resolved path to the mtpturbo llama-server.exe. If absent
     # and toolchain present: prompt to auto-build. If toolchain missing: print
     # install guidance and throw. -NonInteractive skips both prompts and the
-    # auto-build (returns a throw).
+    # auto-build (returns a throw), UNLESS $env:LOCALBOX_AUTO_BUILD is set,
+    # in which case install + build proceed silently (intended for BenchPilot
+    # sweeps and other automated callers).
     param([switch]$NonInteractive)
+
+    if ($NonInteractive -and (Test-LocalBoxAutoBuildEnabled)) {
+        Write-Host "LOCALBOX_AUTO_BUILD=1 -- ignoring -NonInteractive and allowing mtpturbo build to proceed." -ForegroundColor DarkGray
+        $NonInteractive = $false
+    }
 
     $existing = Find-MtpTurboServerExe
     if ($existing) {
@@ -989,9 +1010,13 @@ function Ensure-LlamaServerMtpTurbo {
     }
     Write-Host "  Repo: github.com/$(Get-LlamaCppMtpTurboRepo) (branch $(Get-LlamaCppMtpTurboBranch))" -ForegroundColor DarkGray
     Write-Host "  Build takes 15-30 min and needs ~5 GB free disk." -ForegroundColor DarkGray
-    $answer = (Read-Host "Build it now? [Y/n]").Trim().ToLowerInvariant()
-    if ($answer -in @('n','no')) {
-        throw "mtpturbo build declined."
+    if (Test-LocalBoxAutoBuildEnabled) {
+        Write-Host "  (LOCALBOX_AUTO_BUILD=1 -- starting build automatically)" -ForegroundColor DarkGray
+    } else {
+        $answer = (Read-Host "Build it now? [Y/n]").Trim().ToLowerInvariant()
+        if ($answer -in @('n','no')) {
+            throw "mtpturbo build declined."
+        }
     }
 
     return (Build-LlamaServerMtpTurbo)
