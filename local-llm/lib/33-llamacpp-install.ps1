@@ -557,7 +557,10 @@ function Get-LlamaCppMtpTurboInstallRoot {
 }
 
 function Get-LlamaCppMtpTurboSourceRoot {
-    return (Join-Path $HOME ".local-llm\src\llama-cpp-mtpturbo")
+    # Source clone lives in the install root: built binaries get copied to the
+    # same directory after a successful build, so keeping them together avoids
+    # a stray ~\.local-llm\src\ tree and makes cleanup a single rmdir.
+    return (Get-LlamaCppMtpTurboInstallRoot)
 }
 
 function Get-LlamaCppMtpTurboRepo {
@@ -576,6 +579,11 @@ function Find-MtpTurboServerExe {
     $root = Get-LlamaCppMtpTurboInstallRoot
     if (-not (Test-Path $root)) { return $null }
 
+    # Prefer the installed copy at the root over any build\bin\ hit, since the
+    # source tree now lives in the same directory.
+    $direct = Join-Path $root 'llama-server.exe'
+    if (Test-Path $direct) { return $direct }
+
     $hit = Get-ChildItem -Path $root -Filter 'llama-server.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($hit) { return $hit.FullName }
 
@@ -585,6 +593,9 @@ function Find-MtpTurboServerExe {
 function Find-MtpTurboPerplexityExe {
     $root = Get-LlamaCppMtpTurboInstallRoot
     if (-not (Test-Path $root)) { return $null }
+
+    $direct = Join-Path $root 'llama-perplexity.exe'
+    if (Test-Path $direct) { return $direct }
 
     $hit = Get-ChildItem -Path $root -Filter 'llama-perplexity.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($hit) { return $hit.FullName }
@@ -875,17 +886,32 @@ function Build-LlamaServerMtpTurbo {
     Write-Host "  Source  : $srcRoot" -ForegroundColor DarkGray
     Write-Host "  Install : $installRoot" -ForegroundColor DarkGray
 
-    # Clone or pull.
+    # Clone, pull, or init-into-existing-dir (the source tree shares its root
+    # with installed binaries from prior runs, so a plain `git clone` would
+    # fail with "destination path already exists" -- use init+remote+fetch
+    # in that case so the existing files are preserved as untracked).
     if (Test-Path (Join-Path $srcRoot '.git')) {
         Write-Host "Updating existing clone..." -ForegroundColor Cyan
         & git -C $srcRoot fetch --depth 1 origin $branch 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
-        & git -C $srcRoot checkout FETCH_HEAD 2>&1 | Out-Host
+        & git -C $srcRoot checkout -f FETCH_HEAD 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
-    } else {
+    }
+    elseif (-not (Get-ChildItem -Path $srcRoot -Force -ErrorAction SilentlyContinue)) {
         Write-Host "Cloning $repo#$branch (shallow)..." -ForegroundColor Cyan
         & git clone --depth 1 -b $branch "https://github.com/$repo.git" $srcRoot 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+    }
+    else {
+        Write-Host "Initializing git repo in non-empty $srcRoot..." -ForegroundColor Cyan
+        & git -C $srcRoot init 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git init failed" }
+        & git -C $srcRoot remote add origin "https://github.com/$repo.git" 2>&1 | Out-Host
+        # remote add may fail if already present from an aborted prior run -- ignore.
+        & git -C $srcRoot fetch --depth 1 origin $branch 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+        & git -C $srcRoot checkout -f FETCH_HEAD 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
     }
 
     $headSha = (& git -C $srcRoot rev-parse --short HEAD).Trim()
