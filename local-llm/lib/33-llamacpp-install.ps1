@@ -612,17 +612,73 @@ function Find-CudaToolkitRoot {
 }
 
 function Find-MsvcBuildEnv {
-    # Returns @{ VcVars = '...vcvars64.bat' } or $null. Honors vswhere.
+    # Returns @{ VcVars = '...vcvars64.bat'; InstallPath = '...' } or $null.
+    #
+    # Detection order, stops at first install whose vcvars64.bat exists on disk:
+    #   1. $env:LOCALBOX_VCVARS        -- explicit override (full path to vcvars64.bat)
+    #   2. vswhere -requires VC.Tools.x86.x64    (narrow: x64 toolset component)
+    #   3. vswhere -requires Workload.VCTools    (broader: C++ workload, covers Build Tools)
+    #   4. vswhere with no -requires             (any VS/Build Tools install, probe each)
+    #   5. Filesystem scan of standard install roots (no vswhere case)
+
+    $probe = {
+        param($installPath)
+        if ([string]::IsNullOrWhiteSpace($installPath)) { return $null }
+        $vc = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
+        if (Test-Path $vc) { return @{ VcVars = $vc; InstallPath = $installPath } }
+        return $null
+    }
+
+    # 1. Explicit override.
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALBOX_VCVARS) -and (Test-Path $env:LOCALBOX_VCVARS)) {
+        $vc = (Resolve-Path $env:LOCALBOX_VCVARS).Path
+        $installPath = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $vc)))
+        return @{ VcVars = $vc; InstallPath = $installPath }
+    }
+
+    # 2-4. vswhere strategies, narrowest first.
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path $vswhere)) { return $null }
+    if (Test-Path $vswhere) {
+        $strategies = @(
+            @('-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath'),
+            @('-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Workload.VCTools',           '-property', 'installationPath'),
+            @(           '-products', '*',                                                                   '-property', 'installationPath')
+        )
+        foreach ($argList in $strategies) {
+            $paths = & $vswhere @argList 2>$null
+            foreach ($p in $paths) {
+                $hit = & $probe $p
+                if ($hit) { return $hit }
+            }
+        }
+    }
 
-    $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1
-    if ([string]::IsNullOrWhiteSpace($installPath)) { return $null }
+    # 5. Filesystem fallback. Newer year first, then Enterprise > Pro > Community > BuildTools.
+    $editionRank = @{ 'Enterprise' = 0; 'Professional' = 1; 'Community' = 2; 'BuildTools' = 3 }
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($base)) { continue }
+        $vsroot = Join-Path $base 'Microsoft Visual Studio'
+        if (-not (Test-Path $vsroot)) { continue }
+        foreach ($yearDir in Get-ChildItem -Path $vsroot -Directory -ErrorAction SilentlyContinue) {
+            foreach ($editionDir in Get-ChildItem -Path $yearDir.FullName -Directory -ErrorAction SilentlyContinue) {
+                $candidates.Add([pscustomobject]@{
+                    Path    = $editionDir.FullName
+                    Year    = $yearDir.Name
+                    Edition = $editionDir.Name
+                }) | Out-Null
+            }
+        }
+    }
+    $sorted = $candidates | Sort-Object `
+        @{ Expression = 'Year'; Descending = $true }, `
+        @{ Expression = { if ($editionRank.ContainsKey($_.Edition)) { $editionRank[$_.Edition] } else { 999 } }; Descending = $false }
+    foreach ($c in $sorted) {
+        $hit = & $probe $c.Path
+        if ($hit) { return $hit }
+    }
 
-    $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-    if (-not (Test-Path $vcvars)) { return $null }
-
-    return @{ VcVars = $vcvars; InstallPath = $installPath }
+    return $null
 }
 
 function Test-LlamaCppMtpTurboBuildPrereqs {
