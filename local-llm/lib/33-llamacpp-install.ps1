@@ -730,6 +730,99 @@ function Write-MtpTurboPrereqGuidance {
     Write-Host "After installing, re-launch this command. The build needs ~5 GB free disk and 15-30 min on a typical 4090 box." -ForegroundColor DarkGray
 }
 
+function Get-MtpTurboAutoInstallable {
+    # Returns the subset of $Missing that we can auto-install via winget.
+    # cuda-toolkit is intentionally manual: ~3 GB download, NVIDIA installer
+    # owns the UI, and it sometimes wants a reboot.
+    param([Parameter(Mandatory = $true)][string[]]$Missing)
+    $auto = @('git','cmake','ninja','msvc-buildtools')
+    return @($Missing | Where-Object { $auto -contains $_ })
+}
+
+function Update-PathFromRegistry {
+    # Rebuild $env:Path from HKLM + HKCU so a winget-installed CLI is visible
+    # in the current shell without restart.
+    $machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+    $user    = [Environment]::GetEnvironmentVariable('Path','User')
+    $parts = @($machine, $user) |
+        Where-Object { $_ } |
+        ForEach-Object { $_ -split ';' } |
+        Where-Object { $_ -and $_.Trim() }
+    $env:Path = ($parts | Select-Object -Unique) -join ';'
+}
+
+function Install-MtpTurboPrereq {
+    # Runs winget for one missing prereq. Returns $true if winget reported
+    # success (exit 0). The authoritative check is Test-LlamaCppMtpTurboBuildPrereqs
+    # re-run by the caller.
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "  winget is not available -- cannot auto-install '$Name'." -ForegroundColor Red
+        return $false
+    }
+
+    switch ($Name) {
+        'git'             { $argList = @('install','--id','Git.Git','-e','--accept-package-agreements','--accept-source-agreements') }
+        'cmake'           { $argList = @('install','--id','Kitware.CMake','-e','--accept-package-agreements','--accept-source-agreements') }
+        'ninja'           { $argList = @('install','--id','Ninja-build.Ninja','-e','--accept-package-agreements','--accept-source-agreements') }
+        'msvc-buildtools' { $argList = @('install','--id','Microsoft.VisualStudio.2022.BuildTools','-e','--accept-package-agreements','--accept-source-agreements',
+                                         '--override','--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --wait --norestart') }
+        default           { Write-Host "  no auto-install recipe for '$Name'." -ForegroundColor Red; return $false }
+    }
+
+    Write-Host ""
+    Write-Host "Installing '$Name' via winget..." -ForegroundColor Cyan
+    Write-Host ("  > winget " + ($argList -join ' ')) -ForegroundColor DarkGray
+    & winget @argList
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) {
+        Write-Host "  winget exited with code $rc for '$Name' (re-test will confirm if it still landed)." -ForegroundColor Yellow
+        return $false
+    }
+    return $true
+}
+
+function Invoke-MtpTurboPrereqAutoInstall {
+    # Offers (interactively) to install every auto-installable missing prereq.
+    # Returns @{ Ran = $bool; Prereqs = $afterPrereqs|$null }.
+    # If Ran is false, the caller should keep its existing $prereqs.
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Missing,
+        [switch]$NonInteractive
+    )
+
+    if ($NonInteractive) { return @{ Ran = $false; Prereqs = $null } }
+
+    $installable    = Get-MtpTurboAutoInstallable -Missing $Missing
+    $notInstallable = @($Missing | Where-Object { $installable -notcontains $_ })
+
+    if ($installable.Count -eq 0) { return @{ Ran = $false; Prereqs = $null } }
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "winget not found -- install App Installer from the Microsoft Store, or fix the prereqs manually." -ForegroundColor Yellow
+        return @{ Ran = $false; Prereqs = $null }
+    }
+
+    Write-Host ""
+    Write-Host "Can auto-install via winget: $($installable -join ', ')" -ForegroundColor Yellow
+    if ($notInstallable.Count -gt 0) {
+        Write-Host "Must be installed manually : $($notInstallable -join ', ')" -ForegroundColor Yellow
+    }
+    if ($installable -contains 'msvc-buildtools') {
+        Write-Host "Note: VS Build Tools is a ~2 GB download (multiple minutes); UAC may prompt." -ForegroundColor DarkGray
+    }
+    $answer = (Read-Host "Install the auto-installable ones now? [Y/n]").Trim().ToLowerInvariant()
+    if ($answer -in @('n','no')) { return @{ Ran = $false; Prereqs = $null } }
+
+    foreach ($p in $installable) {
+        Install-MtpTurboPrereq -Name $p | Out-Null
+    }
+    Update-PathFromRegistry
+
+    return @{ Ran = $true; Prereqs = (Test-LlamaCppMtpTurboBuildPrereqs) }
+}
+
 function Get-LocalNvidiaComputeCapability {
     # "8.9" for RTX 4090. Returns $null if nvidia-smi is unavailable.
     if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) { return $null }
@@ -869,7 +962,19 @@ function Ensure-LlamaServerMtpTurbo {
         Write-Host ""
         Write-Host "mtpturbo llama-server.exe not found under $root." -ForegroundColor Yellow
         Write-MtpTurboPrereqGuidance -Missing $prereqs.Missing
-        throw "mtpturbo is not installed and the toolchain to build it is incomplete (missing: $($prereqs.Missing -join ', '))."
+
+        $auto = Invoke-MtpTurboPrereqAutoInstall -Missing $prereqs.Missing -NonInteractive:$NonInteractive
+        if ($auto.Ran) {
+            $prereqs = $auto.Prereqs
+            if ($prereqs.Ok) {
+                Write-Host ""
+                Write-Host "All build prereqs are now present -- continuing." -ForegroundColor Green
+            }
+        }
+
+        if (-not $prereqs.Ok) {
+            throw "mtpturbo is not installed and the toolchain to build it is still incomplete (missing: $($prereqs.Missing -join ', '))."
+        }
     }
 
     if ($NonInteractive) {
