@@ -719,7 +719,11 @@ function Write-MtpTurboPrereqGuidance {
             'cmake'          { Write-Host "  - cmake         : winget install --id Kitware.CMake"     -ForegroundColor DarkGray }
             'ninja'          { Write-Host "  - ninja         : winget install --id Ninja-build.Ninja" -ForegroundColor DarkGray }
             'cuda-toolkit'   { Write-Host "  - CUDA Toolkit  : https://developer.nvidia.com/cuda-12-4-0-download-archive (12.4 recommended; components: nvcc, cudart, cublas)" -ForegroundColor DarkGray }
-            'msvc-buildtools'{ Write-Host "  - VS BuildTools : winget install --id Microsoft.VisualStudio.2022.BuildTools --override `"--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`"" -ForegroundColor DarkGray }
+            'msvc-buildtools'{
+                Write-Host "  - VS BuildTools : winget install --id Microsoft.VisualStudio.2022.BuildTools --override `"--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`"" -ForegroundColor DarkGray
+                Write-Host "                    (if VS or Build Tools is already installed, open the Visual Studio Installer -> Modify and tick 'Desktop development with C++' so cl.exe / vcvars64.bat are present)" -ForegroundColor DarkGray
+                Write-Host "                    escape hatch: set `$env:LOCALBOX_VCVARS to the full path of an existing vcvars64.bat to skip auto-detection" -ForegroundColor DarkGray
+            }
         }
     }
     Write-Host ""
