@@ -267,8 +267,9 @@ function Select-LLMDefaultTarget {
 }
 
 function Select-LLMBackend {
-    # Returns one of 'ollama', 'llamacpp-native', 'llamacpp-turboquant', or $null (back).
-    # For models that aren't llama.cpp-eligible, this auto-returns 'ollama'.
+    # Returns one of 'ollama', 'llamacpp-native', 'llamacpp-turboquant',
+    # 'llamacpp-mtpturbo', or $null (back). For models that aren't
+    # llama.cpp-eligible, this auto-returns 'ollama'.
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
 
     if (-not (Test-LlamaCppEligible -Def $Def)) {
@@ -277,8 +278,9 @@ function Select-LLMBackend {
 
     $items = @(
         [pscustomobject]@{ Key = 'ollama';              Label = 'Ollama (default)';                       Description = 'Existing alias-based path' },
-        [pscustomobject]@{ Key = 'llamacpp-native';     Label = 'llama.cpp native';                       Description = 'Upstream llama-server.exe (mainline KV types)' },
-        [pscustomobject]@{ Key = 'llamacpp-turboquant'; Label = 'llama.cpp turboquant (turbo3/turbo4 KV)'; Description = 'Fork binary; supports turbo KV cache types' }
+        [pscustomobject]@{ Key = 'llamacpp-native';     Label = 'llama.cpp native';                       Description = 'Upstream llama-server.exe (mainline KV + draft-mtp)' },
+        [pscustomobject]@{ Key = 'llamacpp-turboquant'; Label = 'llama.cpp turboquant (turbo3/turbo4 KV)'; Description = 'Fork binary; turbo KV cache types, no MTP' },
+        [pscustomobject]@{ Key = 'llamacpp-mtpturbo';   Label = 'llama.cpp mtpturbo (MTP + turbo KV)';     Description = 'Self-built binary; combines MTP spec-decode with turbo KV' }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -298,7 +300,7 @@ function Get-LlamaCppKvCacheChoices {
     param([Parameter(Mandatory = $true)][string]$Mode)
 
     $base = @('q8_0', 'f16', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl', 'bf16', 'f32')
-    if ($Mode -eq 'turboquant') {
+    if ($Mode -in @('turboquant', 'mtpturbo')) {
         return @('turbo4', 'turbo3') + $base
     }
     return $base
@@ -326,8 +328,8 @@ function Select-LLMKvCache {
             'iq4_nl'  { 'iq4_nl — newer 4-bit non-linear' }
             'bf16'    { 'bf16 — full precision (where supported)' }
             'f32'     { 'f32 — pristine; rarely needed' }
-            'turbo3'  { 'turbo3 — turboquant fork only (docker)' }
-            'turbo4'  { 'turbo4 — turboquant fork only (docker), most aggressive' }
+            'turbo3'  { 'turbo3 — turboquant/mtpturbo fork only' }
+            'turbo4'  { 'turbo4 — turboquant/mtpturbo fork only, most aggressive' }
             default   { $t }
         }
         return "$t  -  $note"
@@ -545,7 +547,7 @@ function Read-LLMTuneKvVariation {
         [pscustomobject]@{ Key = 'no';  Label = 'No';    Description = 'Keep current KV type only' },
         [pscustomobject]@{ Key = 'yes'; Label = 'Yes';   Description = 'Widen within the quality class' }
     )
-    if ($Mode -eq 'turboquant') {
+    if ($Mode -in @('turboquant', 'mtpturbo')) {
         $items += [pscustomobject]@{ Key = 'turbo-only'; Label = 'Turbo'; Description = 'Test turbo3 and turbo4 only' }
     }
 
@@ -662,7 +664,7 @@ function Invoke-LlamaCppTunerWizardFlow {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode,
         [switch]$UseSpectrePrompts
     )
 
@@ -706,7 +708,7 @@ function Invoke-LlamaCppTunerWizardFlow {
     if ([string]::IsNullOrWhiteSpace($allowKv)) { return }
 
     $allowedKvTypes = switch ($allowKv) {
-        'yes'        { if ($Mode -eq 'turboquant') { @('q8_0', 'f16', 'turbo3', 'turbo4') } else { @('q8_0', 'f16') } }
+        'yes'        { if ($Mode -in @('turboquant', 'mtpturbo')) { @('q8_0', 'f16', 'turbo3', 'turbo4') } else { @('q8_0', 'f16') } }
         'turbo-only' { @('turbo3', 'turbo4') }
         default      { $null }
     }
@@ -1038,7 +1040,7 @@ function Invoke-LlamaCppBestResetWizardFlow {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode,
         [switch]$UseSpectrePrompts
     )
 
@@ -1080,7 +1082,7 @@ function Test-LlamaCppWizardAutoBestAvailable {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
     )
 
     try {
@@ -1097,7 +1099,7 @@ function Get-LlamaCppWizardAutoBestChoices {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
     )
 
     $choices = @()
@@ -1134,7 +1136,7 @@ function Select-LlamaCppLaunchSettingsMode {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
     )
 
     $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode)
@@ -1390,6 +1392,7 @@ function Start-LLMWizardClassic {
                     'ollama'              { $backend = 'ollama';   $llamaCppMode = $null }
                     'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
                     'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
+                    'llamacpp-mtpturbo'   { $backend = 'llamacpp'; $llamaCppMode = 'mtpturbo' }
                 }
 
                 # Check if this model has vision support: configured VisionModule, local mmproj file, or HF available.
@@ -1730,7 +1733,7 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
     )
 
     $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode)
@@ -1795,7 +1798,8 @@ function Select-LlamaCppPostTuneProfileSpectre {
 }
 
 function Select-LLMBackendSpectre {
-    # Returns 'ollama', 'llamacpp-native', 'llamacpp-turboquant', or $null (back).
+    # Returns 'ollama', 'llamacpp-native', 'llamacpp-turboquant',
+    # 'llamacpp-mtpturbo', or $null (back).
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
 
     if (-not (Test-LlamaCppEligible -Def $Def)) {
@@ -1803,10 +1807,11 @@ function Select-LLMBackendSpectre {
     }
 
     $labelMap = [ordered]@{
-        "Ollama (default)                       -  Existing alias-based path"             = 'ollama'
-        "llama.cpp native                       -  Upstream binary (mainline KV)"         = 'llamacpp-native'
-        "llama.cpp turboquant (turbo3/turbo4 KV) -  Fork binary supporting turbo KV"      = 'llamacpp-turboquant'
-        "[[Back]]"                                                                        = '__back__'
+        "Ollama (default)                          -  Existing alias-based path"               = 'ollama'
+        "llama.cpp native                          -  Upstream binary (mainline KV + draft-mtp)" = 'llamacpp-native'
+        "llama.cpp turboquant (turbo3/turbo4 KV)   -  Fork binary supporting turbo KV"         = 'llamacpp-turboquant'
+        "llama.cpp mtpturbo (MTP + turbo KV)       -  Self-built fork combining both"          = 'llamacpp-mtpturbo'
+        "[[Back]]"                                                                             = '__back__'
     }
 
     $chosen = Read-SpectreSelection -Message "Select backend" -Choices @($labelMap.Keys) -PageSize 6
@@ -1835,8 +1840,8 @@ function Select-LLMKvCacheSpectre {
             'iq4_nl' { 'iq4_nl -  newer 4-bit non-linear' }
             'bf16'   { 'bf16   -  full precision (where supported)' }
             'f32'    { 'f32    -  pristine; rarely needed' }
-            'turbo3' { 'turbo3 -  turboquant fork only (docker)' }
-            'turbo4' { 'turbo4 -  turboquant fork only (docker), most aggressive' }
+            'turbo3' { 'turbo3 -  turboquant/mtpturbo fork only' }
+            'turbo4' { 'turbo4 -  turboquant/mtpturbo fork only, most aggressive' }
             default  { $t }
         }
         $labelMap[$note] = $t
@@ -1926,7 +1931,7 @@ function Read-LLMTuneKvVariationSpectre {
         'No    -  keep current KV type only'      = 'no'
         'Yes   -  widen within the quality class' = 'yes'
     }
-    if ($Mode -eq 'turboquant') {
+    if ($Mode -in @('turboquant', 'mtpturbo')) {
         $choices['Turbo -  test turbo3 and turbo4 only'] = 'turbo-only'
     }
     $chosen = Read-SpectreSelection -Message "Allow KV cache variation? Widens the search to other types in your quality class." -Choices @($choices.Keys) -PageSize 4
@@ -2178,6 +2183,7 @@ function Start-LLMWizardSpectre {
                     'ollama'              { $backend = 'ollama';   $llamaCppMode = $null }
                     'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
                     'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
+                    'llamacpp-mtpturbo'   { $backend = 'llamacpp'; $llamaCppMode = 'mtpturbo' }
                 }
                 # Check if this model has vision support: configured VisionModule, local mmproj file, or HF available.
                 $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def -Backend $backend

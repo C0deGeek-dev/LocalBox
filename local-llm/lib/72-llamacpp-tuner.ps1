@@ -23,9 +23,13 @@ function Get-LlamaCppTunerBestFile {
 }
 
 function Get-LlamaCppBuildStamp {
-    param([ValidateSet('native','turboquant')][string]$Mode = 'native')
+    param([ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native')
 
-    $root = if ($Mode -eq 'turboquant') { Get-LlamaCppTurboquantInstallRoot } else { Get-LlamaCppInstallRoot }
+    $root = switch ($Mode) {
+        'turboquant' { Get-LlamaCppTurboquantInstallRoot }
+        'mtpturbo'   { Get-LlamaCppMtpTurboInstallRoot }
+        default      { Get-LlamaCppInstallRoot }
+    }
     $path = Join-Path $root ".build-stamp"
     if (-not (Test-Path $path)) { return '' }
 
@@ -391,7 +395,7 @@ function Test-LlamaCppBestConfigStale {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Entry,
-        [ValidateSet('native','turboquant')][string]$Mode = 'native'
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native'
     )
 
     $reasons = @()
@@ -443,7 +447,7 @@ function Find-BestLlamaCppConfig {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [ValidateSet('native','turboquant')][string]$Mode = 'native',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
         [int]$Budget = 100,
@@ -529,7 +533,7 @@ function findbest {
     param(
         [Parameter(Mandatory = $true, Position = 0)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [ValidateSet('native','turboquant')][string]$Mode = 'native',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
         [int]$Budget = 100,
@@ -559,7 +563,7 @@ function tunellm {
     param(
         [Parameter(Mandatory = $true, Position = 0)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [ValidateSet('native','turboquant')][string]$Mode = 'native',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
         [int]$Budget = 100,

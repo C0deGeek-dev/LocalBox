@@ -6,6 +6,16 @@
 $script:LlamaCppMainlineKvTypes = @('f16', 'bf16', 'f32', 'q8_0', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl')
 $script:LlamaCppTurboKvTypes    = @('turbo3', 'turbo4')
 
+# Modes that support turbo3/turbo4 KV cache types. Both TheTom's turboquant
+# fork and the mtpturbo build (EsmaeelNabil's branch / equivalent) register
+# the turbo* types; only mtpturbo additionally supports MTP spec-types.
+$script:LlamaCppTurboKvModes    = @('turboquant', 'mtpturbo')
+
+# MTP spec-types. Mainline llama.cpp uses 'draft-mtp'; the mtpturbo fork
+# (EsmaeelNabil's branch) renames it to bare 'mtp'. Catalog stores the
+# mainline canonical value; we translate at emission time per mode.
+$script:LlamaCppMtpSpecTypes    = @('draft-mtp', 'mtp', 'nextn')
+
 function Test-LlamaCppKvType {
     param(
         [Parameter(Mandatory = $true)][string]$Type,
@@ -19,13 +29,47 @@ function Test-LlamaCppKvType {
     }
 
     if ($type -in $script:LlamaCppTurboKvTypes) {
-        if ($Mode -ne 'turboquant') {
-            throw "KV cache type '$type' requires the llama.cpp turboquant fork. Pick a mainline type ($($script:LlamaCppMainlineKvTypes -join ', ')) or switch to llama.cpp turboquant mode."
+        if ($Mode -notin $script:LlamaCppTurboKvModes) {
+            throw "KV cache type '$type' requires a turboquant-aware fork. Pick a mainline type ($($script:LlamaCppMainlineKvTypes -join ', ')) or switch to llama.cpp turboquant or mtpturbo mode."
         }
         return
     }
 
-    throw "Unknown KV cache type '$type'. Mainline: $($script:LlamaCppMainlineKvTypes -join ', '); turbo (turboquant only): $($script:LlamaCppTurboKvTypes -join ', ')."
+    throw "Unknown KV cache type '$type'. Mainline: $($script:LlamaCppMainlineKvTypes -join ', '); turbo (turboquant/mtpturbo only): $($script:LlamaCppTurboKvTypes -join ', ')."
+}
+
+function Test-LlamaCppSpecType {
+    # Rejects MTP-family spec-types in plain turboquant mode (TheTom fork has
+    # no MTP code path). Mainline native supports draft-mtp; mtpturbo supports
+    # mtp/nextn. Returns silently on success.
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$SpecType,
+        [Parameter(Mandatory = $true)][string]$Mode
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SpecType)) { return }
+
+    $spec = $SpecType.ToLowerInvariant()
+
+    if ($Mode -eq 'turboquant' -and $spec -in $script:LlamaCppMtpSpecTypes) {
+        throw "Spec-type '$spec' (MTP) is not supported by the turboquant fork. Switch to -LlamaCppMode native (mainline MTP) or mtpturbo (combined build)."
+    }
+}
+
+function ConvertTo-LlamaCppSpecTypeForMode {
+    # Catalog stores the mainline canonical spec-type ('draft-mtp'). Forks
+    # use different names: mtpturbo wants 'mtp' (or 'nextn' for Qwen3.6
+    # NextN heads). This translates at emit time, leaving the catalog alone.
+    param(
+        [Parameter(Mandatory = $true)][string]$SpecType,
+        [Parameter(Mandatory = $true)][string]$Mode
+    )
+
+    if ($Mode -ne 'mtpturbo') { return $SpecType }
+
+    $spec = $SpecType.ToLowerInvariant()
+    if ($spec -eq 'draft-mtp') { return 'mtp' }
+    return $SpecType
 }
 
 function Get-LlamaCppKvTypes {
@@ -53,7 +97,7 @@ function Build-LlamaServerArgs {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant', 'mtpturbo')][string]$Mode,
         [Parameter(Mandatory = $true)][string]$ModelArgPath,
         [Parameter(Mandatory = $true)][int]$Port,
         [int]$Parallel,
@@ -237,10 +281,14 @@ function Build-LlamaServerArgs {
     }
 
     # MTP (Multi-Token Prediction) speculative decoding. Emitted only when both
-    # SpecType and SpecDraftNMax are provided — e.g. --spec-type mtp --spec-draft-n-max 2.
+    # SpecType and SpecDraftNMax are provided. Mode-gated: turboquant rejects
+    # MTP spec-types up front; mtpturbo retargets 'draft-mtp' → 'mtp' since
+    # the fork uses the bare name.
     if (-not [string]::IsNullOrWhiteSpace($SpecType) -and $SpecDraftNMax -gt 0) {
+        Test-LlamaCppSpecType -SpecType $SpecType -Mode $Mode
+        $emittedSpecType = ConvertTo-LlamaCppSpecTypeForMode -SpecType $SpecType -Mode $Mode
         $argList.Add('--spec-type')         | Out-Null
-        $argList.Add($SpecType)             | Out-Null
+        $argList.Add($emittedSpecType)      | Out-Null
         $argList.Add('--spec-draft-n-max')  | Out-Null
         $argList.Add([string]$SpecDraftNMax) | Out-Null
     }

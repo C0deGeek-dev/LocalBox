@@ -14,7 +14,7 @@ $script:LocalLLMDefaultsKeys = @(
     'MinOllamaVersion', 'Default', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot',
     'RequireAdvertisedTools', 'NoThinkProxyPort', 'NoThinkProxyRequiredVersion',
     'LlamaCppPort', 'LlamaCppServerPath',
-    'LlamaCppTurboquantRoot', 'LlamaCppTurboquantRepo', 'LlamaCppGgufRoot',
+    'LlamaCppTurboquantRoot', 'LlamaCppTurboquantRepo', 'LlamaCppMtpTurboRoot', 'LlamaCppGgufRoot',
     'LlamaCppDefaultMode', 'LlamaCppHealthCheckTimeoutSec', 'LlamaCppCoexistOllama',
     'LocalModelTools'
 )
@@ -146,6 +146,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppServerPath"))            { $cfg.LlamaCppServerPath = "%USERPROFILE%\\.local-llm\\llama-cpp\\llama-server.exe" }
     if (-not $cfg.ContainsKey("LlamaCppTurboquantRoot"))        { $cfg.LlamaCppTurboquantRoot = "%USERPROFILE%\\.local-llm\\llama-cpp-turboquant" }
     if (-not $cfg.ContainsKey("LlamaCppTurboquantRepo"))        { $cfg.LlamaCppTurboquantRepo = "TheTom/llama-cpp-turboquant" }
+    if (-not $cfg.ContainsKey("LlamaCppMtpTurboRoot"))          { $cfg.LlamaCppMtpTurboRoot = "%USERPROFILE%\\.local-llm\\llama-cpp-mtpturbo" }
     if (-not $cfg.ContainsKey("LlamaCppGgufRoot"))              { $cfg.LlamaCppGgufRoot = "%USERPROFILE%\\.local-llm\\gguf" }
     if (-not $cfg.ContainsKey("LlamaCppDefaultMode"))           { $cfg.LlamaCppDefaultMode = "native" }
     if (-not $cfg.ContainsKey("LlamaCppHealthCheckTimeoutSec")) { $cfg.LlamaCppHealthCheckTimeoutSec = 300 }
@@ -173,6 +174,7 @@ function Import-LocalLLMConfig {
 
     $cfg.LlamaCppServerPath     = Expand-LocalLLMPath $cfg.LlamaCppServerPath
     $cfg.LlamaCppTurboquantRoot = Expand-LocalLLMPath $cfg.LlamaCppTurboquantRoot
+    $cfg.LlamaCppMtpTurboRoot   = Expand-LocalLLMPath $cfg.LlamaCppMtpTurboRoot
     $cfg.LlamaCppGgufRoot       = Expand-LocalLLMPath $cfg.LlamaCppGgufRoot
     $cfg.BenchPilotRoot         = Expand-LocalLLMPath $cfg.BenchPilotRoot
     $cfg.LocalBoxRoot           = Expand-LocalLLMPath $cfg.LocalBoxRoot

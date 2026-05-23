@@ -284,15 +284,29 @@ function Ensure-LlamaBenchExe {
 function Ensure-LlamaPerplexityExe {
     param(
         [switch]$NonInteractive,
-        [ValidateSet('native','turboquant')][string]$Mode = 'native'
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native'
     )
 
     if ($Mode -eq 'turboquant') {
         $existing = Find-LlamaPerplexityTurboquantExe
+    } elseif ($Mode -eq 'mtpturbo') {
+        $existing = Find-MtpTurboPerplexityExe
     } else {
         $existing = Find-LlamaPerplexityExe
     }
     if ($existing) { return $existing }
+
+    # mtpturbo is BYO-binary; we never download and never prompt. If the tools
+    # aren't present, perplexity-based KV quality checks are simply unavailable.
+    if ($Mode -eq 'mtpturbo') {
+        if (-not $NonInteractive) {
+            Write-Host ""
+            Write-Host "llama-perplexity (mtpturbo) is not installed." -ForegroundColor Yellow
+            Write-Host "  Build EsmaeelNabil/llama.cpp branch feat/mtp-turboquant-kv-cache" -ForegroundColor DarkGray
+            Write-Host "  and place llama-perplexity.exe under: $(Get-LlamaCppMtpTurboInstallRoot)" -ForegroundColor DarkGray
+        }
+        return $null
+    }
 
     if ($Mode -eq 'turboquant' -and $NonInteractive) {
         Install-LlamaServerTurboquant -Force | Out-Null
@@ -522,4 +536,298 @@ function Ensure-LlamaServerTurboquant {
     }
 
     return Install-LlamaServerTurboquant
+}
+
+# ---- mtpturbo (BYO binary): MTP + turboquant in a single build -----------------
+# No release binaries exist for forks that combine MTP and turboquant KV cache,
+# so this path is build-from-source. If the user's machine has the toolchain
+# we offer to clone + compile + install end-to-end; otherwise we name the
+# missing prereqs and the exact winget commands to install them.
+
+# Default upstream + branch. Override via settings if you fork it.
+$script:LlamaCppMtpTurboRepoDefault   = 'EsmaeelNabil/llama.cpp'
+$script:LlamaCppMtpTurboBranchDefault = 'feat/mtp-turboquant-kv-cache'
+
+function Get-LlamaCppMtpTurboInstallRoot {
+    $root = $script:Cfg.LlamaCppMtpTurboRoot
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        $root = Join-Path $HOME ".local-llm\llama-cpp-mtpturbo"
+    }
+    return $root
+}
+
+function Get-LlamaCppMtpTurboSourceRoot {
+    return (Join-Path $HOME ".local-llm\src\llama-cpp-mtpturbo")
+}
+
+function Get-LlamaCppMtpTurboRepo {
+    $repo = $script:Cfg.LlamaCppMtpTurboRepo
+    if ([string]::IsNullOrWhiteSpace($repo)) { return $script:LlamaCppMtpTurboRepoDefault }
+    return $repo
+}
+
+function Get-LlamaCppMtpTurboBranch {
+    $branch = $script:Cfg.LlamaCppMtpTurboBranch
+    if ([string]::IsNullOrWhiteSpace($branch)) { return $script:LlamaCppMtpTurboBranchDefault }
+    return $branch
+}
+
+function Find-MtpTurboServerExe {
+    $root = Get-LlamaCppMtpTurboInstallRoot
+    if (-not (Test-Path $root)) { return $null }
+
+    $hit = Get-ChildItem -Path $root -Filter 'llama-server.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+
+    return $null
+}
+
+function Find-MtpTurboPerplexityExe {
+    $root = Get-LlamaCppMtpTurboInstallRoot
+    if (-not (Test-Path $root)) { return $null }
+
+    $hit = Get-ChildItem -Path $root -Filter 'llama-perplexity.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+
+    return $null
+}
+
+function Find-CudaToolkitRoot {
+    # Returns the highest-version CUDA Toolkit install with nvcc.exe present.
+    # Honors $env:CUDA_PATH first.
+    if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH) -and (Test-Path (Join-Path $env:CUDA_PATH 'bin\nvcc.exe'))) {
+        return $env:CUDA_PATH
+    }
+
+    $base = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA'
+    if (-not (Test-Path $base)) { return $null }
+
+    $candidate = Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName 'bin\nvcc.exe') } |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+
+    if ($candidate) { return $candidate.FullName }
+    return $null
+}
+
+function Find-MsvcBuildEnv {
+    # Returns @{ VcVars = '...vcvars64.bat' } or $null. Honors vswhere.
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) { return $null }
+
+    $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($installPath)) { return $null }
+
+    $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
+    if (-not (Test-Path $vcvars)) { return $null }
+
+    return @{ VcVars = $vcvars; InstallPath = $installPath }
+}
+
+function Test-LlamaCppMtpTurboBuildPrereqs {
+    # Probe for everything the build script needs. Returns @{ Ok; Missing; Found }.
+    $found   = [ordered]@{}
+    $missing = New-Object System.Collections.Generic.List[string]
+
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($git) { $found['git'] = $git.Source } else { $missing.Add('git') | Out-Null }
+
+    $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+    if ($cmake) { $found['cmake'] = $cmake.Source } else { $missing.Add('cmake') | Out-Null }
+
+    $ninja = Get-Command ninja -ErrorAction SilentlyContinue
+    if ($ninja) { $found['ninja'] = $ninja.Source } else { $missing.Add('ninja') | Out-Null }
+
+    $cuda = Find-CudaToolkitRoot
+    if ($cuda) { $found['cuda'] = $cuda } else { $missing.Add('cuda-toolkit') | Out-Null }
+
+    $msvc = Find-MsvcBuildEnv
+    if ($msvc) { $found['msvc'] = $msvc.InstallPath } else { $missing.Add('msvc-buildtools') | Out-Null }
+
+    return @{
+        Ok      = ($missing.Count -eq 0)
+        Missing = @($missing)
+        Found   = $found
+    }
+}
+
+function Write-MtpTurboPrereqGuidance {
+    param([Parameter(Mandatory = $true)][string[]]$Missing)
+
+    Write-Host ""
+    Write-Host "Missing build prerequisites for mtpturbo:" -ForegroundColor Yellow
+    foreach ($m in $Missing) {
+        switch ($m) {
+            'git'            { Write-Host "  - git           : winget install --id Git.Git"           -ForegroundColor DarkGray }
+            'cmake'          { Write-Host "  - cmake         : winget install --id Kitware.CMake"     -ForegroundColor DarkGray }
+            'ninja'          { Write-Host "  - ninja         : winget install --id Ninja-build.Ninja" -ForegroundColor DarkGray }
+            'cuda-toolkit'   { Write-Host "  - CUDA Toolkit  : https://developer.nvidia.com/cuda-12-4-0-download-archive (12.4 recommended; components: nvcc, cudart, cublas)" -ForegroundColor DarkGray }
+            'msvc-buildtools'{ Write-Host "  - VS BuildTools : winget install --id Microsoft.VisualStudio.2022.BuildTools --override `"--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`"" -ForegroundColor DarkGray }
+        }
+    }
+    Write-Host ""
+    Write-Host "After installing, re-launch this command. The build needs ~5 GB free disk and 15-30 min on a typical 4090 box." -ForegroundColor DarkGray
+}
+
+function Get-LocalNvidiaComputeCapability {
+    # "8.9" for RTX 4090. Returns $null if nvidia-smi is unavailable.
+    if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) { return $null }
+
+    try {
+        $out = & nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>$null | Select-Object -First 1
+        if ($out) { return $out.Trim() }
+    } catch {}
+    return $null
+}
+
+function Build-LlamaServerMtpTurbo {
+    # Clones (or pulls) the configured fork+branch, configures + builds with
+    # CUDA + Ninja for the local GPU's compute capability, installs the
+    # resulting binaries + CUDA runtime DLLs into the install root, and writes
+    # a .build-stamp. Throws on any failure.
+    [CmdletBinding()]
+    param()
+
+    $prereqs = Test-LlamaCppMtpTurboBuildPrereqs
+    if (-not $prereqs.Ok) {
+        Write-MtpTurboPrereqGuidance -Missing $prereqs.Missing
+        throw "Cannot build mtpturbo: missing $($prereqs.Missing -join ', ')"
+    }
+
+    $repo   = Get-LlamaCppMtpTurboRepo
+    $branch = Get-LlamaCppMtpTurboBranch
+    $srcRoot = Get-LlamaCppMtpTurboSourceRoot
+    $installRoot = Get-LlamaCppMtpTurboInstallRoot
+    Ensure-Directory (Split-Path -Parent $srcRoot)
+    Ensure-Directory $installRoot
+
+    Write-Host ""
+    Write-Host "Building mtpturbo llama.cpp from source." -ForegroundColor Cyan
+    Write-Host "  Repo    : github.com/$repo (branch $branch)" -ForegroundColor DarkGray
+    Write-Host "  Source  : $srcRoot" -ForegroundColor DarkGray
+    Write-Host "  Install : $installRoot" -ForegroundColor DarkGray
+
+    # Clone or pull.
+    if (Test-Path (Join-Path $srcRoot '.git')) {
+        Write-Host "Updating existing clone..." -ForegroundColor Cyan
+        & git -C $srcRoot fetch --depth 1 origin $branch 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+        & git -C $srcRoot checkout FETCH_HEAD 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
+    } else {
+        Write-Host "Cloning $repo#$branch (shallow)..." -ForegroundColor Cyan
+        & git clone --depth 1 -b $branch "https://github.com/$repo.git" $srcRoot 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+    }
+
+    $headSha = (& git -C $srcRoot rev-parse --short HEAD).Trim()
+
+    # Resolve compute capability — fallback to a broad set if nvidia-smi is missing.
+    $cc = Get-LocalNvidiaComputeCapability
+    $cudaArch = if ($cc) { ($cc -replace '\.', '') + '-real' } else { '75-virtual;80-real;86-real;89-real' }
+    Write-Host "  GPU arch: $cudaArch (detected compute_cap=$cc)" -ForegroundColor DarkGray
+
+    $cudaRoot = $prereqs.Found['cuda']
+    $msvc = Find-MsvcBuildEnv
+    $vcvars = $msvc.VcVars
+
+    # Wrap configure+build in a single .cmd so vcvars64 + cmake share an
+    # environment. Avoids inheriting a half-set %PATH% from PowerShell.
+    $buildScript = Join-Path $srcRoot '.localbox-build-mtpturbo.cmd'
+    $scriptBody = @"
+@echo off
+setlocal enableextensions
+cd /d "%~dp0"
+
+call "$vcvars"
+if errorlevel 1 exit /b 12
+
+set "PATH=$cudaRoot\bin;%PATH%"
+
+if exist build rmdir /s /q build
+
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DLLAMA_CURL=OFF -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=$cudaArch -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler -DCMAKE_CUDA_COMPILER="$cudaRoot\bin\nvcc.exe"
+if errorlevel 1 exit /b 2
+
+cmake --build build --config Release --target llama-server llama-bench llama-perplexity -- -j 0
+if errorlevel 1 exit /b 3
+
+exit /b 0
+"@
+    Set-Content -LiteralPath $buildScript -Value $scriptBody -Encoding ASCII
+
+    Write-Host "Building (15-30 min; output streaming below)..." -ForegroundColor Cyan
+    & cmd.exe /c "`"$buildScript`"" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Build failed with exit code $LASTEXITCODE. Inspect $srcRoot\build\ for details."
+    }
+
+    # Install: copy project binaries + CUDA runtime DLLs into the install root.
+    $binDir = Join-Path $srcRoot 'build\bin'
+    if (-not (Test-Path (Join-Path $binDir 'llama-server.exe'))) {
+        throw "Build reported success but llama-server.exe is missing under $binDir."
+    }
+
+    Get-ChildItem -Path $binDir -Include '*.exe','*.dll' -File | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
+    }
+
+    foreach ($dll in @('cudart64_12.dll','cublas64_12.dll','cublasLt64_12.dll')) {
+        $candidate = Join-Path $cudaRoot "bin\$dll"
+        if (Test-Path $candidate) {
+            Copy-Item -LiteralPath $candidate -Destination $installRoot -Force
+        }
+    }
+
+    $stamp = "mtpturbo-$headSha-cuda$(Split-Path -Leaf $cudaRoot)-$cudaArch"
+    Set-Content -LiteralPath (Join-Path $installRoot '.build-stamp') -Value $stamp -Encoding utf8
+
+    $serverPath = Join-Path $installRoot 'llama-server.exe'
+    Write-Host "Installed mtpturbo llama-server: $serverPath" -ForegroundColor Green
+    Write-Host "Build stamp: $stamp" -ForegroundColor DarkGray
+    return $serverPath
+}
+
+function Ensure-LlamaServerMtpTurbo {
+    # Returns the resolved path to the mtpturbo llama-server.exe. If absent
+    # and toolchain present: prompt to auto-build. If toolchain missing: print
+    # install guidance and throw. -NonInteractive skips both prompts and the
+    # auto-build (returns a throw).
+    param([switch]$NonInteractive)
+
+    $existing = Find-MtpTurboServerExe
+    if ($existing) {
+        Repair-TurboquantOpenSslDeps -InstallDir (Split-Path -Parent $existing)
+        return $existing
+    }
+
+    $root = Get-LlamaCppMtpTurboInstallRoot
+    $prereqs = Test-LlamaCppMtpTurboBuildPrereqs
+
+    if (-not $prereqs.Ok) {
+        Write-Host ""
+        Write-Host "mtpturbo llama-server.exe not found under $root." -ForegroundColor Yellow
+        Write-MtpTurboPrereqGuidance -Missing $prereqs.Missing
+        throw "mtpturbo is not installed and the toolchain to build it is incomplete (missing: $($prereqs.Missing -join ', '))."
+    }
+
+    if ($NonInteractive) {
+        throw "mtpturbo llama-server.exe not found under $root. Re-run interactively to auto-build, or run Build-LlamaServerMtpTurbo manually."
+    }
+
+    Write-Host ""
+    Write-Host "mtpturbo llama-server.exe not found under $root." -ForegroundColor Yellow
+    Write-Host "  Build prereqs detected:" -ForegroundColor DarkGray
+    foreach ($k in $prereqs.Found.Keys) {
+        Write-Host ("    {0,-7} {1}" -f $k, $prereqs.Found[$k]) -ForegroundColor DarkGray
+    }
+    Write-Host "  Repo: github.com/$(Get-LlamaCppMtpTurboRepo) (branch $(Get-LlamaCppMtpTurboBranch))" -ForegroundColor DarkGray
+    Write-Host "  Build takes 15-30 min and needs ~5 GB free disk." -ForegroundColor DarkGray
+    $answer = (Read-Host "Build it now? [Y/n]").Trim().ToLowerInvariant()
+    if ($answer -in @('n','no')) {
+        throw "mtpturbo build declined."
+    }
+
+    return (Build-LlamaServerMtpTurbo)
 }

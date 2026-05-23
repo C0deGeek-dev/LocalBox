@@ -11,6 +11,7 @@
   "LlamaCppServerPath": "%USERPROFILE%\\.local-llm\\llama-cpp\\llama-server.exe",
   "LlamaCppTurboquantRoot": "%USERPROFILE%\\.local-llm\\llama-cpp-turboquant",
   "LlamaCppTurboquantRepo": "TheTom/llama-cpp-turboquant",
+  "LlamaCppMtpTurboRoot": "%USERPROFILE%\\.local-llm\\llama-cpp-mtpturbo",
   "LlamaCppGgufRoot": "%USERPROFILE%\\.local-llm\\gguf",
   "LlamaCppDefaultMode": "native",
   "LlamaCppHealthCheckTimeoutSec": 300,

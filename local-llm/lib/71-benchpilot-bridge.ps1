@@ -180,7 +180,7 @@ function Invoke-BenchPilotLauncherFindBest {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [ValidateSet('native','turboquant')][string]$Mode = 'native',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
         [int]$Budget = 100,

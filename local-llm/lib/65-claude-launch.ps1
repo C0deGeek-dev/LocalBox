@@ -584,7 +584,7 @@ function Start-LocalLLMLlamaCppRemoteBackend {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant', 'mtpturbo')][string]$Mode,
         [string]$KvCacheK,
         [string]$KvCacheV,
         [switch]$Strict,
@@ -717,18 +717,18 @@ function Start-LocalLLMLlamaCppRemoteBackend {
     $backendErrLog = $null
 
     if ($DryRun) {
-        $serverPath = if ($Mode -eq 'turboquant') {
-            try { Find-TurboquantServerExe } catch { $null }
-        } else {
-            Find-LlamaServerExe
+        $serverPath = switch ($Mode) {
+            'turboquant' { try { Find-TurboquantServerExe } catch { $null } }
+            'mtpturbo'   { try { Find-MtpTurboServerExe   } catch { $null } }
+            default      { Find-LlamaServerExe }
         }
         if (-not $serverPath) { $serverPath = '<not installed>' }
     }
     else {
-        $serverPath = if ($Mode -eq 'turboquant') {
-            Ensure-LlamaServerTurboquant
-        } else {
-            Ensure-LlamaServerNative
+        $serverPath = switch ($Mode) {
+            'turboquant' { Ensure-LlamaServerTurboquant }
+            'mtpturbo'   { Ensure-LlamaServerMtpTurbo }
+            default      { Ensure-LlamaServerNative }
         }
     }
 
@@ -788,7 +788,7 @@ function Start-LocalLLMRemoteGateway {
         [Alias('Ctx')]
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('ollama', 'llamacpp')][string]$Backend = 'ollama',
-        [ValidateSet('native', 'turboquant')][string]$LlamaCppMode = 'native',
+        [ValidateSet('native', 'turboquant', 'mtpturbo')][string]$LlamaCppMode = 'native',
         [string]$KvCacheK,
         [string]$KvCacheV,
         [switch]$UseQ8,
@@ -1468,7 +1468,7 @@ function Start-ClaudeWithLlamaCppModel {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant', 'mtpturbo')][string]$Mode,
         [string]$KvCacheK,
         [string]$KvCacheV,
         [string]$Tools,
@@ -1691,21 +1691,25 @@ function Start-ClaudeWithLlamaCppModel {
     # DryRun must not trigger an install — Find-* returns $null if absent.
     $dryRunServerNote = $null
     if ($DryRun) {
-        $serverPath = if ($Mode -eq 'turboquant') {
-            try { Find-TurboquantServerExe } catch { $null }
-        } else {
-            Find-LlamaServerExe
+        $serverPath = switch ($Mode) {
+            'turboquant' { try { Find-TurboquantServerExe } catch { $null } }
+            'mtpturbo'   { try { Find-MtpTurboServerExe   } catch { $null } }
+            default      { Find-LlamaServerExe }
         }
         if (-not $serverPath) {
             $serverPath = '<not installed>'
-            $dryRunServerNote = "llama-server ($Mode) is not installed; a real launch would install it first"
+            $dryRunServerNote = if ($Mode -eq 'mtpturbo') {
+                "llama-server ($Mode) is not installed; this mode requires a self-built binary under $(Get-LlamaCppMtpTurboInstallRoot)"
+            } else {
+                "llama-server ($Mode) is not installed; a real launch would install it first"
+            }
         }
     }
     else {
-        $serverPath = if ($Mode -eq 'turboquant') {
-            Ensure-LlamaServerTurboquant
-        } else {
-            Ensure-LlamaServerNative
+        $serverPath = switch ($Mode) {
+            'turboquant' { Ensure-LlamaServerTurboquant }
+            'mtpturbo'   { Ensure-LlamaServerMtpTurbo }
+            default      { Ensure-LlamaServerNative }
         }
     }
 
@@ -1770,7 +1774,8 @@ function Start-ClaudeWithLlamaCppModel {
             $notes += "AutoBest: loaded saved tuner profile=$autoBestLoadedProfile (overrides applied to argv)"
         }
         if (-not [string]::IsNullOrWhiteSpace($SpecType) -and $SpecDraftNMax -gt 0) {
-            $notes += "MTP: --spec-type $SpecType --spec-draft-n-max $SpecDraftNMax"
+            $emittedSpec = ConvertTo-LlamaCppSpecTypeForMode -SpecType $SpecType -Mode $Mode
+            $notes += "MTP: --spec-type $emittedSpec --spec-draft-n-max $SpecDraftNMax"
         }
 
         $plan = @{
