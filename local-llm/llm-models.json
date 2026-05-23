@@ -280,7 +280,7 @@
         "128k": 131072
       },
       "Strict": true,
-      "SpecType": "mtp",
+      "SpecType": "draft-mtp",
       "SpecDraftNMax": 2,
       "QuantSizesGB": {
         "bf16": 71.1,
@@ -303,6 +303,46 @@
         "q5ks": "Q5_K_S · Smaller Q5 · ~24.6 GB",
         "q6k": "Q6_K · Excellent quality · ~29.3 GB",
         "q8_0": "Q8_0 · Near-lossless, recommended · ~37.8 GB"
+      }
+    },
+    "genesisv2": {
+      "DisplayName": "Qwen3.6-35B-A3B Uncensored Genesis V2 APEX MTP",
+      "Root": "Qwen3.6-35B-A3B-Uncensored-Genesis-V2-APEX-MTP-GGUF",
+      "SourceType": "gguf",
+      "Repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-V2-APEX-MTP-GGUF",
+      "Quants": {
+        "apex": "Qwen3.6-35B-A3B-Uncensored-Genesis-APEX.gguf",
+        "apex-compact": "Qwen3.6-35B-A3B-Uncensored-Genesis-APEX-Compact.gguf",
+        "mtp-apex": "Qwen3.6-35B-A3B-Uncensored-Genesis-MTP-APEX.gguf",
+        "mtp-apex-compact": "Qwen3.6-35B-A3B-Uncensored-Genesis-MTP-APEX-Compact.gguf",
+        "mtp-q8kp": "Qwen3.6-35B-A3B-Uncensored-Genesis-MTP-Q8_K_P.gguf"
+      },
+      "Quant": "apex",
+      "Parser": "qwen36",
+      "LimitTools": true,
+      "Tier": "experimental",
+      "Contexts": {
+        "": 131072,
+        "32k": 32768,
+        "64k": 65536,
+        "128k": 131072
+      },
+      "Strict": true,
+      "SpecType": "draft-mtp",
+      "SpecDraftNMax": 2,
+      "QuantSizesGB": {
+        "apex": 25.6,
+        "apex-compact": 17.3,
+        "mtp-apex": 26.5,
+        "mtp-apex-compact": 18.0,
+        "mtp-q8kp": 44.5
+      },
+      "QuantNotes": {
+        "apex": "APEX · ~25.6 GB",
+        "apex-compact": "APEX-Compact · ~17.3 GB",
+        "mtp-apex": "MTP APEX · ~26.5 GB",
+        "mtp-apex-compact": "MTP APEX-Compact · ~18 GB",
+        "mtp-q8kp": "MTP Q8_K_P · ~44.5 GB"
       }
     }
   },
