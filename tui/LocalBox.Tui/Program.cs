@@ -50,9 +50,12 @@ var selectedQuantIndex = 0;
 var strict = false;
 var searchMode = false;
 var searchTerm = "";
+var step = WizardStep.Model;
+var renderVersion = 0;
 var actions = new[] { "claude", "codex", "unshackled", "remote", "chat", "setup", "findbest", "resetbest" };
 var modes = new[] { "native", "turboquant", "mtpturbo" };
 var autoBestChoices = new[] { "off", "auto", "balanced", "pure" };
+var autoBestCache = new Dictionary<string, List<AutoBestProfile>>(StringComparer.OrdinalIgnoreCase);
 
 var list = new ListView
 {
@@ -62,14 +65,20 @@ var list = new ListView
     Height = Dim.Fill(2)
 };
 
-var detail = new Label
+#pragma warning disable CS0618
+var detail = new TextView
 {
     X = Pos.Right(list) + 1,
     Y = 0,
     Width = Dim.Fill(),
     Height = Dim.Fill(2),
-    Text = ""
+    Text = "",
+    ReadOnly = true,
+    Multiline = true,
+    WordWrap = false,
+    CanFocus = true
 };
+#pragma warning restore CS0618
 
 var footer = new Label
 {
@@ -202,16 +211,23 @@ string PlanExpression(string functionName)
     return string.Join(" ", parts);
 }
 
+string AutoBestCacheKey(LocalBoxModel model)
+{
+    var quant = model.Quants.Count == 0 ? "" : model.Quants[selectedQuantIndex].Key;
+    return $"{model.Key}|{SelectedContextKey()}|{modes[selectedModeIndex]}|{quant}";
+}
+
 void RenderFooter()
 {
     ClampSelection();
     var filter = showAllModels ? "all" : "recommended";
     var search = searchMode ? $"search:{searchTerm}_" : $"search:{(string.IsNullOrWhiteSpace(searchTerm) ? "-" : searchTerm)}";
-    footer.Text = $"F2 ctx:{SelectedContextLabel()} F3 action:{actions[selectedActionIndex]} F4 mode:{modes[selectedModeIndex]} F7 best:{autoBestChoices[selectedAutoBestIndex]} F8 strict:{strict} F10 {filter} F11 q:{SelectedQuantLabel()} / {search} F6 preview F9 launch Ctrl+B tune Esc quit";
+    footer.Text = $"step:{step} Enter/Right next Left back  F2 ctx:{SelectedContextLabel()} F3 action:{actions[selectedActionIndex]} F4 mode:{modes[selectedModeIndex]} F7 best:{autoBestChoices[selectedAutoBestIndex]} F8 strict:{strict} F10 {filter} F11 q:{SelectedQuantLabel()} / {search} F6 preview F9 launch Ctrl+B tune Tab focus Esc quit";
 }
 
 void RenderModel(int? index)
 {
+    renderVersion++;
     if (index is null || index < 0 || index >= visibleModels.Count)
     {
         detail.Text = "No model selected.";
@@ -221,21 +237,108 @@ void RenderModel(int? index)
 
     ClampSelection();
     var model = visibleModels[index.Value];
-    var profiles = SafeLoadAutoBestProfiles(model);
+    var cacheKey = AutoBestCacheKey(model);
+    var profiles = autoBestCache.TryGetValue(cacheKey, out var cachedProfiles) ? cachedProfiles : [];
     detail.Text = FormatModel(model, profiles, benchPilot, SelectedQuantLabel(), actions[selectedActionIndex], modes[selectedModeIndex]);
     RenderFooter();
+    ScheduleAutoBestLoad(model, cacheKey, renderVersion);
 }
 
-List<AutoBestProfile> SafeLoadAutoBestProfiles(LocalBoxModel model)
+void ScheduleAutoBestLoad(LocalBoxModel model, string cacheKey, int version)
+{
+    if (autoBestCache.ContainsKey(cacheKey))
+    {
+        return;
+    }
+
+    _ = Task.Run(async () =>
+    {
+        await Task.Delay(300);
+        if (version != renderVersion)
+        {
+            return;
+        }
+
+        try
+        {
+            var parts = cacheKey.Split('|');
+            var profiles = await client.InvokeArrayAsync<AutoBestProfile>($"Get-LocalBoxTuiAutoBestProfiles -Key {Ps(parts[0])} -ContextKey {Ps(parts[1])} -Mode {Ps(parts[2])} -Quant {Ps(parts[3])}");
+            autoBestCache[cacheKey] = profiles;
+            app.Invoke(() =>
+            {
+                if (version == renderVersion)
+                {
+                    RenderModel(list.SelectedItem);
+                }
+            });
+        }
+        catch
+        {
+            autoBestCache[cacheKey] = [];
+        }
+    });
+}
+
+void AdvanceStep()
+{
+    if (step == WizardStep.Confirm)
+    {
+        ShowPreview();
+        return;
+    }
+
+    step = (WizardStep)((int)step + 1);
+    RenderModel(list.SelectedItem);
+}
+
+void PreviousStep()
+{
+    if (step == WizardStep.Model)
+    {
+        list.SetFocus();
+        return;
+    }
+
+    step = (WizardStep)((int)step - 1);
+    RenderModel(list.SelectedItem);
+}
+
+void CycleCurrentStep()
+{
+    var model = CurrentModel();
+    switch (step)
+    {
+        case WizardStep.Context when model is not null && model.Contexts.Count > 0:
+            selectedContextIndex = (selectedContextIndex + 1) % model.Contexts.Count;
+            break;
+        case WizardStep.Quant when model is not null && model.Quants.Count > 0:
+            selectedQuantIndex = (selectedQuantIndex + 1) % model.Quants.Count;
+            break;
+        case WizardStep.Action:
+            selectedActionIndex = (selectedActionIndex + 1) % actions.Length;
+            break;
+        case WizardStep.Mode:
+            selectedModeIndex = (selectedModeIndex + 1) % modes.Length;
+            break;
+        case WizardStep.AutoBest:
+            selectedAutoBestIndex = (selectedAutoBestIndex + 1) % autoBestChoices.Length;
+            break;
+    }
+    RenderModel(list.SelectedItem);
+}
+
+void ShowPreview()
 {
     try
     {
-        var quant = model.Quants.Count == 0 ? "" : model.Quants[selectedQuantIndex].Key;
-        return client.InvokeArrayAsync<AutoBestProfile>($"Get-LocalBoxTuiAutoBestProfiles -Key {Ps(model.Key)} -ContextKey {Ps(SelectedContextKey())} -Mode {Ps(modes[selectedModeIndex])} -Quant {Ps(quant)}").GetAwaiter().GetResult();
+        var preview = client.InvokeAsync<LaunchPreview>(PlanExpression("Invoke-LocalBoxTuiLaunchPreview")).GetAwaiter().GetResult();
+        detail.Text = preview?.Output ?? "No preview output.";
+        detail.SetFocus();
+        RenderFooter();
     }
-    catch
+    catch (Exception ex)
     {
-        return [];
+        detail.Text = ex.Message;
     }
 }
 
@@ -243,9 +346,10 @@ list.ValueChanged += (_, args) =>
 {
     selectedContextIndex = 0;
     selectedQuantIndex = 0;
+    step = WizardStep.Model;
     RenderModel(args.NewValue);
 };
-list.Accepting += (_, _) => RenderModel(list.SelectedItem);
+list.Accepting += (_, _) => AdvanceStep();
 
 window.KeyDown += (_, key) =>
 {
@@ -282,6 +386,24 @@ window.KeyDown += (_, key) =>
         return;
     }
 
+    if (key.KeyCode == KeyCode.Enter || key.KeyCode == KeyCode.CursorRight)
+    {
+        AdvanceStep();
+        return;
+    }
+
+    if (key.KeyCode == KeyCode.CursorLeft)
+    {
+        PreviousStep();
+        return;
+    }
+
+    if (key.KeyCode == KeyCode.Space)
+    {
+        CycleCurrentStep();
+        return;
+    }
+
     if (key.KeyCode == (KeyCode)'/')
     {
         searchMode = true;
@@ -311,6 +433,7 @@ window.KeyDown += (_, key) =>
         if (model is not null && model.Contexts.Count > 0)
         {
             selectedContextIndex = (selectedContextIndex + 1) % model.Contexts.Count;
+            step = WizardStep.Context;
             RenderModel(list.SelectedItem);
         }
     }
@@ -318,18 +441,21 @@ window.KeyDown += (_, key) =>
     if (key.KeyCode == KeyCode.F3)
     {
         selectedActionIndex = (selectedActionIndex + 1) % actions.Length;
+        step = WizardStep.Action;
         RenderModel(list.SelectedItem);
     }
 
     if (key.KeyCode == KeyCode.F4)
     {
         selectedModeIndex = (selectedModeIndex + 1) % modes.Length;
+        step = WizardStep.Mode;
         RenderModel(list.SelectedItem);
     }
 
     if (key.KeyCode == KeyCode.F7)
     {
         selectedAutoBestIndex = (selectedAutoBestIndex + 1) % autoBestChoices.Length;
+        step = WizardStep.AutoBest;
         RenderModel(list.SelectedItem);
     }
 
@@ -360,6 +486,7 @@ window.KeyDown += (_, key) =>
         if (model is not null && model.Quants.Count > 0)
         {
             selectedQuantIndex = (selectedQuantIndex + 1) % model.Quants.Count;
+            step = WizardStep.Quant;
             RenderModel(list.SelectedItem);
         }
     }
@@ -386,15 +513,7 @@ window.KeyDown += (_, key) =>
 
     if (key.KeyCode == KeyCode.F6)
     {
-        try
-        {
-            var preview = client.InvokeAsync<LaunchPreview>(PlanExpression("Invoke-LocalBoxTuiLaunchPreview")).GetAwaiter().GetResult();
-            detail.Text = preview?.Output ?? "No preview output.";
-        }
-        catch (Exception ex)
-        {
-            detail.Text = ex.Message;
-        }
+        ShowPreview();
     }
 
     if (key.KeyCode == KeyCode.F9)
@@ -819,6 +938,17 @@ sealed record ModelRow(string Key, string DisplayName, string Tier)
         var name = DisplayName.Length > 18 ? DisplayName[..18] : DisplayName;
         return $"{Key,-14} {Tier,-10} {name}";
     }
+}
+
+enum WizardStep
+{
+    Model,
+    Context,
+    Quant,
+    Action,
+    Mode,
+    AutoBest,
+    Confirm
 }
 
 sealed record LocalBoxStatus
