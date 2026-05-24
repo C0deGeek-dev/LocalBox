@@ -51,6 +51,11 @@ var strict = false;
 var searchMode = false;
 var searchTerm = "";
 var step = WizardStep.Model;
+var activePane = ActivePane.Models;
+var pickerOpen = false;
+var pickerStep = WizardStep.Context;
+var pickerIndex = 0;
+var pickerChoices = new List<PickerChoice>();
 var renderVersion = 0;
 var actions = new[] { "claude", "codex", "unshackled", "remote", "chat", "setup", "findbest", "resetbest" };
 var modes = new[] { "native", "turboquant", "mtpturbo" };
@@ -61,14 +66,22 @@ var list = new ListView
 {
     X = 0,
     Y = 0,
-    Width = 38,
+    Width = 34,
+    Height = Dim.Fill(2)
+};
+
+var wizard = new ListView
+{
+    X = Pos.Right(list) + 1,
+    Y = 0,
+    Width = 34,
     Height = Dim.Fill(2)
 };
 
 #pragma warning disable CS0618
 var detail = new TextView
 {
-    X = Pos.Right(list) + 1,
+    X = Pos.Right(wizard) + 1,
     Y = 0,
     Width = Dim.Fill(),
     Height = Dim.Fill(2),
@@ -217,12 +230,44 @@ string AutoBestCacheKey(LocalBoxModel model)
     return $"{model.Key}|{SelectedContextKey()}|{modes[selectedModeIndex]}|{quant}";
 }
 
+void FocusPane(ActivePane pane)
+{
+    activePane = pane;
+    switch (pane)
+    {
+        case ActivePane.Models:
+            pickerOpen = false;
+            list.SetFocus();
+            break;
+        case ActivePane.Wizard:
+            pickerOpen = false;
+            wizard.SetFocus();
+            break;
+        case ActivePane.Choices:
+            detail.SetFocus();
+            break;
+    }
+
+    RenderModel(list.SelectedItem);
+}
+
 void RenderFooter()
 {
     ClampSelection();
+    if (pickerOpen)
+    {
+        footer.Text = $"pane:choices select:{pickerStep} Up/Down choose Enter accept Left/Backspace/Esc back";
+        return;
+    }
+
     var filter = showAllModels ? "all" : "recommended";
     var search = searchMode ? $"search:{searchTerm}_" : $"search:{(string.IsNullOrWhiteSpace(searchTerm) ? "-" : searchTerm)}";
-    footer.Text = $"step:{step} Enter/Right next Left back  F2 ctx:{SelectedContextLabel()} F3 action:{actions[selectedActionIndex]} F4 mode:{modes[selectedModeIndex]} F7 best:{autoBestChoices[selectedAutoBestIndex]} F8 strict:{strict} F10 {filter} F11 q:{SelectedQuantLabel()} / {search} F6 preview F9 launch Ctrl+B tune Tab focus Esc quit";
+    footer.Text = activePane switch
+    {
+        ActivePane.Models => $"pane:models Up/Down model Enter/Right wizard  F10 {filter} / {search} Esc quit",
+        ActivePane.Wizard => $"pane:wizard Up/Down field Enter choices Right next Left models  P preview L launch S strict:{strict} Esc quit",
+        _ => $"pane:{activePane} Enter select Right next Left back  F10 {filter} / {search} Esc quit"
+    };
 }
 
 void RenderModel(int? index)
@@ -239,9 +284,38 @@ void RenderModel(int? index)
     var model = visibleModels[index.Value];
     var cacheKey = AutoBestCacheKey(model);
     var profiles = autoBestCache.TryGetValue(cacheKey, out var cachedProfiles) ? cachedProfiles : [];
-    detail.Text = FormatModel(model, profiles, benchPilot, SelectedQuantLabel(), actions[selectedActionIndex], modes[selectedModeIndex]);
+    RenderWizard();
+    detail.Text = FormatModel(
+        model,
+        profiles,
+        benchPilot,
+        step,
+        SelectedContextKey(),
+        SelectedContextLabel(),
+        SelectedQuantLabel(),
+        actions[selectedActionIndex],
+        modes[selectedModeIndex],
+        autoBestChoices[selectedAutoBestIndex],
+        strict);
     RenderFooter();
     ScheduleAutoBestLoad(model, cacheKey, renderVersion);
+}
+
+void RenderWizard()
+{
+    ClampSelection();
+    var rows = new ObservableCollection<WizardRow>
+    {
+        new(WizardStep.Model, "Model", CurrentModel()?.Key ?? "-"),
+        new(WizardStep.Context, "Context", SelectedContextLabel()),
+        new(WizardStep.Quant, "Quant", SelectedQuantLabel()),
+        new(WizardStep.Action, "Action", actions[selectedActionIndex]),
+        new(WizardStep.Mode, "Mode", modes[selectedModeIndex]),
+        new(WizardStep.AutoBest, "AutoBest", autoBestChoices[selectedAutoBestIndex]),
+        new(WizardStep.Confirm, "Confirm", "launch")
+    };
+    wizard.SetSource(rows);
+    wizard.SelectedItem = Math.Clamp((int)step, 0, rows.Count - 1);
 }
 
 void ScheduleAutoBestLoad(LocalBoxModel model, string cacheKey, int version)
@@ -283,7 +357,7 @@ void AdvanceStep()
 {
     if (step == WizardStep.Confirm)
     {
-        ShowPreview();
+        LaunchSelected();
         return;
     }
 
@@ -293,38 +367,189 @@ void AdvanceStep()
 
 void PreviousStep()
 {
-    if (step == WizardStep.Model)
+    if (activePane == ActivePane.Choices)
     {
-        list.SetFocus();
+        CancelPicker();
         return;
     }
 
-    step = (WizardStep)((int)step - 1);
+    if (activePane == ActivePane.Wizard)
+    {
+        FocusPane(ActivePane.Models);
+        return;
+    }
+
+    FocusPane(ActivePane.Models);
+}
+
+void MoveWizard(int delta)
+{
+    var next = Math.Clamp((int)step + delta, (int)WizardStep.Model, (int)WizardStep.Confirm);
+    step = (WizardStep)next;
     RenderModel(list.SelectedItem);
 }
 
-void CycleCurrentStep()
+void OpenOrAcceptStep()
+{
+    if (step == WizardStep.Confirm)
+    {
+        LaunchSelected();
+        return;
+    }
+
+    if (StepHasPicker(step))
+    {
+        OpenPicker(step);
+        return;
+    }
+
+    AdvanceStep();
+}
+
+bool StepHasPicker(WizardStep candidate)
+{
+    return candidate is WizardStep.Context or WizardStep.Quant or WizardStep.Action or WizardStep.Mode or WizardStep.AutoBest;
+}
+
+void OpenPicker(WizardStep targetStep)
 {
     var model = CurrentModel();
-    switch (step)
+    FocusPane(ActivePane.Wizard);
+    step = targetStep;
+    ClampSelection();
+
+    pickerChoices = BuildPickerChoices(targetStep, model);
+    if (pickerChoices.Count == 0)
+    {
+        RenderModel(list.SelectedItem);
+        return;
+    }
+
+    pickerStep = targetStep;
+    pickerIndex = CurrentPickerIndex(targetStep);
+    pickerOpen = true;
+    activePane = ActivePane.Choices;
+    RenderPicker();
+}
+
+List<PickerChoice> BuildPickerChoices(WizardStep targetStep, LocalBoxModel? model)
+{
+    var choices = new List<PickerChoice>();
+    switch (targetStep)
     {
         case WizardStep.Context when model is not null && model.Contexts.Count > 0:
-            selectedContextIndex = (selectedContextIndex + 1) % model.Contexts.Count;
+            for (var i = 0; i < model.Contexts.Count; i++)
+            {
+                var index = i;
+                var ctx = model.Contexts[i];
+                var note = string.IsNullOrWhiteSpace(ctx.Note) ? "" : $" - {ctx.Note}";
+                choices.Add(new PickerChoice($"{ctx.Label,-8} {ctx.Tokens,7} tokens{note}", () => selectedContextIndex = index));
+            }
             break;
         case WizardStep.Quant when model is not null && model.Quants.Count > 0:
-            selectedQuantIndex = (selectedQuantIndex + 1) % model.Quants.Count;
+            for (var i = 0; i < model.Quants.Count; i++)
+            {
+                var index = i;
+                var quant = model.Quants[i];
+                var size = quant.SizeGB is null ? "?" : $"{quant.SizeGB:0.0} GB";
+                var fit = Empty(quant.Fit);
+                var current = quant.IsDefault ? " default" : "";
+                var note = string.IsNullOrWhiteSpace(quant.Note) ? "" : $" - {quant.Note}";
+                choices.Add(new PickerChoice($"{quant.Key,-16} {size,8} {fit,-6}{current}{note}", () => selectedQuantIndex = index));
+            }
             break;
         case WizardStep.Action:
-            selectedActionIndex = (selectedActionIndex + 1) % actions.Length;
+            for (var i = 0; i < actions.Length; i++)
+            {
+                var index = i;
+                choices.Add(new PickerChoice(actions[i], () => selectedActionIndex = index));
+            }
             break;
         case WizardStep.Mode:
-            selectedModeIndex = (selectedModeIndex + 1) % modes.Length;
+            for (var i = 0; i < modes.Length; i++)
+            {
+                var index = i;
+                choices.Add(new PickerChoice(modes[i], () => selectedModeIndex = index));
+            }
             break;
         case WizardStep.AutoBest:
-            selectedAutoBestIndex = (selectedAutoBestIndex + 1) % autoBestChoices.Length;
+            for (var i = 0; i < autoBestChoices.Length; i++)
+            {
+                var index = i;
+                choices.Add(new PickerChoice(autoBestChoices[i], () => selectedAutoBestIndex = index));
+            }
             break;
     }
+
+    return choices;
+}
+
+int CurrentPickerIndex(WizardStep targetStep)
+{
+    return targetStep switch
+    {
+        WizardStep.Context => selectedContextIndex,
+        WizardStep.Quant => selectedQuantIndex,
+        WizardStep.Action => selectedActionIndex,
+        WizardStep.Mode => selectedModeIndex,
+        WizardStep.AutoBest => selectedAutoBestIndex,
+        _ => 0
+    };
+}
+
+void RenderPicker()
+{
+    pickerIndex = Math.Clamp(pickerIndex, 0, Math.Max(pickerChoices.Count, 1) - 1);
+    detail.Text = FormatPicker(pickerStep, pickerChoices, pickerIndex);
+    RenderFooter();
+}
+
+void MovePicker(int delta)
+{
+    if (pickerChoices.Count == 0)
+    {
+        return;
+    }
+
+    pickerIndex = (pickerIndex + delta + pickerChoices.Count) % pickerChoices.Count;
+    RenderPicker();
+}
+
+void AcceptPicker()
+{
+    if (pickerChoices.Count > 0)
+    {
+        pickerChoices[pickerIndex].Apply();
+    }
+
+    pickerOpen = false;
+    pickerChoices = [];
+    activePane = ActivePane.Wizard;
+    wizard.SetFocus();
     RenderModel(list.SelectedItem);
+}
+
+void CancelPicker()
+{
+    pickerOpen = false;
+    pickerChoices = [];
+    activePane = ActivePane.Wizard;
+    wizard.SetFocus();
+    RenderModel(list.SelectedItem);
+}
+
+void LaunchSelected()
+{
+    try
+    {
+        var plan = client.InvokeAsync<LaunchPlan>(PlanExpression("New-LocalBoxTuiLaunchPlan")).GetAwaiter().GetResult();
+        pendingLaunchCommand = plan?.LaunchCommand;
+        app.RequestStop();
+    }
+    catch (Exception ex)
+    {
+        detail.Text = ex.Message;
+    }
 }
 
 void ShowPreview()
@@ -333,7 +558,6 @@ void ShowPreview()
     {
         var preview = client.InvokeAsync<LaunchPreview>(PlanExpression("Invoke-LocalBoxTuiLaunchPreview")).GetAwaiter().GetResult();
         detail.Text = preview?.Output ?? "No preview output.";
-        detail.SetFocus();
         RenderFooter();
     }
     catch (Exception ex)
@@ -342,17 +566,41 @@ void ShowPreview()
     }
 }
 
-list.ValueChanged += (_, args) =>
+void HandleKey(dynamic key)
 {
-    selectedContextIndex = 0;
-    selectedQuantIndex = 0;
-    step = WizardStep.Model;
-    RenderModel(args.NewValue);
-};
-list.Accepting += (_, _) => AdvanceStep();
+    if (pickerOpen)
+    {
+        if (key.KeyCode == KeyCode.Enter)
+        {
+            AcceptPicker();
+        }
+        else if (key.KeyCode == KeyCode.Esc || key.KeyCode == KeyCode.CursorLeft || key.KeyCode == KeyCode.Backspace)
+        {
+            CancelPicker();
+        }
+        else if (key.KeyCode == KeyCode.CursorDown || IsKey(key, 'j'))
+        {
+            MovePicker(1);
+        }
+        else if (key.KeyCode == KeyCode.CursorUp || IsKey(key, 'k'))
+        {
+            MovePicker(-1);
+        }
+        else if (key.KeyCode == KeyCode.Home)
+        {
+            pickerIndex = 0;
+            RenderPicker();
+        }
+        else if (key.KeyCode == KeyCode.End)
+        {
+            pickerIndex = pickerChoices.Count - 1;
+            RenderPicker();
+        }
 
-window.KeyDown += (_, key) =>
-{
+        key.Handled = true;
+        return;
+    }
+
     if (searchMode)
     {
         if (key.KeyCode == KeyCode.Enter)
@@ -377,30 +625,89 @@ window.KeyDown += (_, key) =>
         }
 
         RenderModel(list.SelectedItem);
+        key.Handled = true;
         return;
     }
 
     if (key.KeyCode == KeyCode.Esc || key.KeyCode == (KeyCode.Q | KeyCode.CtrlMask))
     {
         app.RequestStop();
+        key.Handled = true;
         return;
     }
 
-    if (key.KeyCode == KeyCode.Enter || key.KeyCode == KeyCode.CursorRight)
+    if (activePane == ActivePane.Models)
     {
-        AdvanceStep();
-        return;
+        if (key.KeyCode == KeyCode.Enter || key.KeyCode == KeyCode.CursorRight)
+        {
+            step = WizardStep.Context;
+            FocusPane(ActivePane.Wizard);
+            key.Handled = true;
+            return;
+        }
     }
 
-    if (key.KeyCode == KeyCode.CursorLeft)
+    if (activePane == ActivePane.Wizard)
+    {
+        if (key.KeyCode == KeyCode.CursorUp || IsKey(key, 'k'))
+        {
+            MoveWizard(-1);
+            key.Handled = true;
+            return;
+        }
+
+        if (key.KeyCode == KeyCode.CursorDown || IsKey(key, 'j'))
+        {
+            MoveWizard(1);
+            key.Handled = true;
+            return;
+        }
+
+        if (key.KeyCode == KeyCode.Home)
+        {
+            step = WizardStep.Model;
+            RenderModel(list.SelectedItem);
+            key.Handled = true;
+            return;
+        }
+
+        if (key.KeyCode == KeyCode.End)
+        {
+            step = WizardStep.Confirm;
+            RenderModel(list.SelectedItem);
+            key.Handled = true;
+            return;
+        }
+
+        if (key.KeyCode == KeyCode.Enter)
+        {
+            OpenOrAcceptStep();
+            key.Handled = true;
+            return;
+        }
+
+        if (key.KeyCode == KeyCode.CursorRight)
+        {
+            AdvanceStep();
+            key.Handled = true;
+            return;
+        }
+    }
+
+    if (key.KeyCode == KeyCode.CursorLeft || key.KeyCode == KeyCode.Backspace)
     {
         PreviousStep();
+        key.Handled = true;
         return;
     }
 
     if (key.KeyCode == KeyCode.Space)
     {
-        CycleCurrentStep();
+        if (activePane == ActivePane.Wizard && StepHasPicker(step))
+        {
+            OpenPicker(step);
+            key.Handled = true;
+        }
         return;
     }
 
@@ -408,6 +715,7 @@ window.KeyDown += (_, key) =>
     {
         searchMode = true;
         RenderModel(list.SelectedItem);
+        key.Handled = true;
         return;
     }
 
@@ -425,44 +733,44 @@ window.KeyDown += (_, key) =>
         {
             detail.Text = ex.Message;
         }
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F2)
+    if (key.KeyCode == KeyCode.F2 || IsKey(key, 'c'))
     {
-        var model = CurrentModel();
-        if (model is not null && model.Contexts.Count > 0)
-        {
-            selectedContextIndex = (selectedContextIndex + 1) % model.Contexts.Count;
-            step = WizardStep.Context;
-            RenderModel(list.SelectedItem);
-        }
+        OpenPicker(WizardStep.Context);
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F3)
+    if (key.KeyCode == KeyCode.F3 || IsKey(key, 'a'))
     {
-        selectedActionIndex = (selectedActionIndex + 1) % actions.Length;
-        step = WizardStep.Action;
-        RenderModel(list.SelectedItem);
+        OpenPicker(WizardStep.Action);
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F4)
+    if (key.KeyCode == KeyCode.F4 || IsKey(key, 'm'))
     {
-        selectedModeIndex = (selectedModeIndex + 1) % modes.Length;
-        step = WizardStep.Mode;
-        RenderModel(list.SelectedItem);
+        OpenPicker(WizardStep.Mode);
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F7)
+    if (key.KeyCode == KeyCode.F7 || IsKey(key, 'b'))
     {
-        selectedAutoBestIndex = (selectedAutoBestIndex + 1) % autoBestChoices.Length;
-        step = WizardStep.AutoBest;
-        RenderModel(list.SelectedItem);
+        OpenPicker(WizardStep.AutoBest);
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F8)
+    if (key.KeyCode == KeyCode.F8 || IsKey(key, 's'))
     {
         strict = !strict;
         RenderModel(list.SelectedItem);
+        key.Handled = true;
+        return;
     }
 
     if (key.KeyCode == KeyCode.F10)
@@ -478,17 +786,15 @@ window.KeyDown += (_, key) =>
         {
             detail.Text = ex.Message;
         }
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F11)
+    if (key.KeyCode == KeyCode.F11 || IsKey(key, 'q'))
     {
-        var model = CurrentModel();
-        if (model is not null && model.Quants.Count > 0)
-        {
-            selectedQuantIndex = (selectedQuantIndex + 1) % model.Quants.Count;
-            step = WizardStep.Quant;
-            RenderModel(list.SelectedItem);
-        }
+        OpenPicker(WizardStep.Quant);
+        key.Handled = true;
+        return;
     }
 
     if (key.KeyCode == (KeyCode.B | KeyCode.CtrlMask))
@@ -509,29 +815,43 @@ window.KeyDown += (_, key) =>
         var project = Path.Combine(benchPilot.Root, "tui", "BenchPilot.Tui", "BenchPilot.Tui.csproj");
         pendingShellCommand = $"dotnet run --project {Ps(project)} -- --key {Ps(model.Key)} --context {Ps(SelectedContextKey())} --mode {Ps(modes[selectedModeIndex])}";
         app.RequestStop();
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F6)
+    if (key.KeyCode == KeyCode.F6 || IsKey(key, 'p'))
     {
         ShowPreview();
+        key.Handled = true;
+        return;
     }
 
-    if (key.KeyCode == KeyCode.F9)
+    if (key.KeyCode == KeyCode.F9 || IsKey(key, 'l'))
     {
-        try
-        {
-            var plan = client.InvokeAsync<LaunchPlan>(PlanExpression("New-LocalBoxTuiLaunchPlan")).GetAwaiter().GetResult();
-            pendingLaunchCommand = plan?.LaunchCommand;
-            app.RequestStop();
-        }
-        catch (Exception ex)
-        {
-            detail.Text = ex.Message;
-        }
+        LaunchSelected();
+        key.Handled = true;
+        return;
     }
+}
+
+list.ValueChanged += (_, args) =>
+{
+    pickerOpen = false;
+    pickerChoices = [];
+    selectedContextIndex = 0;
+    selectedQuantIndex = 0;
+    step = WizardStep.Model;
+    RenderModel(args.NewValue);
+};
+list.Accepting += (_, _) =>
+{
+    step = WizardStep.Context;
+    FocusPane(ActivePane.Wizard);
 };
 
-window.Add(list, detail, footer);
+app.Keyboard.KeyDown += (_, key) => HandleKey(key);
+
+window.Add(list, wizard, detail, footer);
 if (visibleModels.Count > 0)
 {
     list.SelectedItem = Math.Clamp(list.SelectedItem ?? 0, 0, visibleModels.Count - 1);
@@ -567,7 +887,18 @@ static async Task<List<LocalBoxModel>> LoadModelsAsync(PowerShellJsonClient clie
     return await client.InvokeArrayAsync<LocalBoxModel>("Get-LocalBoxTuiModels -All");
 }
 
-static string FormatModel(LocalBoxModel model, List<AutoBestProfile> profiles, BenchPilotStatus? benchPilot, string selectedQuant, string action, string mode)
+static string FormatModel(
+    LocalBoxModel model,
+    List<AutoBestProfile> profiles,
+    BenchPilotStatus? benchPilot,
+    WizardStep step,
+    string selectedContextKey,
+    string selectedContextLabel,
+    string selectedQuant,
+    string action,
+    string mode,
+    string autoBest,
+    bool strict)
 {
     var sb = new StringBuilder();
     sb.AppendLine($"{model.Key} - {model.DisplayName}");
@@ -576,9 +907,12 @@ static string FormatModel(LocalBoxModel model, List<AutoBestProfile> profiles, B
     sb.AppendLine($"Source      : {model.SourceType}");
     sb.AppendLine($"Parser      : {Empty(model.Parser)}");
     sb.AppendLine($"Default q   : {Empty(model.DefaultQuant)}");
+    sb.AppendLine($"Context     : {Empty(selectedContextLabel)}");
     sb.AppendLine($"Selected q  : {Empty(selectedQuant)}");
     sb.AppendLine($"Action/mode : {action} / {mode}");
-    sb.AppendLine($"Strict      : {model.Strict}");
+    sb.AppendLine($"AutoBest    : {autoBest}");
+    sb.AppendLine($"Strict      : {strict}");
+    sb.AppendLine($"Model strict: {model.Strict}");
     sb.AppendLine($"Limit tools : {model.LimitTools}");
     sb.AppendLine($"Vision      : {model.HasVision}");
     sb.AppendLine($"BenchPilot  : {(benchPilot?.Available == true ? $"available {benchPilot.Version}" : benchPilot?.Reason ?? "unknown")}");
@@ -594,7 +928,9 @@ static string FormatModel(LocalBoxModel model, List<AutoBestProfile> profiles, B
     foreach (var ctx in model.Contexts)
     {
         var note = string.IsNullOrWhiteSpace(ctx.Note) ? "" : $" - {ctx.Note}";
-        sb.AppendLine($"  {ctx.Label,-8} {ctx.Tokens,7} tokens{note}");
+        var current = ctx.Key.Equals(selectedContextKey, StringComparison.OrdinalIgnoreCase);
+        var marker = current && step == WizardStep.Context ? ">>" : current ? " *" : "  ";
+        sb.AppendLine($"{marker} {ctx.Label,-8} {ctx.Tokens,7} tokens{note}");
     }
 
     sb.AppendLine();
@@ -610,7 +946,8 @@ static string FormatModel(LocalBoxModel model, List<AutoBestProfile> profiles, B
             var size = q.SizeGB is null ? "?" : $"{q.SizeGB:0.0} GB";
             var current = q.IsDefault ? " default" : "";
             var selected = q.Key == selectedQuant ? " selected" : "";
-            sb.AppendLine($"  {q.Key,-16} {size,8} {Empty(q.Fit),-6}{current}{selected}");
+            var marker = q.Key == selectedQuant && step == WizardStep.Quant ? ">>" : q.Key == selectedQuant ? " *" : "  ";
+            sb.AppendLine($"{marker} {q.Key,-16} {size,8} {Empty(q.Fit),-6}{current}{selected}");
             if (!string.IsNullOrWhiteSpace(q.Note))
             {
                 sb.AppendLine($"    {q.Note}");
@@ -638,6 +975,23 @@ static string FormatModel(LocalBoxModel model, List<AutoBestProfile> profiles, B
     foreach (var backend in model.BackendModes)
     {
         sb.AppendLine($"  {backend}");
+    }
+
+    return sb.ToString();
+}
+
+static string FormatPicker(WizardStep step, List<PickerChoice> choices, int selectedIndex)
+{
+    var sb = new StringBuilder();
+    sb.AppendLine($"Select {step}");
+    sb.AppendLine();
+    sb.AppendLine("Up/Down moves, Enter accepts, Left/Esc cancels.");
+    sb.AppendLine();
+
+    for (var i = 0; i < choices.Count; i++)
+    {
+        var marker = i == selectedIndex ? ">>" : "  ";
+        sb.AppendLine($"{marker} {choices[i].Label}");
     }
 
     return sb.ToString();
@@ -674,6 +1028,11 @@ static bool TryPrintable(dynamic key, out char value)
     }
 
     return false;
+}
+
+static bool IsKey(dynamic key, char expected)
+{
+    return TryPrintable(key, out var value) && char.ToLowerInvariant(value) == expected;
 }
 
 static string Empty(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value;
@@ -938,6 +1297,23 @@ sealed record ModelRow(string Key, string DisplayName, string Tier)
         var name = DisplayName.Length > 18 ? DisplayName[..18] : DisplayName;
         return $"{Key,-14} {Tier,-10} {name}";
     }
+}
+
+sealed record WizardRow(WizardStep Step, string Label, string Value)
+{
+    public override string ToString()
+    {
+        return $"{Label,-8} {Value}";
+    }
+}
+
+sealed record PickerChoice(string Label, Action Apply);
+
+enum ActivePane
+{
+    Models,
+    Wizard,
+    Choices
 }
 
 enum WizardStep
