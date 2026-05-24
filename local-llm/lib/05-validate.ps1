@@ -7,7 +7,7 @@
 # when adding a parser there.
 $script:LocalLLMValidParsers = @('none', 'qwen3coder', 'qwen36', 'qwen36-think')
 $script:LocalLLMValidTiers   = @('recommended', 'experimental', 'legacy')
-$script:LocalLLMValidSourceTypes = @('gguf', 'remote')
+$script:LocalLLMValidSourceTypes = @('gguf')
 $script:LocalLLMValidThinkingPolicies = @('strip', 'keep')
 
 function Add-LocalLLMValidationError {
@@ -102,12 +102,6 @@ function Test-LocalLLMModelEntry {
             }
         }
     }
-    elseif ($sourceType -eq 'remote') {
-        if (-not $Def.Contains('RemoteModel') -or [string]::IsNullOrWhiteSpace([string]$Def.RemoteModel)) {
-            Add-LocalLLMValidationError -Errors $Errors -ModelKey $Key -Field 'RemoteModel' -Message "is required for SourceType=remote (e.g. 'qwen3:30b')"
-        }
-    }
-
     # Parser: required, one of the known set. (Some legacy entries omit it;
     # 'none' is allowed but the field must still resolve to a known parser.)
     if ($Def.Contains('Parser')) {

@@ -49,7 +49,7 @@ function Add-LocalLLMModel {
         [string]$KvCacheV,
         [string[]]$Tags,
         [string[]]$ExtraArgs,
-        [Nullable[bool]]$LlamaCppCompatible,
+        [string]$Mmproj,
         [AllowEmptyString()][string]$SpecType,
         [int]$SpecDraftNMax,
         [switch]$Force
@@ -257,9 +257,6 @@ function Add-LocalLLMModel {
     if (-not [string]::IsNullOrWhiteSpace($KvCacheV))                                      { $entry.KvCacheV   = $KvCacheV }
     if ($Tags      -and $Tags.Count      -gt 0)                                            { $entry.Tags       = @($Tags) }
     if ($ExtraArgs -and $ExtraArgs.Count -gt 0)                                            { $entry.ExtraArgs  = @($ExtraArgs) }
-    if ($PSBoundParameters.ContainsKey('LlamaCppCompatible') -and $null -ne $LlamaCppCompatible) {
-        $entry.LlamaCppCompatible = [bool]$LlamaCppCompatible
-    }
     if (-not [string]::IsNullOrWhiteSpace($SpecType))                                      { $entry.SpecType      = $SpecType }
     if ($PSBoundParameters.ContainsKey('SpecDraftNMax') -and $SpecDraftNMax -gt 0)         { $entry.SpecDraftNMax = $SpecDraftNMax }
 
@@ -316,7 +313,7 @@ function Add-LocalLLMModel {
         })
     Write-Host "  Contexts : $($ctxLabels -join ', ')" -ForegroundColor DarkGray
     if ([bool]$Strict) {
-        Write-Host "  Strict   : yes  ('initmodel $Key' will also build $Root-strict)" -ForegroundColor DarkGray
+        Write-Host "  Strict   : yes  (-Strict flag enables the engineering overlay at launch)" -ForegroundColor DarkGray
     }
     Write-Host ""
 
@@ -351,7 +348,6 @@ function addllm {
         [string]$KvCacheV,
         [string[]]$Tags,
         [string[]]$ExtraArgs,
-        [Nullable[bool]]$LlamaCppCompatible,
         [string]$Mmproj,
         [AllowEmptyString()][string]$SpecType,
         [int]$SpecDraftNMax,
