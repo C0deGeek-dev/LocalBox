@@ -8,8 +8,7 @@ using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
 var options = CliOptions.Parse(args);
-var root = ResolveLocalBoxRoot(args);
-var profilePath = Path.Combine(root, "local-llm", "LocalLLMProfile.ps1");
+var profilePath = ResolveLocalBoxProfilePath(args);
 if (!File.Exists(profilePath))
 {
     Console.Error.WriteLine($"LocalBox profile not found: {profilePath}");
@@ -562,34 +561,109 @@ static string Empty(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : v
 
 static string Ps(string value) => "'" + value.Replace("'", "''") + "'";
 
-static string ResolveLocalBoxRoot(string[] args)
+static string ResolveLocalBoxProfilePath(string[] args)
 {
     for (var i = 0; i < args.Length - 1; i++)
     {
-        if (args[i] is "--root" or "-r")
+        if (args[i] is "--profile" or "--profile-path")
         {
             return Path.GetFullPath(args[i + 1]);
+        }
+
+        if (args[i] is "--root" or "-r")
+        {
+            var profile = FindProfileUnderRoot(args[i + 1]);
+            if (!string.IsNullOrWhiteSpace(profile))
+            {
+                return profile;
+            }
         }
     }
 
     var env = Environment.GetEnvironmentVariable("LOCALBOX_ROOT");
     if (!string.IsNullOrWhiteSpace(env))
     {
-        return Path.GetFullPath(env);
+        var profile = FindProfileUnderRoot(env);
+        if (!string.IsNullOrWhiteSpace(profile))
+        {
+            return profile;
+        }
+    }
+
+    var envProfile = Environment.GetEnvironmentVariable("LOCALBOX_PROFILE");
+    if (!string.IsNullOrWhiteSpace(envProfile))
+    {
+        return Path.GetFullPath(envProfile);
+    }
+
+    var installedSettings = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".local-llm",
+        "settings.json");
+    if (File.Exists(installedSettings))
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(installedSettings));
+            if (document.RootElement.TryGetProperty("LocalBoxRoot", out var localBoxRoot))
+            {
+                var configured = localBoxRoot.GetString();
+                if (!string.IsNullOrWhiteSpace(configured))
+                {
+                    var profile = FindProfileUnderRoot(configured);
+                    if (!string.IsNullOrWhiteSpace(profile))
+                    {
+                        return profile;
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
     }
 
     var dir = new DirectoryInfo(Environment.CurrentDirectory);
     while (dir is not null)
     {
-        if (File.Exists(Path.Combine(dir.FullName, "local-llm", "LocalLLMProfile.ps1")))
+        var repoProfile = Path.Combine(dir.FullName, "local-llm", "LocalLLMProfile.ps1");
+        if (File.Exists(repoProfile))
         {
-            return dir.FullName;
+            return repoProfile;
+        }
+
+        var installedProfile = Path.Combine(dir.FullName, "LocalLLMProfile.ps1");
+        if (File.Exists(installedProfile))
+        {
+            return installedProfile;
         }
 
         dir = dir.Parent;
     }
 
-    return Environment.CurrentDirectory;
+    var homeProfile = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".local-llm",
+        "LocalLLMProfile.ps1");
+    return homeProfile;
+}
+
+static string FindProfileUnderRoot(string root)
+{
+    var fullRoot = Path.GetFullPath(root);
+    var repoProfile = Path.Combine(fullRoot, "local-llm", "LocalLLMProfile.ps1");
+    if (File.Exists(repoProfile))
+    {
+        return repoProfile;
+    }
+
+    var installedProfile = Path.Combine(fullRoot, "LocalLLMProfile.ps1");
+    if (File.Exists(installedProfile))
+    {
+        return installedProfile;
+    }
+
+    return "";
 }
 
 static async Task<int> RunShellCommandAsync(string expression)

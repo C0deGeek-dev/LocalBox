@@ -5,21 +5,45 @@ function llmmenu { Start-LLMWizard @args }
 function llmc    { Start-LLMWizardClassic }
 function llms    { Start-LLMWizardSpectreExplicit }
 function llmtui  {
-    $launcherRoot = Split-Path -Parent $script:LLMProfileRoot
-    $project = Join-Path $launcherRoot 'tui\LocalBox.Tui\LocalBox.Tui.csproj'
-    $exe = Join-Path $script:LLMProfileRoot 'bin\LocalBox.Tui.exe'
+    $profilePath = Join-Path $script:LLMProfileRoot 'LocalLLMProfile.ps1'
+    $candidateRoots = New-Object System.Collections.Generic.List[string]
+    if ($script:Cfg -and $script:Cfg.ContainsKey('LocalBoxRoot') -and -not [string]::IsNullOrWhiteSpace([string]$script:Cfg.LocalBoxRoot)) {
+        $candidateRoots.Add([string]$script:Cfg.LocalBoxRoot) | Out-Null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALBOX_ROOT)) {
+        $candidateRoots.Add($env:LOCALBOX_ROOT) | Out-Null
+    }
+    $candidateRoots.Add((Split-Path -Parent $script:LLMProfileRoot)) | Out-Null
 
-    if (Test-Path -LiteralPath $project) {
-        & dotnet run --project $project -- @args
+    $walk = Get-Location
+    while ($walk) {
+        $candidateRoots.Add($walk.Path) | Out-Null
+        $walk = $walk.Parent
+    }
+
+    $project = $null
+    foreach ($root in @($candidateRoots | Where-Object { $_ } | Select-Object -Unique)) {
+        $candidateProject = Join-Path $root 'tui\LocalBox.Tui\LocalBox.Tui.csproj'
+        if (Test-Path -LiteralPath $candidateProject) {
+            $project = $candidateProject
+            break
+        }
+    }
+
+    $exe = Join-Path $script:LLMProfileRoot 'bin\LocalBox.Tui.exe'
+    $tuiArgs = @('--profile', $profilePath) + $args
+
+    if ($project -and (Test-Path -LiteralPath $project)) {
+        & dotnet run --project $project -- @tuiArgs
         return
     }
 
     if (Test-Path -LiteralPath $exe) {
-        & $exe @args
+        & $exe @tuiArgs
         return
     }
 
-    throw "LocalBox.Tui was not found. Build it from the repo with: dotnet build $project"
+    throw "LocalBox.Tui was not found. Run from a repo checkout with dotnet available, or publish/install it with: pwsh .\tui\publish-tui.ps1 -Install"
 }
 function llmremote { Start-LocalLLMRemoteGateway @args }
 function reloadllm { Reload-LocalLLMConfig }
