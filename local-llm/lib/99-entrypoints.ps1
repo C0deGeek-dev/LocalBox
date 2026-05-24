@@ -4,6 +4,23 @@ function llm     { Start-LLMWizard @args }
 function llmmenu { Start-LLMWizard @args }
 function llmc    { Start-LLMWizardClassic }
 function llms    { Start-LLMWizardSpectreExplicit }
+function llmtui  {
+    $launcherRoot = Split-Path -Parent $script:LLMProfileRoot
+    $project = Join-Path $launcherRoot 'tui\LocalBox.Tui\LocalBox.Tui.csproj'
+    $exe = Join-Path $script:LLMProfileRoot 'bin\LocalBox.Tui.exe'
+
+    if (Test-Path -LiteralPath $project) {
+        & dotnet run --project $project -- @args
+        return
+    }
+
+    if (Test-Path -LiteralPath $exe) {
+        & $exe @args
+        return
+    }
+
+    throw "LocalBox.Tui was not found. Build it from the repo with: dotnet build $project"
+}
 function llmremote { Start-LocalLLMRemoteGateway @args }
 function reloadllm { Reload-LocalLLMConfig }
 

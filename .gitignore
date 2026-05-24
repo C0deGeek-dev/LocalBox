@@ -40,6 +40,11 @@ local-llm/gguf/
 __pycache__/
 *.pyc
 
+# .NET build output
+**/bin/
+**/obj/
+**/publish/
+
 # Windows / shell junk
 Thumbs.db
 desktop.ini

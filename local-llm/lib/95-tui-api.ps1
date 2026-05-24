@@ -1,0 +1,413 @@
+# Structured API for Terminal.Gui and other machine clients.
+# These functions intentionally return objects only; do not write formatted
+# console output here.
+
+function ConvertTo-LocalBoxTuiContext {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey
+    )
+
+    $resolved = Resolve-ModelContextKey -Def $Def -ContextKey $ContextKey
+    $label = if ([string]::IsNullOrWhiteSpace($resolved)) { 'default' } else { [string]$resolved }
+
+    [pscustomobject]@{
+        key = [string]$resolved
+        label = $label
+        tokens = [int](Get-ModelContextValue -Def $Def -ContextKey $resolved)
+        note = Get-ModelContextNote -Def $Def -ContextKey $resolved
+        isDefault = [string]::IsNullOrWhiteSpace($resolved)
+    }
+}
+
+function ConvertTo-LocalBoxTuiQuant {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$QuantKey
+    )
+
+    $file = ''
+    if ($Def.ContainsKey('Quants') -and $Def.Quants.Contains($QuantKey)) {
+        $file = [string]$Def.Quants[$QuantKey]
+    }
+
+    $size = Get-QuantSizeGB -Def $Def -QuantKey $QuantKey
+    [pscustomobject]@{
+        key = [string]$QuantKey
+        file = $file
+        sizeGB = $size
+        fit = Get-QuantFitClass -Def $Def -QuantKey $QuantKey
+        note = Get-ModelQuantNote -Def $Def -QuantKey $QuantKey
+        isDefault = ($QuantKey -eq $Def.Quant)
+    }
+}
+
+function Get-LocalBoxTuiModelSummary {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def
+    )
+
+    $contexts = @()
+    if ($Def.ContainsKey('Contexts')) {
+        $contexts = @($Def.Contexts.Keys | ForEach-Object { ConvertTo-LocalBoxTuiContext -Def $Def -ContextKey ([string]$_) })
+    }
+
+    $quants = @()
+    if ($Def.ContainsKey('Quants')) {
+        $quants = @($Def.Quants.Keys | ForEach-Object { ConvertTo-LocalBoxTuiQuant -Def $Def -QuantKey ([string]$_) })
+    }
+
+    $sourceType = if ($Def.ContainsKey('SourceType') -and -not [string]::IsNullOrWhiteSpace([string]$Def.SourceType)) {
+        [string]$Def.SourceType
+    } elseif ($Def.ContainsKey('Repo')) {
+        'gguf'
+    } else {
+        'ollama'
+    }
+
+    $backendModes = @('ollama')
+    if ($sourceType -eq 'gguf' -or $Def.ContainsKey('Quants') -or $Def.ContainsKey('Repo')) {
+        $backendModes = @('ollama', 'llamacpp:native', 'llamacpp:turboquant', 'llamacpp:mtpturbo')
+    }
+
+    [pscustomobject]@{
+        key = $Key
+        displayName = if ($Def.ContainsKey('DisplayName')) { [string]$Def.DisplayName } else { $Key }
+        description = Get-ModelDescription -Def $Def
+        tier = Get-ModelTier -Def $Def
+        sourceType = $sourceType
+        parser = if ($Def.ContainsKey('Parser')) { [string]$Def.Parser } else { '' }
+        defaultQuant = if ($Def.ContainsKey('Quant')) { [string]$Def.Quant } else { '' }
+        defaultContextKey = ''
+        strict = Get-ModelStrictEnabled -Def $Def
+        limitTools = ($Def.ContainsKey('LimitTools') -and [bool]$Def.LimitTools)
+        hasVision = ($Def.ContainsKey('VisionModule') -and -not [string]::IsNullOrWhiteSpace([string]$Def.VisionModule))
+        contexts = $contexts
+        quants = $quants
+        backendModes = $backendModes
+    }
+}
+
+function Get-LocalBoxTuiStatus {
+    [CmdletBinding()]
+    param()
+
+    $vram = Get-LocalLLMVRAMInfo
+    $benchPilot = $null
+    if (Get-Command Test-BenchPilotIntegrationAvailable -ErrorAction SilentlyContinue) {
+        $benchPilot = Test-BenchPilotIntegrationAvailable -Quiet
+    }
+
+    [pscustomobject]@{
+        name = 'LocalBox'
+        profileRoot = $script:LLMProfileRoot
+        configPath = $script:LocalLLMConfigPath
+        modelCount = @($script:Cfg.Models.Keys).Count
+        defaultModel = if ($script:Cfg.ContainsKey('Default')) { [string]$script:Cfg.Default } else { '' }
+        vramGB = [int]$vram.GB
+        vramSource = [string]$vram.Source
+        benchPilot = $benchPilot
+    }
+}
+
+function Get-LocalBoxTuiSettings {
+    [CmdletBinding()]
+    param()
+
+    $settingsPath = Get-LocalLLMSettingsPath
+    $settings = [ordered]@{}
+    if (Test-Path -LiteralPath $settingsPath) {
+        try {
+            $loaded = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json -AsHashtable
+            foreach ($key in $loaded.Keys) {
+                if ($key -notin @('Models', 'CommandAliases')) {
+                    $settings[$key] = $loaded[$key]
+                }
+            }
+        }
+        catch {
+            return [pscustomobject]@{
+                path = $settingsPath
+                readable = $false
+                error = $_.Exception.Message
+                values = [pscustomobject]@{}
+            }
+        }
+    }
+
+    [pscustomobject]@{
+        path = $settingsPath
+        readable = $true
+        error = ''
+        values = [pscustomobject]$settings
+    }
+}
+
+function Set-LocalBoxTuiSetting {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowNull()][AllowEmptyString()][object]$Value
+    )
+
+    $before = Get-LocalBoxTuiSettings
+    Set-LocalLLMSetting -Key $Key -Value $Value *>$null
+    $script:Cfg = Import-LocalLLMConfig
+    $after = Get-LocalBoxTuiSettings
+
+    [pscustomobject]@{
+        key = $Key
+        oldValue = if ($before.values.PSObject.Properties[$Key]) { $before.values.$Key } else { $null }
+        newValue = if ($after.values.PSObject.Properties[$Key]) { $after.values.$Key } else { $null }
+        path = $after.path
+        removed = -not [bool]$after.values.PSObject.Properties[$Key]
+    }
+}
+
+function Get-LocalBoxTuiBenchPilotStatus {
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Command Test-BenchPilotIntegrationAvailable -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{
+            available = $false
+            reason = 'BenchPilot bridge is not loaded.'
+            version = ''
+            root = ''
+            modulePath = ''
+            source = ''
+        }
+    }
+
+    $status = Test-BenchPilotIntegrationAvailable -Quiet
+    $resolved = $null
+    try { $resolved = Resolve-BenchPilotRoot } catch { $resolved = $null }
+
+    [pscustomobject]@{
+        available = [bool]$status.Available
+        reason = [string]$status.Reason
+        version = [string]$status.Version
+        apiVersion = $status.ApiVersion
+        launcherExportVersion = $status.LauncherExportVersion
+        root = if ($resolved) { [string]$resolved.Root } else { '' }
+        modulePath = if ($resolved) { [string]$resolved.ModulePath } else { '' }
+        source = [string]$status.Source
+    }
+}
+
+function Get-LocalBoxTuiModels {
+    [CmdletBinding()]
+    param([switch]$All)
+
+    $keys = @(Get-FilteredModelKeys -IncludeAll:$All | Sort-Object)
+    @($keys | ForEach-Object {
+        $key = [string]$_
+        Get-LocalBoxTuiModelSummary -Key $key -Def (Get-ModelDef -Key $key)
+    })
+}
+
+function Get-LocalBoxTuiModelDetail {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    $def = Get-ModelDef -Key $Key
+    $summary = Get-LocalBoxTuiModelSummary -Key $Key -Def $def
+    $aliases = @()
+    if (Get-Command Get-RegisteredShortcutNamesForModel -ErrorAction SilentlyContinue) {
+        $aliases = @(Get-RegisteredShortcutNamesForModel -Def $def)
+    }
+    $fileName = try { Get-ModelFileName -Def $def } catch { '' }
+
+    [pscustomobject]@{
+        summary = $summary
+        repo = if ($def.ContainsKey('Repo')) { [string]$def.Repo } else { '' }
+        root = if ($def.ContainsKey('Root')) { [string]$def.Root } else { '' }
+        file = $fileName
+        aliases = $aliases
+        raw = $def
+    }
+}
+
+function Get-LocalBoxTuiLaunchOptions {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    $def = Get-ModelDef -Key $Key
+    $summary = Get-LocalBoxTuiModelSummary -Key $Key -Def $def
+
+    [pscustomobject]@{
+        key = $Key
+        contexts = $summary.contexts
+        quants = $summary.quants
+        backendModes = $summary.backendModes
+        actions = @(
+            [pscustomobject]@{ key = 'claude'; label = 'Claude Code' }
+            [pscustomobject]@{ key = 'codex'; label = 'Codex' }
+            [pscustomobject]@{ key = 'unshackled'; label = 'Unshackled' }
+            [pscustomobject]@{ key = 'remote'; label = 'Remote gateway' }
+            [pscustomobject]@{ key = 'chat'; label = 'Ollama chat' }
+            [pscustomobject]@{ key = 'setup'; label = 'Setup/download only' }
+        )
+    }
+}
+
+function Get-LocalBoxTuiAutoBestProfiles {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [string]$Quant
+    )
+
+    $profiles = @()
+if (Get-Command Get-LlamaCppBestConfigCandidates -ErrorAction SilentlyContinue) {
+        foreach ($profileName in @('balanced', 'pure')) {
+            $profiles += @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -Quant $Quant -Profile $profileName | ForEach-Object {
+                $staleReasons = @(try { Test-LlamaCppBestConfigStale -Entry $_ -Mode $Mode } catch { @() })
+                [pscustomobject]@{
+                    profile = $profileName
+                    score = $_.score
+                    scoreUnit = $_.scoreUnit
+                    quant = $_.quant
+                    mode = $_.mode
+                    contextKey = $_.contextKey
+                    promptLength = if ($_.prompt_length) { $_.prompt_length } else { 'short' }
+                    measuredAt = $_.measured_at
+                    source = $_.source
+                    reportPath = $_.report_path
+                    launcherProfilePath = Get-LlamaCppTunerBestFile -Key $Key
+                    staleReasons = $staleReasons
+                    overrides = $_.overrides
+                }
+            })
+        }
+    }
+
+    @($profiles)
+}
+
+function ConvertTo-LocalBoxTuiPowerShellLiteral {
+    param([AllowEmptyString()][string]$Value)
+
+    if ($null -eq $Value) { return "''" }
+    return "'" + ([string]$Value -replace "'", "''") + "'"
+}
+
+function New-LocalBoxTuiSelectionCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
+        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$UseAutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [switch]$DryRun
+    )
+
+    $parts = @(
+        'Invoke-LLMSelection',
+        '-ModelKey', (ConvertTo-LocalBoxTuiPowerShellLiteral $Key),
+        '-ContextKey', (ConvertTo-LocalBoxTuiPowerShellLiteral $ContextKey),
+        '-Action', (ConvertTo-LocalBoxTuiPowerShellLiteral $Action),
+        '-LlamaCppMode', (ConvertTo-LocalBoxTuiPowerShellLiteral $Mode),
+        '-AutoBestProfile', (ConvertTo-LocalBoxTuiPowerShellLiteral $AutoBestProfile)
+    )
+    if ($Strict) { $parts += '-Strict' }
+    if ($UseVision) { $parts += '-UseVision' }
+    if ($UseAutoBest) { $parts += '-UseAutoBest' }
+    if ($DryRun) { $parts += '-DryRun' }
+
+    return ($parts -join ' ')
+}
+
+function Invoke-LocalBoxTuiLaunch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
+        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$UseAutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
+    )
+
+    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+    $started = (Get-Date).ToUniversalTime().ToString('o')
+    $output = (& ([scriptblock]::Create($cmd)) *>&1 | Out-String).Trim()
+
+    [pscustomobject]@{
+        key = $Key
+        contextKey = $ContextKey
+        action = $Action
+        mode = $Mode
+        startedAt = $started
+        completedAt = (Get-Date).ToUniversalTime().ToString('o')
+        command = $cmd
+        output = $output
+    }
+}
+
+function New-LocalBoxTuiLaunchPlan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
+        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$UseAutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
+    )
+
+    $def = Get-ModelDef -Key $Key
+    $context = ConvertTo-LocalBoxTuiContext -Def $def -ContextKey $ContextKey
+    $quant = if ($def.ContainsKey('Quant')) { [string]$def.Quant } else { '' }
+    $dryRunCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
+    $launchCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+
+    [pscustomobject]@{
+        key = $Key
+        model = if ($def.ContainsKey('DisplayName')) { [string]$def.DisplayName } else { $Key }
+        action = $Action
+        mode = $Mode
+        contextKey = $context.key
+        contextLabel = $context.label
+        contextTokens = $context.tokens
+        quant = $quant
+        strict = [bool]$Strict
+        useVision = [bool]$UseVision
+        useAutoBest = [bool]$UseAutoBest
+        autoBestProfile = $AutoBestProfile
+        dryRunCommand = $dryRunCommand
+        launchCommand = $launchCommand
+    }
+}
+
+function Invoke-LocalBoxTuiLaunchPreview {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
+        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$UseAutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
+    )
+
+    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
+    $output = (& ([scriptblock]::Create($cmd)) *>&1 | Out-String).Trim()
+    [pscustomobject]@{
+        command = $cmd
+        output = $output
+    }
+}
