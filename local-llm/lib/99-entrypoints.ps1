@@ -33,7 +33,7 @@ function llmtui  {
     $exe = Join-Path $script:LLMProfileRoot 'bin\LocalBox.Tui.exe'
     $tuiArgs = @('--profile', $profilePath) + $args
 
-    if ($project -and (Test-Path -LiteralPath $project)) {
+    if ($project -and (Test-Path -LiteralPath $project) -and (Get-Command dotnet -ErrorAction SilentlyContinue)) {
         & dotnet run --project $project -- @tuiArgs
         return
     }
@@ -44,6 +44,44 @@ function llmtui  {
     }
 
     throw "LocalBox.Tui was not found. Run from a repo checkout with dotnet available, or publish/install it with: pwsh .\tui\publish-tui.ps1 -Install"
+}
+function bptui {
+    $candidateRoots = New-Object System.Collections.Generic.List[string]
+    if ($env:BENCHPILOT_ROOT) {
+        $candidateRoots.Add($env:BENCHPILOT_ROOT) | Out-Null
+    }
+    if ($script:Cfg -and $script:Cfg.ContainsKey('BenchPilotRoot') -and -not [string]::IsNullOrWhiteSpace([string]$script:Cfg.BenchPilotRoot)) {
+        $candidateRoots.Add([string]$script:Cfg.BenchPilotRoot) | Out-Null
+    }
+    if (Get-Command Resolve-BenchPilotRoot -ErrorAction SilentlyContinue) {
+        $resolved = try { Resolve-BenchPilotRoot } catch { $null }
+        if ($resolved -and $resolved.Root) {
+            $candidateRoots.Add([string]$resolved.Root) | Out-Null
+        }
+    }
+
+    $project = $null
+    foreach ($root in @($candidateRoots | Where-Object { $_ } | Select-Object -Unique)) {
+        $candidateProject = Join-Path $root 'tui\BenchPilot.Tui\BenchPilot.Tui.csproj'
+        if (Test-Path -LiteralPath $candidateProject) {
+            $project = $candidateProject
+            break
+        }
+    }
+
+    $exe = Join-Path $HOME '.local-llm\tools\benchpilot\bin\BenchPilot.Tui.exe'
+
+    if ($project -and (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        & dotnet run --project $project -- @args
+        return
+    }
+
+    if (Test-Path -LiteralPath $exe) {
+        & $exe @args
+        return
+    }
+
+    throw "BenchPilot.Tui was not found. Run from a BenchPilot repo checkout with dotnet available, or publish/install it with: pwsh .\tui\publish-tui.ps1 -Install"
 }
 function llmremote { Start-LocalLLMRemoteGateway @args }
 function reloadllm { Reload-LocalLLMConfig }

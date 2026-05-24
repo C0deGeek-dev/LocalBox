@@ -219,10 +219,89 @@ function Test-LocalBoxSymlinkInstall {
     return [bool]($profileItem -and $profileItem.LinkType -eq 'SymbolicLink')
 }
 
+function Get-LocalBoxTuiInstallPath {
+    [CmdletBinding()]
+    param()
+
+    return Join-Path $script:LLMProfileRoot 'bin\LocalBox.Tui.exe'
+}
+
+function Test-LocalBoxTuiInstalled {
+    [CmdletBinding()]
+    param()
+
+    return (Test-Path -LiteralPath (Get-LocalBoxTuiInstallPath) -PathType Leaf -ErrorAction SilentlyContinue)
+}
+
+function Get-BenchPilotTuiInstallPath {
+    [CmdletBinding()]
+    param()
+
+    return Join-Path $HOME '.local-llm\tools\benchpilot\bin\BenchPilot.Tui.exe'
+}
+
+function Test-BenchPilotTuiInstalled {
+    [CmdletBinding()]
+    param()
+
+    return (Test-Path -LiteralPath (Get-BenchPilotTuiInstallPath) -PathType Leaf -ErrorAction SilentlyContinue)
+}
+
+function Invoke-LocalLLMTuiPublisher {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$PublisherScript,
+        [switch]$DryRun
+    )
+
+    if (-not (Test-Path -LiteralPath $PublisherScript -PathType Leaf -ErrorAction SilentlyContinue)) {
+        Write-Host "$Name publisher not found: $PublisherScript" -ForegroundColor Yellow
+        return
+    }
+
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        Write-Host "dotnet is not on PATH; cannot publish $Name." -ForegroundColor Yellow
+        return
+    }
+
+    if ($DryRun) {
+        Write-Host "Would publish $Name from $PublisherScript" -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "Publishing $Name..." -ForegroundColor Cyan
+    & $PublisherScript -Install
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$Name publish failed." -ForegroundColor Yellow
+    }
+}
+
+function Invoke-LocalBoxTuiPublishFromRoot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [switch]$DryRun
+    )
+
+    Invoke-LocalLLMTuiPublisher -Name 'LocalBox.Tui' -PublisherScript (Join-Path $Root 'tui\publish-tui.ps1') -DryRun:$DryRun
+}
+
+function Invoke-BenchPilotTuiPublishFromRoot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [switch]$DryRun
+    )
+
+    Invoke-LocalLLMTuiPublisher -Name 'BenchPilot.Tui' -PublisherScript (Join-Path $Root 'tui\publish-tui.ps1') -DryRun:$DryRun
+}
+
 function Invoke-LocalBoxInstallFromRoot {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Root,
+        [switch]$InstallTui,
         [switch]$DryRun
     )
 
@@ -233,6 +312,7 @@ function Invoke-LocalBoxInstallFromRoot {
 
     $args = @('-SkipToolPrompts')
     if (Test-LocalBoxSymlinkInstall) { $args += '-Symlink' }
+    if ($InstallTui) { $args += '-InstallTui' }
     if ($DryRun) { $args += '-DryRun' }
 
     Write-Host "Reinstalling LocalBox profile files from $Root..." -ForegroundColor Cyan
@@ -243,14 +323,19 @@ function Update-LocalBox {
     [CmdletBinding()]
     param(
         [string]$Root,
+        [switch]$InstallTui,
         [switch]$DryRun
     )
 
     $resolvedRoot = if ([string]::IsNullOrWhiteSpace($Root)) { Resolve-LocalBoxRoot } else { $Root }
     $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'LocalBox' -Root $resolvedRoot -DryRun:$DryRun
+    $refreshTui = $InstallTui -or (Test-LocalBoxTuiInstalled)
 
     if ($result.Updated -or ($DryRun -and $result.Status -eq 'available')) {
-        Invoke-LocalBoxInstallFromRoot -Root $result.Root -DryRun:$DryRun
+        Invoke-LocalBoxInstallFromRoot -Root $result.Root -InstallTui:$refreshTui -DryRun:$DryRun
+    }
+    elseif ($InstallTui -and $result.Installed) {
+        Invoke-LocalBoxTuiPublishFromRoot -Root $result.Root -DryRun:$DryRun
     }
 
     return $result
@@ -279,14 +364,17 @@ function Write-LocalLLMUpdateSummary {
 
 function Update-LocalLLMSuite {
     [CmdletBinding()]
-    param([switch]$DryRun)
+    param(
+        [switch]$InstallTui,
+        [switch]$DryRun
+    )
 
     Write-Section 'LocalBox update'
 
     $results = @()
 
     try {
-        $results += Update-LocalBox -DryRun:$DryRun
+        $results += Update-LocalBox -InstallTui:$InstallTui -DryRun:$DryRun
     }
     catch {
         $results += [pscustomobject]@{
@@ -308,7 +396,15 @@ function Update-LocalLLMSuite {
 
     foreach ($companion in $companions) {
         try {
-            $results += Invoke-LocalLLMGitFastForwardUpdate -Name $companion.Name -Root $companion.Root -DryRun:$DryRun
+            $result = Invoke-LocalLLMGitFastForwardUpdate -Name $companion.Name -Root $companion.Root -DryRun:$DryRun
+            $results += $result
+
+            if ($companion.Name -eq 'BenchPilot' -and $result.Installed) {
+                $refreshBenchPilotTui = $InstallTui -or (Test-BenchPilotTuiInstalled)
+                if (($result.Updated -and $refreshBenchPilotTui) -or $InstallTui) {
+                    Invoke-BenchPilotTuiPublishFromRoot -Root $result.Root -DryRun:$DryRun
+                }
+            }
         }
         catch {
             $results += [pscustomobject]@{
@@ -330,16 +426,22 @@ function Update-LocalLLMSuite {
 
 function llm-update {
     [CmdletBinding()]
-    param([switch]$DryRun)
+    param(
+        [switch]$InstallTui,
+        [switch]$DryRun
+    )
 
-    Update-LocalLLMSuite -DryRun:$DryRun | Out-Null
+    Update-LocalLLMSuite -InstallTui:$InstallTui -DryRun:$DryRun | Out-Null
 }
 
 function llmupdate {
     [CmdletBinding()]
-    param([switch]$DryRun)
+    param(
+        [switch]$InstallTui,
+        [switch]$DryRun
+    )
 
-    llm-update -DryRun:$DryRun
+    llm-update -InstallTui:$InstallTui -DryRun:$DryRun
 }
 
 function Get-LocalLLMDeployedProxyPath {

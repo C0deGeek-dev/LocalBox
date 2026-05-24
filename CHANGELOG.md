@@ -8,6 +8,8 @@ Past-tense record of shipped changes.
 - **Spectre model catalog layout fixed.** The dashboard now uses explicit column widths and a compact quant list so the context column stays readable instead of wrapping to one or two characters.
 - **MTP catalog contexts expanded.** `q3535ba3bmtp` and `genesisv2` now expose an explicit `256k` context key while keeping default context at `128k`.
 - **Quant naming clarified.** README notes that labels like `mtp`, `mtp-apex`, and `mtp-q8kp` are model-local quant keys that map to concrete GGUF filenames.
+- **TUI packaging added.** `install.ps1 -InstallTui` publishes LocalBox.Tui and BenchPilot.Tui when available; `llm-update -InstallTui` refreshes installed TUI binaries.
+- **`bptui` wrapper added.** LocalBox now exposes a BenchPilot.Tui entrypoint alongside `llmtui`, and inline help documents both.
 
 ## 2026-05-24 — Dropped Ollama backend (breaking)
 

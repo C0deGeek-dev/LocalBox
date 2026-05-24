@@ -6,6 +6,7 @@
 #   .\install.ps1 -SetupProfile    only ensure $PROFILE dot-sources the deployed entry point
 #   .\install.ps1 -InstallBenchPilot   clone BenchPilot into ~/.local-llm/tools/benchpilot if missing
 #   .\install.ps1 -InstallUnshackled   clone Unshackled into ~/.local-llm/tools/unshackled if missing
+#   .\install.ps1 -InstallTui      publish LocalBox.Tui and BenchPilot.Tui when available
 #   .\install.ps1 -SkipToolPrompts     do not prompt for optional companion checkouts
 #   .\install.ps1 -DryRun          preview the actions without changing anything
 #
@@ -16,6 +17,7 @@ param(
     [Alias("Profile")][switch]$SetupProfile,
     [switch]$InstallBenchPilot,
     [switch]$InstallUnshackled,
+    [switch]$InstallTui,
     [switch]$SkipToolPrompts,
     [switch]$DryRun
 )
@@ -418,6 +420,75 @@ function Confirm-InstallTool {
     return ($answer -in @("y", "yes"))
 }
 
+function Test-DotNetAvailable {
+    return [bool](Get-Command dotnet -ErrorAction SilentlyContinue)
+}
+
+function Confirm-PublishTui {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Target
+    )
+
+    if ($InstallTui) { return $true }
+    if ($DryRun) { return $false }
+    if ($SkipToolPrompts) { return $false }
+
+    Write-Host ""
+    Write-Host "$Name can be published now." -ForegroundColor Yellow
+    Write-Host "  Target : $Target" -ForegroundColor DarkGray
+    $answer = (Read-Host "Publish $Name now? [y/N]").Trim().ToLowerInvariant()
+    return ($answer -in @("y", "yes"))
+}
+
+function Publish-TuiBinary {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$PublisherScript,
+        [Parameter(Mandatory = $true)][string]$Target
+    )
+
+    if (-not (Test-Path -LiteralPath $PublisherScript -PathType Leaf)) {
+        if ($InstallTui) {
+            Write-Host "  skip     $Name publisher not found: $PublisherScript" -ForegroundColor Yellow
+        }
+        return
+    }
+
+    if (-not (Test-DotNetAvailable)) {
+        if ($InstallTui) {
+            Write-Host "  skip     dotnet is not on PATH; cannot publish $Name" -ForegroundColor Yellow
+        }
+        return
+    }
+
+    if (-not (Confirm-PublishTui -Name $Name -Target $Target)) {
+        return
+    }
+
+    Write-Action "publish" "$Name -> $Target"
+
+    if (-not $DryRun) {
+        & $PublisherScript -Install
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Name publish failed."
+        }
+    }
+}
+
+function Ensure-TuiBinaries {
+    $localBoxPublisher = Join-Path $RepoRoot "tui\publish-tui.ps1"
+    $localBoxTarget = Join-Path $DeployedLocalLLM "bin"
+    Publish-TuiBinary -Name "LocalBox.Tui" -PublisherScript $localBoxPublisher -Target $localBoxTarget
+
+    $benchPilot = Find-BenchPilotInstall
+    if ($benchPilot) {
+        $benchPilotPublisher = Join-Path $benchPilot.Root "tui\publish-tui.ps1"
+        $benchPilotTarget = Join-Path $ManagedBenchPilotRoot "bin"
+        Publish-TuiBinary -Name "BenchPilot.Tui" -PublisherScript $benchPilotPublisher -Target $benchPilotTarget
+    }
+}
+
 function Ensure-CompanionTools {
     $catalog = Get-InstallCatalog
     $benchPilotRepo = if ($catalog.Contains("BenchPilotRepoUrl")) { [string]$catalog.BenchPilotRepoUrl } else { "https://github.com/David-c0degeek/benchpilot" }
@@ -482,6 +553,22 @@ function Show-Diagnostics {
         Write-Host "benchpilot: missing — installer can clone https://github.com/David-c0degeek/benchpilot into ~/.local-llm/tools/benchpilot" -ForegroundColor Yellow
     }
 
+    $localBoxTui = Join-Path $DeployedLocalLLM "bin\LocalBox.Tui.exe"
+    if (Test-Path -LiteralPath $localBoxTui) {
+        Write-Host "llmtui   : ok  ($localBoxTui)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "llmtui   : missing — run .\install.ps1 -InstallTui or pwsh .\tui\publish-tui.ps1 -Install" -ForegroundColor DarkGray
+    }
+
+    $benchPilotTui = Join-Path $ManagedBenchPilotRoot "bin\BenchPilot.Tui.exe"
+    if (Test-Path -LiteralPath $benchPilotTui) {
+        Write-Host "bptui    : ok  ($benchPilotTui)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "bptui    : missing — publish BenchPilot.Tui from the BenchPilot checkout or run install with -InstallTui" -ForegroundColor DarkGray
+    }
+
     $unshackled = Find-UnshackledInstall
     if ($unshackled) {
         Write-Host "unshackled: ok  ($($unshackled.Root))" -ForegroundColor Green
@@ -534,6 +621,7 @@ if ($SetupProfile -or -not $installFiles) {
 }
 
 Ensure-CompanionTools
+Ensure-TuiBinaries
 Show-Diagnostics
 
 if (-not $DryRun) {

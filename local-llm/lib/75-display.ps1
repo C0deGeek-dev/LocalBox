@@ -756,6 +756,7 @@ function Show-LocalBoxCommandReference {
     Write-Host ""
     Write-Host "LocalBox launcher and dashboard" -ForegroundColor Green
     Write-CommandRow -Command "llm, llmmenu" -Description "Open the launcher wizard (Spectre when available)."
+    Write-CommandRow -Command "llmtui" -Description "Open the Terminal.Gui LocalBox TUI preview."
     Write-CommandRow -Command "llmc" -Description "Open the native selectable launcher wizard."
     Write-CommandRow -Command "llms" -Description "Open the Spectre launcher wizard explicitly."
     Write-CommandRow -Command "llmremote -Key <key> [-Ctx <context>] [-NoMonitor]" -Description "Serve a local model to normal remote Unshackled clients."
@@ -787,12 +788,13 @@ function Show-LocalBoxCommandReference {
     Write-Host ""
     Write-Host "LocalBox companion tools" -ForegroundColor Green
     Write-CommandRow -Command "findbest, tunellm" -Description "Run BenchPilot-backed llama.cpp AutoBest tuning."
+    Write-CommandRow -Command "bptui" -Description "Open the Terminal.Gui BenchPilot TUI when available."
     Write-CommandRow -Command "bp, bpstatus" -Description "Show BenchPilot discovery and version status."
     Write-CommandRow -Command "Install-BenchPilot" -Description "Clone/configure the managed BenchPilot checkout."
     Write-CommandRow -Command "Update-BenchPilot" -Description "Fast-forward the configured BenchPilot checkout."
     Write-CommandRow -Command "Install-Unshackled" -Description "Clone/configure the managed Unshackled checkout."
     Write-CommandRow -Command "Update-Unshackled" -Description "Fast-forward the configured Unshackled checkout."
-    Write-CommandRow -Command "llm-update, llmupdate" -Description "Update LocalBox plus installed BenchPilot and Unshackled checkouts."
+    Write-CommandRow -Command "llm-update [-InstallTui], llmupdate" -Description "Update LocalBox plus installed companion checkouts; optionally refresh TUI binaries."
 
     Write-Host ""
     Write-Host "BenchPilot commands" -ForegroundColor Green
@@ -936,6 +938,7 @@ One function per model — flags select what to do.
   q36p -AutoBest                 Replay the saved best tuner config
   llmdefault                     Launch the configured Default model
   llm                            Guided wizard (Spectre when available)
+  llmtui                         Terminal.Gui LocalBox TUI preview
   llmc                           Native selectable wizard
   llms                           Spectre wizard (explicit)
 
@@ -960,7 +963,9 @@ Manage
   info <key>            Per-model detail: description, quants table (with fit + size), contexts table
   info -Commands        Full LocalBox and BenchPilot command list
   reloadllm             Reload llm-models.json and regenerate commands
-  llm-update            Update LocalBox, Unshackled, and BenchPilot when installed
+  llm-update [-InstallTui]
+                        Update LocalBox, Unshackled, and BenchPilot; refresh TUI binaries when requested
+  bptui                 Open BenchPilot.Tui when available
   lps, lstop            llama-server: status / stop
   purge                 Stop running llama-server and delete cached GGUF files
   bpstatus              Show BenchPilot discovery/version status

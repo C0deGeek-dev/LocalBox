@@ -362,12 +362,13 @@ llmdefaultunshackled              Same, via Unshackled
 llmdefaultcodex                   Same, via Codex
 llm                               Guided wizard (Spectre when available)
 llmtui                            Terminal.Gui TUI preview
+bptui                             BenchPilot Terminal.Gui TUI preview
 llmc                              Native selectable wizard, explicit alias
 llms                              Spectre wizard, explicit alias
 info                              Dashboard
 info -Commands                    Full LocalBox + BenchPilot command list
 llmdocs                           Quick reference
-llm-update                        Update LocalBox + installed companion checkouts
+llm-update [-InstallTui]           Update LocalBox + companions; optionally refresh TUI binaries
 ```
 
 | Flag | Effect |
@@ -666,6 +667,18 @@ reloadllm
 llmtui
 ```
 
+The main installer can publish TUI binaries too:
+
+```powershell
+.\install.ps1 -InstallTui
+llm-update -InstallTui
+```
+
+Without `-InstallTui`, `install.ps1` offers to publish the TUIs interactively
+unless `-SkipToolPrompts` is set. `llm-update` refreshes already-installed TUI
+binaries after an update, and `-InstallTui` forces a refresh even when the
+checkouts are already current.
+
 When installed, the launcher runs `~/.local-llm/bin/LocalBox.Tui.exe` and passes
 the active `LocalLLMProfile.ps1` path with `--profile`. From a repo checkout, it
 can also run the TUI project directly with `dotnet run`, so the command works on
@@ -684,6 +697,10 @@ Useful controls:
 | `F5` | Refresh backend data. |
 | `F9` | Show dry-run launch command. |
 | `F10` | Quit. |
+
+`bptui` opens BenchPilot.Tui directly. It runs the BenchPilot TUI project from a
+checkout when available, otherwise it falls back to the published
+`~/.local-llm/tools/benchpilot/bin/BenchPilot.Tui.exe`.
 
 ---
 
