@@ -299,6 +299,43 @@ function Format-LocalLLMSpectreFitCell {
     return "[$color]$marker[/]$star$QuantKey"
 }
 
+function Format-LocalLLMSpectreCatalogQuants {
+    param(
+        [Parameter(Mandatory = $true)]$Def,
+        [int]$Limit = 10
+    )
+
+    if (-not $Def.ContainsKey("Quants")) {
+        return "[grey50](single file)[/]"
+    }
+
+    $quantCells = @(
+        foreach ($qk in $Def.Quants.Keys) {
+            $fit = Get-QuantFitClass -Def $Def -QuantKey $qk
+            Format-LocalLLMSpectreFitCell -QuantKey $qk -FitClass $fit -IsDefault:($qk -eq $def.Quant)
+        }
+    )
+
+    if ($quantCells.Count -le $Limit) {
+        return ($quantCells -join '  ')
+    }
+
+    $hidden = $quantCells.Count - $Limit
+    return (@($quantCells | Select-Object -First $Limit) -join '  ') + "  [grey50]+$hidden[/]"
+}
+
+function Format-LocalLLMSpectreCatalogContexts {
+    param([Parameter(Mandatory = $true)]$Def)
+
+    $contextLabels = @(
+        $Def.Contexts.Keys | ForEach-Object {
+            if ([string]::IsNullOrWhiteSpace($_)) { "def" } else { $_ }
+        }
+    )
+
+    return ConvertTo-LocalLLMSpectreSafe ($contextLabels -join ' ')
+}
+
 function Show-ModelCatalogSpectre {
     param([switch]$All)
 
@@ -319,43 +356,29 @@ function Show-ModelCatalogSpectre {
 
     foreach ($key in $visibleKeys) {
         $def = Get-ModelDef -Key $key
-        $tier = Get-ModelTier -Def $def
-
-        $tierLabel = switch ($tier) {
-            'recommended'  { '[green]recommended[/]' }
-            'experimental' { '[yellow]experimental[/]' }
-            'legacy'       { '[grey50]legacy[/]' }
-            default        { ConvertTo-LocalLLMSpectreSafe $tier }
-        }
-
-        if ($def.ContainsKey("Quants")) {
-            $quantCells = foreach ($qk in $def.Quants.Keys) {
-                $fit = Get-QuantFitClass -Def $def -QuantKey $qk
-                Format-LocalLLMSpectreFitCell -QuantKey $qk -FitClass $fit -IsDefault:($qk -eq $def.Quant)
-            }
-            $quants = ($quantCells -join '  ')
-            $defaultQuant = "[cyan]$($def.Quant)[/]"
-        } else {
-            $quants = "[grey50](single file)[/]"
-            $defaultQuant = "[grey50]—[/]"
-        }
-
-        $contextLabels = @($def.Contexts.Keys | ForEach-Object {
-            if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
-        })
-        $contexts = ($contextLabels -join ' · ')
+        $quants = Format-LocalLLMSpectreCatalogQuants -Def $def
 
         $rows.Add([pscustomobject]@{
-            Key      = "[white]$key[/]"
-            Name     = ConvertTo-LocalLLMSpectreSafe $def.DisplayName
-            Tier     = $tierLabel
-            Default  = $defaultQuant
-            Quants   = $quants
-            Contexts = ConvertTo-LocalLLMSpectreSafe $contexts
+            Key    = "[white]$key[/]"
+            Name   = ConvertTo-LocalLLMSpectreSafe $def.DisplayName
+            Quants = $quants
+            Ctx    = Format-LocalLLMSpectreCatalogContexts -Def $def
         }) | Out-Null
     }
 
-    $rows | Format-SpectreTable -Border Rounded -Color Blue -AllowMarkup -Wrap | Out-Host
+    $keyWidth = 14
+    $nameWidth = 36
+    $ctxWidth = 30
+    $quantWidth = 44
+
+    $properties = @(
+        @{ Name = 'Key'; Expression = { $_.Key }; Width = $keyWidth }
+        @{ Name = 'Name'; Expression = { $_.Name }; Width = $nameWidth }
+        @{ Name = 'Quants'; Expression = { $_.Quants }; Width = $quantWidth }
+        @{ Name = 'Ctx'; Expression = { $_.Ctx }; Width = $ctxWidth }
+    )
+
+    $rows | Format-SpectreTable -Property $properties -Border Rounded -Color Blue -AllowMarkup -Wrap | Out-Host
 
     Write-Host ""
     Write-Host "  Quant cells: " -ForegroundColor DarkGray -NoNewline
