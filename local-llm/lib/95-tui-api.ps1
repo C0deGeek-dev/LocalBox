@@ -300,7 +300,7 @@ function New-LocalBoxTuiSelectionCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [switch]$Strict,
         [switch]$UseVision,
@@ -330,7 +330,7 @@ function Invoke-LocalBoxTuiLaunch {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [switch]$Strict,
         [switch]$UseVision,
@@ -359,7 +359,7 @@ function New-LocalBoxTuiLaunchPlan {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [switch]$Strict,
         [switch]$UseVision,
@@ -370,8 +370,8 @@ function New-LocalBoxTuiLaunchPlan {
     $def = Get-ModelDef -Key $Key
     $context = ConvertTo-LocalBoxTuiContext -Def $def -ContextKey $ContextKey
     $quant = if ($def.ContainsKey('Quant')) { [string]$def.Quant } else { '' }
-    $dryRunCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
-    $launchCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+    $dryRunCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
+    $launchCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
 
     [pscustomobject]@{
         key = $Key
@@ -396,7 +396,7 @@ function Invoke-LocalBoxTuiLaunchPreview {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','remote','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [switch]$Strict,
         [switch]$UseVision,

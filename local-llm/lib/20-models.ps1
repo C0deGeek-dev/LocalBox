@@ -104,6 +104,9 @@ function Resolve-ModelContextKey {
     if ([string]::IsNullOrWhiteSpace($ContextKey)) {
         $ContextKey = ''
     }
+    elseif ($ContextKey -ieq 'default') {
+        $ContextKey = ''
+    }
 
     if ($Def.Contexts.Contains($ContextKey)) {
         return $ContextKey

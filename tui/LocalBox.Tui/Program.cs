@@ -866,12 +866,12 @@ app.Run(window);
 if (!string.IsNullOrWhiteSpace(pendingLaunchCommand))
 {
     Console.WriteLine($"Launching: {pendingLaunchCommand}");
-    await client.InvokeInteractiveAsync(pendingLaunchCommand);
+    return await client.InvokeInteractiveAsync(pendingLaunchCommand);
 }
 if (!string.IsNullOrWhiteSpace(pendingShellCommand))
 {
     Console.WriteLine($"Opening BenchPilot: {pendingShellCommand}");
-    await RunShellCommandAsync(pendingShellCommand);
+    return await RunShellCommandAsync(pendingShellCommand);
 }
 return 0;
 

@@ -29,6 +29,11 @@ if (-not $plan.launchCommand -or $plan.launchCommand -notmatch 'Invoke-LLMSelect
     throw 'New-LocalBoxTuiLaunchPlan did not return a launcher command.'
 }
 
+$defaultPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey 'default' -Action claude -Mode native
+if ($defaultPlan.contextKey -ne '' -or $defaultPlan.launchCommand -notmatch "-ContextKey ''") {
+    throw 'New-LocalBoxTuiLaunchPlan did not normalize the default context alias.'
+}
+
 $settings = Get-LocalBoxTuiSettings
 if (-not $settings.path) {
     throw 'Get-LocalBoxTuiSettings did not return a settings path.'
@@ -39,5 +44,5 @@ if ($null -eq $benchPilot.available) {
     throw 'Get-LocalBoxTuiBenchPilotStatus did not return structured availability.'
 }
 
-@($status, $models[0], $detail, $plan, $settings, $benchPilot) | ConvertTo-Json -Depth 16 -Compress | Out-Null
+@($status, $models[0], $detail, $plan, $defaultPlan, $settings, $benchPilot) | ConvertTo-Json -Depth 16 -Compress | Out-Null
 Write-Host "LocalBox TUI API smoke test passed."
