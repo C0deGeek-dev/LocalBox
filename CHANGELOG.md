@@ -2,6 +2,23 @@
 
 Past-tense record of shipped changes.
 
+## 2026-05-24 — Dropped Ollama backend (breaking)
+
+### Breaking changes
+
+- **Ollama support has been removed.** LocalBox now targets llama.cpp's `llama-server` exclusively. The `-Backend ollama` parameter, the Ollama process control (`Start-OllamaApp`, `Wait-Ollama`, `Stop-OllamaModels`, …), Modelfile-based alias creation, Ollama strict siblings, the Ollama remote gateway path, and every shortcut that pulled or rebuilt Ollama aliases (`init`, `initmodel`, `ostop`, `qkill`, `ops`, `cleanorphans`, `listorphans`, `ospeed`) are gone. If you still need that path, check out the `ollama-classic` git tag.
+- **`-Chat` and `-Q8` flags removed from per-model shortcuts.** `llama-server` has no chat REPL, and Q8 KV was the Ollama env var (`OLLAMA_KV_CACHE_TYPE=q8_0`). Use `-KvK q8_0 -KvV q8_0` (or the wizard's KV-cache step) for the equivalent llama.cpp setting.
+- **Catalog scalars removed.** `MinOllamaVersion`, `OllamaAppPath`, `OllamaCommunityRoot`, `KeepAlive`, `RequireAdvertisedTools`, `LlamaCppCoexistOllama` are stripped from `defaults.json` and from any merged settings at load time. `SourceType: remote` model entries are no longer supported (all in-catalog entries are `gguf`).
+- **`ollama-proxy/` folder renamed to `localbox-proxy/`.** The deployed location is now `~/.localbox-proxy/`. The Python no-think proxy itself is unchanged in behavior; it now targets `127.0.0.1:8080` by default instead of `127.0.0.1:11434`. The `enforcer-claude.ps1` Ollama wrapper has been deleted.
+- **`Save-LLMDefaultLaunch` schema simplified.** No more `Backend`, `UseQ8`. Existing `DefaultLaunch` entries with those fields will ignore the obsolete keys; re-save via the wizard if you want the schema clean.
+
+### Other
+
+- `Invoke-Backend` no longer takes `-Backend`; it always dispatches to llama.cpp. `launch-chat` action removed.
+- `llm-status` is now just `Invoke-LlamaCppStatus`. `Show-OllamaStatus` is replaced by `Show-LocalBackendStatus` + `Show-ConfiguredGgufQuants` in the dashboard.
+- The wizard's backend step is now a mode picker (native / turboquant / mtpturbo). Default is `LlamaCppDefaultMode` (still `native`).
+- Codex launches always use the OpenAI-compatible llama-server provider; the `--oss --local-provider ollama` path is gone.
+
 ## 2026-05-08 - Codex target and default launch recipes
 
 - **`ostop` now leaves Ollama stopped.** It no longer restarts the Ollama app after teardown.

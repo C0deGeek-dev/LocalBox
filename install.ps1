@@ -1,4 +1,4 @@
-# Install LocalBox to %USERPROFILE%\.local-llm and %USERPROFILE%\.ollama-proxy.
+# Install LocalBox to %USERPROFILE%\.local-llm and %USERPROFILE%\.localbox-proxy.
 #
 # Modes:
 #   .\install.ps1                  copy files (default)
@@ -29,7 +29,7 @@ if (-not $RepoRoot) {
 }
 
 $DeployedLocalLLM = Join-Path $HOME ".local-llm"
-$DeployedProxy = Join-Path $HOME ".ollama-proxy"
+$DeployedProxy = Join-Path $HOME ".localbox-proxy"
 $ManagedToolsRoot = Join-Path $DeployedLocalLLM "tools"
 $ManagedBenchPilotRoot = Join-Path $ManagedToolsRoot "benchpilot"
 $ManagedUnshackledRoot = Join-Path $ManagedToolsRoot "unshackled"
@@ -446,15 +446,6 @@ function Show-Diagnostics {
     Write-Host ""
     Write-Host "=== Diagnostics ===" -ForegroundColor Cyan
 
-    $ollama = Get-Command ollama -ErrorAction SilentlyContinue
-    if ($ollama) {
-        $ver = (& ollama --version 2>$null) -join ' '
-        Write-Host "ollama   : ok  ($ver)" -ForegroundColor Green
-    }
-    else {
-        Write-Host "ollama   : MISSING — install from https://ollama.com or 'winget install Ollama.Ollama'" -ForegroundColor Yellow
-    }
-
     $python = Get-Command python -ErrorAction SilentlyContinue
     if ($python) {
         $ver = & python --version 2>&1
@@ -533,9 +524,9 @@ if ($installFiles) {
     }
 
     Install-Dir-Files `
-        -SourceDir (Join-Path $RepoRoot "ollama-proxy") `
+        -SourceDir (Join-Path $RepoRoot "localbox-proxy") `
         -TargetDir $DeployedProxy `
-        -Files @("no-think-proxy.py", "enforcer-claude.ps1")
+        -Files @("no-think-proxy.py")
 }
 
 if ($SetupProfile -or -not $installFiles) {
@@ -547,7 +538,7 @@ Show-Diagnostics
 
 if (-not $DryRun) {
     Write-Host ""
-    Write-Host "Done. Open a fresh PowerShell and run 'init' to build Ollama aliases." -ForegroundColor Green
+    Write-Host "Done. Open a fresh PowerShell and run 'llm' to launch the wizard." -ForegroundColor Green
     Write-Host ""
     Write-Host "Per-machine settings (paths, defaults) belong in ~/.local-llm/settings.json." -ForegroundColor DarkGray
     Write-Host "Use the helper instead of editing JSON:" -ForegroundColor DarkGray

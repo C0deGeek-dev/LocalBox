@@ -1,6 +1,6 @@
 # Claude Code / Unshackled launcher path. Backs up Claude env vars, points
-# them at the local Ollama (or the no-think strip proxy), launches the agent,
-# restores the env on exit.
+# them at the no-think strip proxy in front of llama-server, launches the
+# agent, restores the env on exit.
 
 $script:ClaudeEnvBackup = @{}
 $script:NoThinkProxyProcess = $null
@@ -150,7 +150,7 @@ function Test-LocalLLMRemotePublicHttp {
 }
 
 function Set-ClaudeLocalEnv {
-    # Common env-var setup for any local backend (Ollama or llama.cpp). Caller
+    # Common env-var setup for the llama-server backend. Caller
     # is responsible for Save-ClaudeEnvBackup before and Restore-ClaudeEnvBackup
     # after. -KeepThinking leaves thinking-tokens enabled (skip the no-think
     # toggles); the caller must arrange routing accordingly.
@@ -201,25 +201,24 @@ function Set-ClaudeLocalEnv {
     # prefill is the bottleneck.
     $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
 
-    # Local Anthropic-compatible servers such as llama.cpp and Ollama do not
-    # implement Anthropic beta tool shapes like defer_loading/tool_reference.
-    # Without this, Unshackled may withhold real tools behind ToolSearch or
-    # send schema fields that local proxies tolerate inconsistently.
+    # llama.cpp's Anthropic-compatible endpoint does not implement Anthropic
+    # beta tool shapes like defer_loading/tool_reference. Without this,
+    # Unshackled may withhold real tools behind ToolSearch or send schema
+    # fields that local proxies tolerate inconsistently.
     $env:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1"
     $env:ENABLE_TOOL_SEARCH = "false"
 }
 
 function Start-NoThinkProxy {
-    # Backend default is Ollama (11434). Pass -TargetPort 8080 (or whatever)
-    # to put the proxy in front of llama-server instead. The proxy strips
-    # Anthropic thinking-config from requests and <think>...</think> blocks
-    # from /v1/messages responses (SSE + non-streaming), which keeps reasoning
-    # models from leaking <think> tags into the conversation or breaking
-    # consumers that JSON.parse the response body.
+    # Puts the no-think proxy in front of llama-server at -TargetPort. The
+    # proxy strips Anthropic thinking-config from requests and <think>...
+    # </think> blocks from /v1/messages responses (SSE + non-streaming),
+    # which keeps reasoning models from leaking <think> tags into the
+    # conversation or breaking consumers that JSON.parse the response body.
     param(
         [int]$ListenPort = $script:NoThinkProxyPort,
         [string]$ListenHost = "127.0.0.1",
-        [int]$TargetPort = 11434,
+        [int]$TargetPort = 8080,
         [string]$TargetHost = "127.0.0.1",
         [string]$AuthToken,
         [string]$OutLogPath,
@@ -250,7 +249,7 @@ function Start-NoThinkProxy {
         throw "No-think proxy port $ListenPort is already in use by a proxy for a different or unverifiable target. Stop that process or change NoThinkProxyPort."
     }
 
-    $proxyScript = Join-Path $HOME ".ollama-proxy\no-think-proxy.py"
+    $proxyScript = Join-Path $HOME ".localbox-proxy\no-think-proxy.py"
 
     if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
         Write-LaunchLog "Reusing existing no-think proxy process (PID=$($script:NoThinkProxyProcess.Id))" 'PROXY'
@@ -439,14 +438,7 @@ function Watch-LocalLLMRemoteGateway {
                     }
                     'S' {
                         Stop-LocalLLMRemoteGateway
-                        if ($Session.Backend -eq 'llamacpp') {
-                            Stop-LlamaServer -Quiet
-                        }
-                        elseif ($Session.Backend -eq 'ollama') {
-                            Stop-OllamaModels
-                            Stop-OllamaApp
-                            Reset-OllamaEnv
-                        }
+                        Stop-LlamaServer -Quiet
                         Write-Host "Remote gateway stopped." -ForegroundColor Yellow
                         return
                     }
@@ -530,55 +522,6 @@ function Show-LocalLLMRemoteClientInstructions {
     Write-Host ""
 }
 
-function Start-LocalLLMOllamaRemoteBackend {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [switch]$UseQ8,
-        [switch]$Strict,
-        [switch]$UseVision,
-        [switch]$DryRun
-    )
-
-    $def = Get-ModelDef -Key $Key
-
-    if (-not $DryRun) {
-        Stop-LlamaServer -Quiet
-        Stop-OllamaModels
-        Stop-OllamaApp
-        Reset-OllamaEnv
-        Set-OllamaRuntimeEnv -UseQ8:$UseQ8
-        Start-OllamaApp
-        Wait-Ollama
-    }
-
-    $visionModulePath = ''
-    if ($UseVision -and -not $DryRun) {
-        $visionModulePath = Get-ModelVisionModulePath -Key $Key -Def $def -Backend ollama
-    }
-
-    $modelName = if ($DryRun) {
-        if ($Strict) {
-            Get-ModelStrictAliasName -Def $def
-        } else {
-            Get-ModelAliasName -Def $def -ContextKey $ContextKey
-        }
-    } elseif ($Strict) {
-        Ensure-ModelStrictAlias -Key $Key
-    } else {
-        Ensure-ModelAlias -Key $Key -ContextKey $ContextKey -VisionModulePath $(if ($visionModulePath) { $visionModulePath } else { '' })
-    }
-
-    return [pscustomobject]@{
-        Backend      = 'ollama'
-        Model        = $modelName
-        TargetHost   = '127.0.0.1'
-        TargetPort   = 11434
-        TargetBaseUrl = 'http://127.0.0.1:11434'
-    }
-}
-
 function Start-LocalLLMLlamaCppRemoteBackend {
     [CmdletBinding()]
     param(
@@ -598,9 +541,6 @@ function Start-LocalLLMLlamaCppRemoteBackend {
     )
 
     $def = Get-ModelDef -Key $Key
-    if ($def.SourceType -ne 'gguf') {
-        throw "Model '$Key' has SourceType=$($def.SourceType); llama.cpp remote mode only supports gguf-source models."
-    }
 
     # Resolve MTP params: per-call > per-model def > caller-provided default
     if ([string]::IsNullOrWhiteSpace($SpecType)) {
@@ -608,13 +548,6 @@ function Start-LocalLLMLlamaCppRemoteBackend {
     }
     if ($SpecDraftNMax -le 0) {
         $SpecDraftNMax = if ($def.ContainsKey('SpecDraftNMax') -and $null -ne $def.SpecDraftNMax) { [int]$def.SpecDraftNMax } else { 0 }
-    }
-
-    $coexist = if ($script:Cfg.Contains('LlamaCppCoexistOllama')) { [bool]$script:Cfg.LlamaCppCoexistOllama } else { $false }
-    if (-not $DryRun -and -not $coexist) {
-        Stop-OllamaModels
-        Stop-OllamaApp
-        Start-Sleep -Milliseconds 1000
     }
 
     if (-not $DryRun) {
@@ -627,7 +560,7 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         $ggufPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $fileName
     }
     else {
-        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def -Backend llamacpp
+        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def
     }
 
     $defaultPort = if ($script:Cfg.Contains('LlamaCppPort')) { [int]$script:Cfg.LlamaCppPort } else { 8080 }
@@ -647,7 +580,7 @@ function Start-LocalLLMLlamaCppRemoteBackend {
 
     $visionModulePath = ''
     if ($UseVision -and -not $DryRun) {
-        $visionModulePath = Get-ModelVisionModulePath -Key $Key -Def $def -Backend llamacpp
+        $visionModulePath = Get-ModelVisionModulePath -Key $Key -Def $def
         if (-not $visionModulePath) {
             Write-Warning "Vision requested but no mmproj found for $Key"
         }
@@ -787,11 +720,9 @@ function Start-LocalLLMRemoteGateway {
         [Parameter(Mandatory = $true)][string]$Key,
         [Alias('Ctx')]
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('ollama', 'llamacpp')][string]$Backend = 'ollama',
         [ValidateSet('native', 'turboquant', 'mtpturbo')][string]$LlamaCppMode = 'native',
         [string]$KvCacheK,
         [string]$KvCacheV,
-        [switch]$UseQ8,
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$AutoBest,
@@ -813,11 +744,7 @@ function Start-LocalLLMRemoteGateway {
         $ListenPort = $script:NoThinkProxyPort
     }
 
-    $backendInfo = if ($Backend -eq 'llamacpp') {
-        Start-LocalLLMLlamaCppRemoteBackend -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict -UseVision:$UseVision -AutoBest:$AutoBest -AutoBestProfile $AutoBestProfile -ExtraArgs $ExtraArgs -DryRun:$DryRun
-    } else {
-        Start-LocalLLMOllamaRemoteBackend -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Strict:$Strict -UseVision:$UseVision -DryRun:$DryRun
-    }
+    $backendInfo = Start-LocalLLMLlamaCppRemoteBackend -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict -UseVision:$UseVision -AutoBest:$AutoBest -AutoBestProfile $AutoBestProfile -ExtraArgs $ExtraArgs -DryRun:$DryRun
 
     $hosts = if ([string]::IsNullOrWhiteSpace($AdvertiseHost)) {
         Get-LocalLLMRemoteAdvertiseHosts -ListenHost $ListenHost
@@ -837,8 +764,8 @@ function Start-LocalLLMRemoteGateway {
             $notes += "AutoBest: loaded saved tuner profile=$($backendInfo.AutoBestProfile) (overrides applied to server argv)"
         }
         $plan = @{
-            Title       = "remote gateway via $Backend"
-            Backend     = $Backend
+            Title       = "remote gateway via llama.cpp"
+            Backend     = 'llamacpp'
             Mode        = $backendInfo.Mode
             Key         = $Key
             Model       = $backendInfo.Model
@@ -858,7 +785,7 @@ function Start-LocalLLMRemoteGateway {
     Start-NoThinkProxy -ListenHost $ListenHost -ListenPort $ListenPort -TargetHost $backendInfo.TargetHost -TargetPort $backendInfo.TargetPort -AuthToken $Password -OutLogPath $gatewayLogs.Out -ErrLogPath $gatewayLogs.Err
 
     $script:RemoteGatewaySession = @{
-        Backend    = $Backend
+        Backend    = 'llamacpp'
         Model      = $backendInfo.Model
         ListenHost = $ListenHost
         ListenPort = $ListenPort
@@ -1172,7 +1099,7 @@ function Start-CodexCli {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Model,
-        [string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
         [int]$ContextTokens,
         [int]$MaxOutputTokens
     )
@@ -1183,24 +1110,20 @@ function Start-CodexCli {
 
     $args = @()
 
-    if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-        $args += @('--oss', '--local-provider', 'ollama')
+    $providerId = 'localbox_llamacpp'
+    $idleMs = if ($script:Cfg.Contains("CodexStreamIdleTimeoutMs")) {
+        try { [int]$script:Cfg.CodexStreamIdleTimeoutMs } catch { 10000000 }
     } else {
-        $providerId = 'localbox_llamacpp'
-        $idleMs = if ($script:Cfg.Contains("CodexStreamIdleTimeoutMs")) {
-            try { [int]$script:Cfg.CodexStreamIdleTimeoutMs } catch { 10000000 }
-        } else {
-            10000000
-        }
-
-        $args += @(
-            '-c', ('model_provider={0}' -f (ConvertTo-CodexTomlString $providerId)),
-            '-c', ('model_providers.{0}.name={1}' -f $providerId, (ConvertTo-CodexTomlString 'LocalBox llama.cpp')),
-            '-c', ('model_providers.{0}.base_url={1}' -f $providerId, (ConvertTo-CodexTomlString $BaseUrl)),
-            '-c', ('model_providers.{0}.wire_api="responses"' -f $providerId),
-            '-c', ('model_providers.{0}.stream_idle_timeout_ms={1}' -f $providerId, $idleMs)
-        )
+        10000000
     }
+
+    $args += @(
+        '-c', ('model_provider={0}' -f (ConvertTo-CodexTomlString $providerId)),
+        '-c', ('model_providers.{0}.name={1}' -f $providerId, (ConvertTo-CodexTomlString 'LocalBox llama.cpp')),
+        '-c', ('model_providers.{0}.base_url={1}' -f $providerId, (ConvertTo-CodexTomlString $BaseUrl)),
+        '-c', ('model_providers.{0}.wire_api="responses"' -f $providerId),
+        '-c', ('model_providers.{0}.stream_idle_timeout_ms={1}' -f $providerId, $idleMs)
+    )
 
     if ($ContextTokens -gt 0) {
         $args += @('-c', "model_context_window=$ContextTokens")
@@ -1214,245 +1137,11 @@ function Start-CodexCli {
 
     Write-Host ""
     Write-Host "Launching codex with $Model..." -ForegroundColor Cyan
-    if (-not [string]::IsNullOrWhiteSpace($BaseUrl)) {
-        Write-Host "  Base URL : $BaseUrl" -ForegroundColor DarkGray
-    } else {
-        Write-Host "  Provider : Ollama local provider" -ForegroundColor DarkGray
-    }
+    Write-Host "  Base URL : $BaseUrl" -ForegroundColor DarkGray
     Write-Host "  Model    : $Model" -ForegroundColor DarkGray
     Write-Host ""
 
     & codex @args
-}
-
-function Start-ClaudeWithOllamaModel {
-    param(
-        [Parameter(Mandatory = $true)][string]$Model,
-        [string]$Tools,
-        [ValidateSet("strip", "keep")][string]$ThinkingPolicy = "strip",
-        [Nullable[bool]]$IncludeInlineToolSchemas,
-        [switch]$UseQ8,
-        [switch]$LimitTools,
-        [switch]$Unshackled,
-        [switch]$Codex,
-        [switch]$SkipToolCheck,
-        [string[]]$ExtraUnshackledArgs,
-        [switch]$DryRun
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Tools)) {
-        $Tools = $script:Cfg.LocalModelTools
-    }
-
-    # IncludeInlineToolSchemas controls prompt content (separate concern from
-    # LimitTools, which controls the --tools CLI flag). Default to LimitTools'
-    # value: limited-tool models benefit from inline schemas (smaller curated
-    # set, fewer ToolSearch roundtrips); full-tool launches let the model use
-    # ToolSearch normally.
-    if ($null -eq $IncludeInlineToolSchemas) {
-        $IncludeInlineToolSchemas = [bool]$LimitTools
-    }
-
-    if ($DryRun) {
-        $keepThinking = ($ThinkingPolicy -eq 'keep')
-        $baseUrl = if ($keepThinking) {
-            'http://localhost:11434'
-        } else {
-            "http://localhost:$($script:NoThinkProxyPort)"
-        }
-
-        $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
-
-        $launchArgs = if ($LimitTools) {
-            @('--dangerously-skip-permissions', '--tools', $Tools, '--append-system-prompt', $systemPrompt)
-        }
-        else {
-            @('--dangerously-skip-permissions', '--append-system-prompt', $systemPrompt)
-        }
-
-        $title = if ($Codex) {
-            'codex via Ollama'
-        } elseif ($Unshackled) {
-            'unshackled via Ollama'
-        } else {
-            'claude via Ollama'
-        }
-
-        $env = if ($Codex) {
-            [ordered]@{}
-        } else {
-            Get-LocalLLMClaudeEnvSnapshot -BaseUrl $baseUrl -Model $Model -KeepThinking $keepThinking -AuthToken 'ollama'
-        }
-
-        $launchExe = if ($Unshackled) { 'unshackled' } elseif ($Codex) { 'codex' } else { 'claude' }
-        $launchExeArgs = if ($Codex) {
-            @()
-        } elseif ($Unshackled) {
-            @($launchArgs)
-        } else {
-            @('--model', $Model) + $launchArgs
-        }
-
-        $thinkingLabel = if ($keepThinking) {
-            'kept (direct to Ollama)'
-        } else {
-            "stripped via no-think-proxy:$($script:NoThinkProxyPort)"
-        }
-
-        $toolsLabel = if ($LimitTools) { "limited ($Tools)" } else { 'all' }
-        $kvNote = "Ollama backend would restart with OLLAMA_KV_CACHE_TYPE=$(if ($UseQ8) { 'q8_0' } else { 'default' })"
-
-        $plan = @{
-            Title       = $title
-            Backend     = 'ollama'
-            Model       = $Model
-            BaseUrl     = $baseUrl
-            HealthCheck = 'http://localhost:11434/api/tags'
-            Tools       = $toolsLabel
-            Thinking    = $thinkingLabel
-            Env         = $env
-            LaunchExe   = $launchExe
-            LaunchArgs  = $launchExeArgs
-            Notes       = @($kvNote)
-        }
-
-        Show-LocalLLMLaunchPlan -Plan $plan
-        return
-    }
-
-    Stop-OllamaModels
-    Stop-OllamaApp
-    Reset-OllamaEnv
-    Set-OllamaRuntimeEnv -UseQ8:$UseQ8
-    Start-OllamaApp
-    Wait-Ollama
-
-    if (-not (Test-OllamaVersionMinimum -MinVersion $script:Cfg.MinOllamaVersion)) {
-        $raw = & ollama --version 2>$null
-
-        Write-Host ""
-        Write-Host "ERROR: Ollama version < $($script:Cfg.MinOllamaVersion)." -ForegroundColor Red
-        Write-Host "Installed: $raw" -ForegroundColor Red
-        Write-Host "Update with: winget upgrade Ollama.Ollama" -ForegroundColor Yellow
-        Write-Host ""
-
-        return
-    }
-
-    if ($script:Cfg.RequireAdvertisedTools -and -not $SkipToolCheck -and -not (Test-OllamaModelSupportsTools -ModelName $Model)) {
-        Write-Host ""
-        Write-Host "ERROR: $Model does not advertise tool support." -ForegroundColor Red
-        Write-Host "Run: ollama show $Model" -ForegroundColor Yellow
-        Write-Host "Temporary bypass: Start-ClaudeWithOllamaModel -Model $Model -SkipToolCheck" -ForegroundColor Yellow
-        Write-Host "Or set RequireAdvertisedTools=false in llm-models.json." -ForegroundColor Yellow
-        Write-Host ""
-
-        return
-    }
-
-    if ($Codex) {
-        Start-CodexCli -Model $Model
-        return
-    }
-
-    $keepThinking = ($ThinkingPolicy -eq "keep")
-
-    if (-not $keepThinking) {
-        Start-NoThinkProxy
-    }
-
-    Save-ClaudeEnvBackup
-
-    try {
-        $baseUrl = if ($keepThinking) {
-            # Skip the strip proxy and let thinking blocks reach Ollama directly.
-            "http://localhost:11434"
-        } else {
-            "http://localhost:$($script:NoThinkProxyPort)"
-        }
-
-        Set-ClaudeLocalEnv -BaseUrl $baseUrl -Model $Model -KeepThinking $keepThinking
-        $env:ANTHROPIC_AUTH_TOKEN = "ollama"
-
-        $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
-        $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
-        $thinkingLabel = if ($keepThinking) { "kept (direct to Ollama)" } else { "disabled" }
-
-        Write-Host ""
-        Write-Host "Launching $backendLabel with $Model via Ollama..." -ForegroundColor Cyan
-        Write-Host "  Base URL : $($env:ANTHROPIC_BASE_URL)" -ForegroundColor DarkGray
-        Write-Host "  Model    : $Model" -ForegroundColor DarkGray
-        Write-Host "  Thinking : $thinkingLabel" -ForegroundColor DarkGray
-        Write-Host "  Tools    : $toolsLabel" -ForegroundColor DarkGray
-        Write-Host ""
-
-        $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
-
-        $launchArgs = if ($LimitTools) {
-            @(
-                '--dangerously-skip-permissions',
-                '--tools',
-                $Tools,
-                '--append-system-prompt',
-                $systemPrompt
-            )
-        }
-        else {
-            @(
-                '--dangerously-skip-permissions',
-                '--append-system-prompt',
-                $systemPrompt
-            )
-        }
-
-        if ($Unshackled) {
-            $extras = Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs
-            Invoke-UnshackledCli @launchArgs @extras
-        }
-        else {
-            & claude --model $Model @launchArgs
-        }
-    }
-    finally {
-        Restore-ClaudeEnvBackup
-
-        if (-not $keepThinking) {
-            Stop-NoThinkProxy
-        }
-    }
-}
-
-function Start-OllamaChat {
-    param(
-        [Parameter(Mandatory = $true)][string]$Model,
-        [switch]$UseQ8,
-        [switch]$DryRun
-    )
-
-    if ($DryRun) {
-        $kvNote = "Ollama backend would restart with OLLAMA_KV_CACHE_TYPE=$(if ($UseQ8) { 'q8_0' } else { 'default' })"
-        $plan = @{
-            Title      = 'ollama chat (REPL)'
-            Backend    = 'ollama'
-            Model      = $Model
-            BaseUrl    = 'http://localhost:11434'
-            LaunchExe  = 'ollama'
-            LaunchArgs = @('run', $Model)
-            Notes      = @($kvNote)
-        }
-        Show-LocalLLMLaunchPlan -Plan $plan
-        return
-    }
-
-    Stop-OllamaModels
-    Stop-OllamaApp
-    Reset-OllamaEnv
-    Set-OllamaRuntimeEnv -UseQ8:$UseQ8
-    Start-OllamaApp
-    Wait-Ollama
-
-    Write-Host "Launching ollama run with $Model..." -ForegroundColor Cyan
-    & ollama run $Model
 }
 
 function Get-ClaudeTargetSummary {
@@ -1498,10 +1187,6 @@ function Start-ClaudeWithLlamaCppModel {
         $SpecDraftNMax = if ($def.ContainsKey('SpecDraftNMax') -and $null -ne $def.SpecDraftNMax) { [int]$def.SpecDraftNMax } else { 0 }
     }
 
-    if ($def.SourceType -ne 'gguf') {
-        throw "Model '$Key' has SourceType=$($def.SourceType); llama.cpp only supports gguf-source models."
-    }
-
     if ([string]::IsNullOrWhiteSpace($Tools)) {
         $Tools = $script:Cfg.LocalModelTools
     }
@@ -1510,31 +1195,13 @@ function Start-ClaudeWithLlamaCppModel {
         $IncludeInlineToolSchemas = [bool]$LimitTools
     }
 
-    # Avoid double-loading on a single GPU unless the user opted into coexistence.
-    $coexist = if ($script:Cfg.Contains('LlamaCppCoexistOllama')) { [bool]$script:Cfg.LlamaCppCoexistOllama } else { $false }
-    if (-not $DryRun -and -not $coexist) {
-        Stop-OllamaModels
-        Stop-OllamaApp
-
-        # Wait for Ollama processes to fully release GPU resources before
-        # launching llama.cpp.  Without this, llama-server can silently crash
-        # or hang when Ollama still holds the GPU (especially after a fresh
-        # restart or heavy prior use).
-        Write-Host "Waiting for Ollama to fully stop..." -ForegroundColor DarkGray
-        Start-Sleep -Milliseconds 1000
-        foreach ($p in @(Get-Process -Name 'ollama app', 'ollama' -ErrorAction SilentlyContinue)) {
-            try { $p.WaitForExit(5000) } catch { }
-        }
-    }
-
     # Stop any prior llama-server we own.
     if (-not $DryRun) {
         Stop-LlamaServer -Quiet
     }
 
-    # Resolve GGUF. Real launch downloads on demand and reuses an Ollama copy
-    # when available; DryRun only inspects the expected path so we don't pull
-    # gigabytes for a preview.
+    # Resolve GGUF. Real launch downloads on demand; DryRun only inspects the
+    # expected path so we don't pull gigabytes for a preview.
     $dryRunGgufNote = $null
     if ($DryRun) {
         $folder = Join-Path $script:Cfg.LlamaCppGgufRoot $def.Root
@@ -1545,7 +1212,7 @@ function Start-ClaudeWithLlamaCppModel {
         }
     }
     else {
-        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def -Backend llamacpp
+        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def
     }
 
     # Pick a free port from the configured default.
@@ -1570,7 +1237,7 @@ function Start-ClaudeWithLlamaCppModel {
     # Resolve vision module (mmproj) on demand when user opts in; always log availability.
     $visionModulePath = if ($UseVision) {
         Write-LaunchLog "Resolving vision module for llama.cpp launch (model=$($def.Root))" 'VISION'
-        $result = Get-ModelVisionModulePath -Key $Key -Def $def -Backend llamacpp
+        $result = Get-ModelVisionModulePath -Key $Key -Def $def
         if ($result) {
             Write-LaunchLog "Vision module resolved: $([System.IO.Path]::GetFileName($result))" 'VISION'
         } else {
@@ -1578,13 +1245,13 @@ function Start-ClaudeWithLlamaCppModel {
         }
         $result
     } else {
-        $avail = Test-ModelVisionModuleAvailable -Key $Key -Def $def -Backend llamacpp
+        $avail = Test-ModelVisionModuleAvailable -Key $Key -Def $def
         if ($avail.Local) {
             Write-LaunchLog "Vision available locally ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
         } elseif ($avail.AvailableOnHF) {
             Write-LaunchLog "Vision available on HuggingFace ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
         } else {
-            Write-LaunchLog "No vision module available for $Key (llama.cpp)" 'VISION'
+            Write-LaunchLog "No vision module available for $Key" 'VISION'
         }
         ''
     }

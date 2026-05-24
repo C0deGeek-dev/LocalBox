@@ -2,13 +2,13 @@
 """
 no-think-proxy
 ==============
-HTTP proxy that sits in front of a local LLM backend (Ollama or llama.cpp's
-llama-server) for use with Claude Code / Unshackled.
+HTTP proxy that sits in front of a local llama.cpp llama-server for use with
+Claude Code / Unshackled.
 
 Two jobs:
 
 1. Strip Anthropic "thinking" config from outgoing /v1/messages requests so
-   local backends don't choke on unsupported fields (existing behaviour).
+   llama-server doesn't choke on unsupported fields.
 
 2. Strip <think>...</think> blocks from incoming /v1/messages response text
    so reasoning models (Qwen3 reasoning variants, DeepSeek R1 merges, etc.)
@@ -23,8 +23,8 @@ Usage
   python no-think-proxy.py [LISTEN_PORT] [TARGET]
 
     LISTEN_PORT   Port to listen on. Default: 11435.
-    TARGET        Upstream as "host:port" or just "port". Default: 127.0.0.1:11434
-                  (Ollama). For llama.cpp pass "8080" or "127.0.0.1:8080".
+    TARGET        Upstream as "host:port" or just "port". Default: 127.0.0.1:8080
+                  (llama-server). Pass "8081" or "127.0.0.1:8081" to override.
 
 Env-var fallbacks (used when arg not given):
     NO_THINK_PROXY_LISTEN_PORT
@@ -46,7 +46,7 @@ __version__ = "1.1.0"
 
 
 TARGET_HOST = "127.0.0.1"
-TARGET_PORT = 11434
+TARGET_PORT = 8080
 AUTH_TOKEN = ""
 
 THINK_TAGS = {
@@ -616,7 +616,7 @@ def main():
     target_spec = (
         sys.argv[2]
         if len(sys.argv) > 2
-        else os.environ.get("NO_THINK_PROXY_TARGET", "127.0.0.1:11434")
+        else os.environ.get("NO_THINK_PROXY_TARGET", "127.0.0.1:8080")
     )
 
     listen_host = (

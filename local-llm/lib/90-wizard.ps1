@@ -8,13 +8,12 @@ function Format-LLMContextLabel {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey
     )
 
-    $aliasName = Get-ModelAliasName -Def $Def -ContextKey $ContextKey
     $ctx = Get-ModelContextValue -Def $Def -ContextKey $ContextKey
 
     $head = if ([string]::IsNullOrWhiteSpace($ContextKey)) {
-        "$aliasName  ($ctx tokens, default)"
+        "$($Def.Root)  ($ctx tokens, default)"
     } else {
-        "$aliasName  ($ctx tokens, $ContextKey)"
+        "$($Def.Root)$ContextKey  ($ctx tokens, $ContextKey)"
     }
 
     $note = Get-ModelContextNote -Def $Def -ContextKey $ContextKey
@@ -87,9 +86,6 @@ function Select-LLMModelKey {
 
     $keys = @(Get-FilteredModelKeys -IncludeAll:$All)
 
-    # Fresh-catalog escape hatch: addllm tags new models 'experimental' by
-    # default, so a brand-new install has zero recommended models. Falling
-    # through to -All here is friendlier than dead-ending.
     if ($keys.Count -eq 0 -and -not $All) {
         $keys = @(Get-FilteredModelKeys -IncludeAll)
         if ($keys.Count -gt 0) {
@@ -192,32 +188,16 @@ function Select-LLMContextKey {
 }
 
 function Select-LLMAction {
-    param([string]$Backend = 'ollama')
-
-    $actions = if ($Backend -eq 'llamacpp') {
-        @(
-            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
-            [pscustomobject]@{ Key = "remote"; Label = "Remote"; Description = "Serve this model for remote Unshackled clients" },
-            [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
-            [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
-            [pscustomobject]@{ Key = "resetbest"; Label = "Delete best settings"; Description = "Reset saved AutoBest config" },
-            [pscustomobject]@{ Key = "setup"; Label = "Download GGUF only"; Description = "Resolve and cache the GGUF without launching" }
-        )
-    } else {
-        @(
-            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
-            [pscustomobject]@{ Key = "remote"; Label = "Remote"; Description = "Serve this model for remote Unshackled clients" },
-            [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" },
-            [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
-            [pscustomobject]@{ Key = "benchmark"; Label = "Benchmark"; Description = "Run ospeed for selected alias" },
-            [pscustomobject]@{ Key = "setup"; Label = "Setup/create alias only"; Description = "Download/create selected alias" },
-            [pscustomobject]@{ Key = "show"; Label = "Show ollama model info"; Description = "Run ollama show" }
-        )
-    }
+    $actions = @(
+        [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+        [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
+        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+        [pscustomobject]@{ Key = "remote"; Label = "Remote"; Description = "Serve this model for remote Unshackled clients" },
+        [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
+        [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
+        [pscustomobject]@{ Key = "resetbest"; Label = "Delete best settings"; Description = "Reset saved AutoBest config" },
+        [pscustomobject]@{ Key = "setup"; Label = "Download GGUF only"; Description = "Resolve and cache the GGUF without launching" }
+    )
 
     $idx = Read-LLMChoiceIndex `
         -Title "Select action" `
@@ -236,22 +216,11 @@ function Select-LLMAction {
 }
 
 function Select-LLMDefaultTarget {
-    param([string]$Backend = 'ollama')
-
-    $targets = if ($Backend -eq 'llamacpp') {
-        @(
-            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" }
-        )
-    } else {
-        @(
-            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
-            [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" }
-        )
-    }
+    $targets = @(
+        [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+        [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
+        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" }
+    )
 
     $idx = Read-LLMChoiceIndex `
         -Title "llmdefault target" `
@@ -266,25 +235,17 @@ function Select-LLMDefaultTarget {
     return $targets[$idx].Key
 }
 
-function Select-LLMBackend {
-    # Returns one of 'ollama', 'llamacpp-native', 'llamacpp-turboquant',
-    # 'llamacpp-mtpturbo', or $null (back). For models that aren't
-    # llama.cpp-eligible, this auto-returns 'ollama'.
-    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
-
-    if (-not (Test-LlamaCppEligible -Def $Def)) {
-        return 'ollama'
-    }
-
+function Select-LLMMode {
+    # Pick which llama.cpp binary flavor to run. Returns 'native',
+    # 'turboquant', 'mtpturbo', or $null (back).
     $items = @(
-        [pscustomobject]@{ Key = 'ollama';              Label = 'Ollama (default)';                       Description = 'Existing alias-based path' },
-        [pscustomobject]@{ Key = 'llamacpp-native';     Label = 'llama.cpp native';                       Description = 'Upstream llama-server.exe (mainline KV + draft-mtp)' },
-        [pscustomobject]@{ Key = 'llamacpp-turboquant'; Label = 'llama.cpp turboquant (turbo3/turbo4 KV)'; Description = 'Fork binary; turbo KV cache types, no MTP' },
-        [pscustomobject]@{ Key = 'llamacpp-mtpturbo';   Label = 'llama.cpp mtpturbo (MTP + turbo KV)';     Description = 'Self-built binary; combines MTP spec-decode with turbo KV' }
+        [pscustomobject]@{ Key = 'native';     Label = 'llama.cpp native';                       Description = 'Upstream llama-server.exe (mainline KV + draft-mtp)' },
+        [pscustomobject]@{ Key = 'turboquant'; Label = 'llama.cpp turboquant (turbo3/turbo4 KV)'; Description = 'Fork binary; turbo KV cache types, no MTP' },
+        [pscustomobject]@{ Key = 'mtpturbo';   Label = 'llama.cpp mtpturbo (MTP + turbo KV)';     Description = 'Self-built binary; combines MTP spec-decode with turbo KV' }
     )
 
     $idx = Read-LLMChoiceIndex `
-        -Title "Select backend" `
+        -Title "Select llama.cpp mode" `
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
@@ -360,15 +321,10 @@ function Set-ModelQuantForSelectedLaunch {
     $resolvedQuant = Resolve-ModelQuantKey -Def $def -Quant $QuantKey
     $def.Quant = $resolvedQuant
 
-    # Important: aliases point at a specific GGUF through their Modelfile.
-    # When switching quant, remove existing aliases so the selected alias is rebuilt correctly.
-    Remove-ModelAliases -Key $ModelKey
-
     Write-Host "$ModelKey session quant set to $resolvedQuant -> $($def.Quants[$resolvedQuant])" -ForegroundColor Green
 }
 
 function Read-LLMVisionToggle {
-    # Returns $true (vision on), $false (vision off), or $null (back).
     $items = @(
         [pscustomobject]@{ Key = $false; Label = 'No';  Description = 'Launch without vision support' },
         [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = 'Load multimodal module (mmproj.gguf) for vision' }
@@ -390,36 +346,10 @@ function Read-LLMVisionToggle {
     return [bool]$items[$idx].Key
 }
 
-function Read-LLMQ8Toggle {
-    # Returns $true (q8 on), $false (q8 off), or $null (back).
-    $items = @(
-        [pscustomobject]@{ Key = $false; Label = 'No';  Description = 'Default KV cache behavior' },
-        [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = 'Use q8_0 KV cache for this launch' }
-    )
-
-    $idx = Read-LLMChoiceIndex `
-        -Title "Use q8 KV cache?" `
-        -Items $items `
-        -ZeroLabel "Back" `
-        -Label {
-            param($item, $i)
-            "$($item.Label)  -  $($item.Description)"
-        }
-
-    if ($idx -lt 0) {
-        return $null
-    }
-
-    return [bool]$items[$idx].Key
-}
-
 function Read-LLMStrictToggle {
-    # Returns $true (strict on), $false (strict off), or $null (back).
-    # Only meaningful when the selected model has Strict: true in the catalog;
-    # the wizard gates this prompt on Get-ModelStrictEnabled.
     $items = @(
-        [pscustomobject]@{ Key = $false; Label = 'No';  Description = 'Use the base alias and continue to context selection' },
-        [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = 'Use the strict alias; pins context and skips context selection' }
+        [pscustomobject]@{ Key = $false; Label = 'No';  Description = 'Skip the strict overlay' },
+        [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = 'Apply the strict engineering overlay (tighter sampler + system prompt)' }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -619,7 +549,6 @@ function Read-LLMTuneNCpuMoeRange {
         return $null
     }
 
-    # No history: offer defaults or custom entry
     $items = @(
         [pscustomobject]@{ Key = 'default'; Label = 'Use defaults'; Description = 'Auto-generate NCpuMoe candidates from model catalog' },
         [pscustomobject]@{ Key = 'custom';  Label = 'Custom range'; Description = 'Enter your own range  (format: start-end:step, e.g. 15-40:2)' }
@@ -1216,11 +1145,9 @@ function Invoke-LLMSelection {
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Action,
-        [string]$Backend = 'ollama',
-        [string]$LlamaCppMode,
+        [string]$LlamaCppMode = 'native',
         [string]$KvCacheK,
         [string]$KvCacheV,
-        [switch]$UseQ8,
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
@@ -1229,100 +1156,49 @@ function Invoke-LLMSelection {
         [switch]$DryRun
     )
 
-  if ($Backend -eq 'llamacpp') {
-        $def = Get-ModelDef -Key $ModelKey
+    $def = Get-ModelDef -Key $ModelKey
 
-        switch ($Action) {
-            "claude" {
-                Invoke-Backend -Action launch-claude -Backend llamacpp `
-                    -Key $ModelKey -ContextKey $ContextKey `
-                    -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
-            }
-
-            "codex" {
-                Start-ClaudeWithLlamaCppModel `
-                    -Key $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode `
-                    -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Codex -DryRun:$DryRun
-            }
-
-            "unshackled" {
-                Invoke-Backend -Action launch-claude -Backend llamacpp `
-                    -Key $ModelKey -ContextKey $ContextKey `
-                    -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
-            }
-
-            "remote" {
-                Start-LocalLLMRemoteGateway `
-                    -Key $ModelKey -ContextKey $ContextKey -Backend llamacpp -LlamaCppMode $LlamaCppMode `
-                    -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
-            }
-
-            "setup" {
-                # Strict has no effect on the GGUF path — same file regardless.
-                $path = Get-ModelGgufPath -Key $ModelKey -Def $def -Backend llamacpp
-                Write-Host "GGUF cached at: $path" -ForegroundColor Green
-            }
-
-            "findbest" {
-                Invoke-LlamaCppTunerWizardFlow -ModelKey $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode -UseSpectrePrompts:$UseSpectrePrompts
-            }
-
-            "resetbest" {
-                Invoke-LlamaCppBestResetWizardFlow -ModelKey $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode -UseSpectrePrompts:$UseSpectrePrompts
-            }
-
-            default {
-                throw "Action '$Action' is not supported on the llama.cpp backend."
-            }
-        }
-        return
-    }
-
-    # Ollama backend.
     switch ($Action) {
-        "chat" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Chat -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun -UseVision:$UseVision
-        }
-
-        "unshackled" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun -UseVision:$UseVision
-        }
-
-        "remote" {
-            Start-LocalLLMRemoteGateway -Key $ModelKey -ContextKey $ContextKey -Backend ollama -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun -UseVision:$UseVision
+        "claude" {
+            Invoke-Backend -Action launch-claude `
+                -Key $ModelKey -ContextKey $ContextKey `
+                -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
         }
 
         "codex" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Codex -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun -UseVision:$UseVision
+            Start-ClaudeWithLlamaCppModel `
+                -Key $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode `
+                -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Codex -DryRun:$DryRun
         }
 
-        "claude" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun -UseVision:$UseVision
+        "unshackled" {
+            Invoke-Backend -Action launch-claude `
+                -Key $ModelKey -ContextKey $ContextKey `
+                -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
         }
 
-        "benchmark" {
-            $defBenchmark = Get-ModelDef -Key $ModelKey
-            $visionBM = if ($UseVision) { Get-ModelVisionModulePath -Key $ModelKey -Def $defBenchmark -Backend ollama } else { '' }
-            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey -VisionModulePath $(if ($visionBM) { $visionBM } else { '' }) }
-            Test-OllamaSpeed -Model $modelName -Runs 3
+        "remote" {
+            Start-LocalLLMRemoteGateway `
+                -Key $ModelKey -ContextKey $ContextKey -LlamaCppMode $LlamaCppMode `
+                -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
         }
 
         "setup" {
-            $defSetup = Get-ModelDef -Key $ModelKey
-            $visionSetup = if ($UseVision) { Get-ModelVisionModulePath -Key $ModelKey -Def $defSetup -Backend ollama } else { '' }
-            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey -ForceRebuild } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey -ForceRebuild -VisionModulePath $(if ($visionSetup) { $visionSetup } else { '' }) }
-            Write-Host "Created/rebuilt alias: $modelName" -ForegroundColor Green
+            # Strict has no effect on the GGUF path — same file regardless.
+            $path = Get-ModelGgufPath -Key $ModelKey -Def $def
+            Write-Host "GGUF cached at: $path" -ForegroundColor Green
         }
 
-        "show" {
-            $defShow = Get-ModelDef -Key $ModelKey
-            $visionShow = if ($UseVision) { Get-ModelVisionModulePath -Key $ModelKey -Def $defShow -Backend ollama } else { '' }
-            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey -VisionModulePath $(if ($visionShow) { $visionShow } else { '' }) }
-            & ollama show $modelName
+        "findbest" {
+            Invoke-LlamaCppTunerWizardFlow -ModelKey $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode -UseSpectrePrompts:$UseSpectrePrompts
+        }
+
+        "resetbest" {
+            Invoke-LlamaCppBestResetWizardFlow -ModelKey $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode -UseSpectrePrompts:$UseSpectrePrompts
         }
 
         default {
@@ -1340,17 +1216,16 @@ function Start-LLMWizardClassic {
     $modelKey     = $null
     $contextKey   = $null
     $action       = $null
-    $useQ8        = $false
     $useStrict    = $false
     $useVisionFlag = [bool]$UseVision
-    $backend      = 'ollama'
-    $llamaCppMode = $null
+    $llamaCppMode = (Resolve-LlamaCppMode -Mode '')
     $kvK          = $null
     $kvV          = $null
     $useAutoBest  = $false
     $autoBestProfile = 'auto'
     $saveAsDefault = $false
     $step         = 'model'
+    $visionAvail  = $null
 
     while ($true) {
         switch ($step) {
@@ -1367,41 +1242,35 @@ function Start-LLMWizardClassic {
                 $autoBestProfile = 'auto'
                 $saveAsDefault = $false
                 $useVisionFlag = $false
+                $visionAvail = $null
                 $step = 'quant'
             }
 
             'quant' {
                 $def = Get-ModelDef -Key $modelKey
-                if (-not $def.ContainsKey("Quants")) { $step = 'backend'; break }
+                if (-not $def.ContainsKey("Quants")) { $step = 'mode'; break }
 
                 $quantKey = Select-LLMQuantKey -ModelKey $modelKey
-                if ($null -eq $quantKey)        { $step = 'model';   break }   # back
-                if ($quantKey -eq '__keep__')   { $step = 'backend'; break }
+                if ($null -eq $quantKey)        { $step = 'model'; break }
+                if ($quantKey -eq '__keep__')   { $step = 'mode';  break }
                 Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
-                $step = 'backend'
+                $step = 'mode'
             }
 
-            'backend' {
+            'mode' {
                 $def = Get-ModelDef -Key $modelKey
-                $picked = Select-LLMBackend -Def $def
+                $picked = Select-LLMMode
                 if ($null -eq $picked) {
                     $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
                     break
                 }
-                switch ($picked) {
-                    'ollama'              { $backend = 'ollama';   $llamaCppMode = $null }
-                    'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
-                    'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
-                    'llamacpp-mtpturbo'   { $backend = 'llamacpp'; $llamaCppMode = 'mtpturbo' }
-                }
+                $llamaCppMode = $picked
 
-                # Check if this model has vision support: configured VisionModule, local mmproj file, or HF available.
-                $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def -Backend $backend
+                $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def
                 $hasVision = $visionAvail.Local -or $visionAvail.AvailableOnHF
                 if (-not $hasVision) {
                     $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
                 } elseif ($useVisionFlag) {
-                    # Pre-set by -UseVision flag; skip vision prompt.
                     $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
                 } else {
                     $step = 'vision'
@@ -1409,14 +1278,14 @@ function Start-LLMWizardClassic {
             }
 
             'vision' {
-                # Re-check availability after potential download from previous step
+                $def = Get-ModelDef -Key $modelKey
                 if (-not $visionAvail) {
-                    $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def -Backend $backend
+                    $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def
                 }
                 if (-not $visionAvail.Local -and $visionAvail.AvailableOnHF) {
                     Write-Host "Downloading vision module '$($visionAvail.Filename)' from HuggingFace..." -ForegroundColor Yellow
                     try {
-                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def -Backend $backend
+                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def
                         Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $visionFolder | Out-Null
                         Write-Host "Downloaded '$($visionAvail.Filename)'." -ForegroundColor Green
                         $visionAvail.Local = $true
@@ -1425,46 +1294,37 @@ function Start-LLMWizardClassic {
                     }
                 }
                 $useVision = Read-LLMVisionToggle
-                if ($null -eq $useVision) { $step = 'backend'; break }   # back
+                if ($null -eq $useVision) { $step = 'mode'; break }
                 $useVisionFlag = [bool]$useVision
                 $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
             }
 
             'strict' {
                 $strict = Read-LLMStrictToggle
-                if ($null -eq $strict) { $step = 'backend'; break }   # back
+                if ($null -eq $strict) { $step = 'mode'; break }
                 $useStrict = [bool]$strict
-
-                if ($useStrict) {
-                    # Strict pins context to Get-ModelStrictBaseContextKey via the
-                    # alias build; the empty contextKey is correct here because the
-                    # shortcut layer rejects -Strict + -Ctx together.
-                    $contextKey = ""
-                    $step = 'action'
-                } else {
-                    $step = 'context'
-                }
+                $step = 'context'
             }
 
             'context' {
                 $contextKey = Select-LLMContextKey -ModelKey $modelKey
                 if ($null -eq $contextKey) {
                     $def = Get-ModelDef -Key $modelKey
-                    $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'backend' }
+                    $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'mode' }
                     break
                 }
                 $step = 'action'
             }
 
             'action' {
-                $action = Select-LLMAction -Backend $backend
+                $action = Select-LLMAction
                 if ([string]::IsNullOrWhiteSpace($action)) {
-                    $step = if ($useStrict) { 'strict' } else { 'context' }
+                    $step = 'context'
                     break
                 }
 
                 if ($action -eq "setdefault") {
-                    $target = Select-LLMDefaultTarget -Backend $backend
+                    $target = Select-LLMDefaultTarget
                     if ([string]::IsNullOrWhiteSpace($target)) {
                         $step = 'action'
                         break
@@ -1475,12 +1335,8 @@ function Start-LLMWizardClassic {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("chat", "unshackled", "claude", "codex", "remote")) {
-                    if ($backend -eq 'llamacpp') {
-                        $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
-                    } else {
-                        $step = 'q8'
-                    }
+                if ($action -in @("unshackled", "claude", "codex", "remote")) {
+                    $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false
                     $autoBestProfile = 'auto'
@@ -1506,13 +1362,6 @@ function Start-LLMWizardClassic {
                 $step = 'kvcache'
             }
 
-            'q8' {
-                $q8 = Read-LLMQ8Toggle
-                if ($null -eq $q8) { $step = 'action'; break }   # back
-                $useQ8 = [bool]$q8
-                $step = 'launch'
-            }
-
             'kvcache' {
                 $picked = Select-LLMKvCache -Mode $llamaCppMode
                 if ($null -eq $picked) { $step = 'action'; break }
@@ -1527,14 +1376,14 @@ function Start-LLMWizardClassic {
                 try {
                     if ($saveAsDefault) {
                         Save-LLMDefaultLaunch -ModelKey $modelKey -ContextKey $contextKey -Action $action `
-                            -Backend $backend -LlamaCppMode $llamaCppMode `
-                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict `
+                            -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict `
                             -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
                         Pause-Menu
                     } else {
                         Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
-                            -Backend $backend -LlamaCppMode $llamaCppMode `
-                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseVision:$useVisionFlag -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
+                            -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict -UseVision:$useVisionFlag -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
                     }
                 }
                 catch {
@@ -1549,10 +1398,7 @@ function Start-LLMWizardClassic {
     }
 }
 
-# Spectre wizard
-# Mirrors Start-LLMWizardClassic but uses PwshSpectreConsole's selection prompts.
-# Gated on Test-LocalLLMSpectreAvailable (same env switch as the dashboard:
-# $env:LOCAL_LLM_NO_SPECTRE=1 forces the classic wizard even when Spectre is installed).
+# ---- Spectre wizard ----
 
 function Show-LLMWizardHeaderSpectre {
     Format-SpectrePanel -Header "LocalBox" -Color Green -Data ("[grey50]Config:[/] {0}" -f (ConvertTo-LocalLLMSpectreSafe $script:LocalLLMConfigPath)) | Out-Host
@@ -1563,8 +1409,6 @@ function Select-LLMModelKeySpectre {
 
     $keys = @(Get-FilteredModelKeys -IncludeAll:$All)
 
-    # Same fresh-catalog fallback as the classic wizard: skip straight to
-    # all-tiers when no recommended model exists yet.
     if ($keys.Count -eq 0 -and -not $All) {
         $keys = @(Get-FilteredModelKeys -IncludeAll)
         if ($keys.Count -gt 0) {
@@ -1599,7 +1443,6 @@ function Select-LLMModelKeySpectre {
 }
 
 function Select-LLMQuantKeySpectre {
-    # Returns: a quant key (chosen), '__keep__' (keep current), or $null (back).
     param([Parameter(Mandatory = $true)][string]$ModelKey)
 
     $def = Get-ModelDef -Key $ModelKey
@@ -1643,11 +1486,11 @@ function Select-LLMContextKeySpectre {
 
     $labelMap = [ordered]@{}
     foreach ($ck in $def.Contexts.Keys) {
-        $aliasName = ConvertTo-LocalLLMSpectreSafe (Get-ModelAliasName -Def $def -ContextKey $ck)
         $tokens = Get-ModelContextValue -Def $def -ContextKey $ck
         $ctxLabel = if ([string]::IsNullOrWhiteSpace($ck)) { 'default' } else { $ck }
         $ctxLabelSafe = ConvertTo-LocalLLMSpectreSafe $ctxLabel
-        $head = "$aliasName  ($tokens tokens, $ctxLabelSafe)"
+        $rootSafe = ConvertTo-LocalLLMSpectreSafe $def.Root
+        $head = "$rootSafe  ($tokens tokens, $ctxLabelSafe)"
         $note = Get-ModelContextNote -Def $def -ContextKey $ck
         $label = if ([string]::IsNullOrWhiteSpace($note)) { $head } else { "$head · " + (ConvertTo-LocalLLMSpectreSafe $note) }
         $labelMap[$label] = $ck
@@ -1664,33 +1507,16 @@ function Select-LLMContextKeySpectre {
 }
 
 function Select-LLMActionSpectre {
-    param([string]$Backend = 'ollama')
-
-    $labelMap = if ($Backend -eq 'llamacpp') {
-        [ordered]@{
-            "Claude Code  -  Local model behind Claude Code" = 'claude'
-            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
-            "Remote      -  Serve this model for Unshackled clients" = 'remote'
-            "Set llmdefault - Save this model/profile/target" = 'setdefault'
-            "Find best settings - Auto-tune for this machine" = 'findbest'
-            "Delete best settings - Reset saved AutoBest config" = 'resetbest'
-            "Setup only   -  Download GGUF without launching" = 'setup'
-            "[[Back]]"                                       = '__back__'
-        }
-    } else {
-        [ordered]@{
-            "Claude Code  -  Local model behind Claude Code" = 'claude'
-            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
-            "Remote      -  Serve this model for Unshackled clients" = 'remote'
-            "Ollama chat  -  Plain ollama run"               = 'chat'
-            "Set llmdefault - Save this model/profile/target" = 'setdefault'
-            "Benchmark    -  Run ospeed for selected alias"  = 'benchmark'
-            "Setup only   -  (Re)build alias"                = 'setup'
-            "Show         -  Run ollama show"                = 'show'
-            "[[Back]]"                                       = '__back__'
-        }
+    $labelMap = [ordered]@{
+        "Claude Code  -  Local model behind Claude Code" = 'claude'
+        "Codex       -  Local model behind OpenAI Codex"  = 'codex'
+        "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+        "Remote      -  Serve this model for Unshackled clients" = 'remote'
+        "Set llmdefault - Save this model/profile/target" = 'setdefault'
+        "Find best settings - Auto-tune for this machine" = 'findbest'
+        "Delete best settings - Reset saved AutoBest config" = 'resetbest'
+        "Setup only   -  Download GGUF without launching" = 'setup'
+        "[[Back]]"                                       = '__back__'
     }
 
     $chosen = Read-SpectreSelection -Message "Select action" -Choices @($labelMap.Keys) -PageSize 10
@@ -1702,26 +1528,14 @@ function Select-LLMActionSpectre {
 }
 
 function Select-LLMDefaultTargetSpectre {
-    param([string]$Backend = 'ollama')
-
-    $labelMap = if ($Backend -eq 'llamacpp') {
-        [ordered]@{
-            "Claude Code  -  Local model behind Claude Code" = 'claude'
-            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
-            "[[Back]]"                                      = '__back__'
-        }
-    } else {
-        [ordered]@{
-            "Claude Code  -  Local model behind Claude Code" = 'claude'
-            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
-            "Ollama chat  -  Plain ollama run"               = 'chat'
-            "[[Back]]"                                      = '__back__'
-        }
+    $labelMap = [ordered]@{
+        "Claude Code  -  Local model behind Claude Code" = 'claude'
+        "Codex       -  Local model behind OpenAI Codex"  = 'codex'
+        "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+        "[[Back]]"                                      = '__back__'
     }
 
-    $chosen = Read-SpectreSelection -Message "llmdefault target" -Choices @($labelMap.Keys) -PageSize 7
+    $chosen = Read-SpectreSelection -Message "llmdefault target" -Choices @($labelMap.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
     $value = $labelMap[$chosen]
 
@@ -1797,24 +1611,16 @@ function Select-LlamaCppPostTuneProfileSpectre {
     return [string]$choices[$chosen]
 }
 
-function Select-LLMBackendSpectre {
-    # Returns 'ollama', 'llamacpp-native', 'llamacpp-turboquant',
-    # 'llamacpp-mtpturbo', or $null (back).
-    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
-
-    if (-not (Test-LlamaCppEligible -Def $Def)) {
-        return 'ollama'
-    }
-
+function Select-LLMModeSpectre {
+    # Returns 'native', 'turboquant', 'mtpturbo', or $null (back).
     $labelMap = [ordered]@{
-        "Ollama (default)                          -  Existing alias-based path"               = 'ollama'
-        "llama.cpp native                          -  Upstream binary (mainline KV + draft-mtp)" = 'llamacpp-native'
-        "llama.cpp turboquant (turbo3/turbo4 KV)   -  Fork binary supporting turbo KV"         = 'llamacpp-turboquant'
-        "llama.cpp mtpturbo (MTP + turbo KV)       -  Self-built fork combining both"          = 'llamacpp-mtpturbo'
-        "[[Back]]"                                                                             = '__back__'
+        "llama.cpp native                          -  Upstream binary (mainline KV + draft-mtp)" = 'native'
+        "llama.cpp turboquant (turbo3/turbo4 KV)   -  Fork binary supporting turbo KV"           = 'turboquant'
+        "llama.cpp mtpturbo (MTP + turbo KV)       -  Self-built fork combining both"            = 'mtpturbo'
+        "[[Back]]"                                                                               = '__back__'
     }
 
-    $chosen = Read-SpectreSelection -Message "Select backend" -Choices @($labelMap.Keys) -PageSize 6
+    $chosen = Read-SpectreSelection -Message "Select llama.cpp mode" -Choices @($labelMap.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
     $value = $labelMap[$chosen]
 
@@ -1823,7 +1629,6 @@ function Select-LLMBackendSpectre {
 }
 
 function Select-LLMKvCacheSpectre {
-    # Returns @{ K; V } or $null (back).
     param([Parameter(Mandatory = $true)][string]$Mode)
 
     $choices = Get-LlamaCppKvCacheChoices -Mode $Mode
@@ -1857,7 +1662,6 @@ function Select-LLMKvCacheSpectre {
 }
 
 function Read-LLMVisionToggleSpectre {
-    # Returns $true (vision on), $false (vision off), or $null (back).
     $choices = [ordered]@{
         'No   -  launch without vision support'            = $false
         'Yes  -  load multimodal module (mmproj.gguf)'     = $true
@@ -1869,33 +1673,13 @@ function Read-LLMVisionToggleSpectre {
     return [bool]$choices[$chosen]
 }
 
-function Read-LLMQ8ToggleSpectre {
-    # Returns $true (q8 on), $false (q8 off), or $null (back).
-    # Important: check the label string for back BEFORE looking up the boolean
-    # value. PowerShell's `-eq` coerces the right operand to the left's type;
-    # `$true -eq '__back__'` evaluates to $true (non-empty string -> $true),
-    # so a value-side back check would falsely fire on the Yes branch.
-    $choices = [ordered]@{
-        'No  -  default'    = $false
-        'Yes -  q8 KV cache' = $true
-        '[[Back]]'          = '__back__'
-    }
-    $chosen = Read-SpectreSelection -Message "Use q8 KV cache?" -Choices @($choices.Keys) -PageSize 5
-    if ($null -eq $chosen) { return $null }
-    if ($chosen -eq '[[Back]]') { return $null }
-    return [bool]$choices[$chosen]
-}
-
 function Read-LLMStrictToggleSpectre {
-    # Returns $true (strict on), $false (strict off), or $null (back).
-    # See Read-LLMQ8ToggleSpectre for why the back check is on $chosen, not
-    # on the looked-up value.
     $choices = [ordered]@{
-        'No  -  base alias, normal context selection'                 = $false
-        'Yes -  <root>-strict alias (overlay prompt, pinned context)' = $true
-        '[[Back]]'                                                    = '__back__'
+        'No  -  skip the strict overlay'                                                     = $false
+        'Yes -  apply the strict engineering overlay (tighter sampler + system prompt)'      = $true
+        '[[Back]]'                                                                            = '__back__'
     }
-    $chosen = Read-SpectreSelection -Message "Use strict mode? (skips context selection when on)" -Choices @($choices.Keys) -PageSize 5
+    $chosen = Read-SpectreSelection -Message "Use strict mode?" -Choices @($choices.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
     if ($chosen -eq '[[Back]]') { return $null }
     return [bool]$choices[$chosen]
@@ -2008,8 +1792,6 @@ function Get-LocalLLMErrorLogPath {
 }
 
 function Save-LocalLLMWizardError {
-    # Captures a full exception record so the Spectre live-display can't scroll it off
-    # screen. Writes to ~/.local-llm/wizard-errors.log AND prints a high-contrast block.
     param(
         [Parameter(Mandatory = $true)]$ErrorRecord,
         [string]$Context = "wizard"
@@ -2045,8 +1827,6 @@ function Save-LocalLLMWizardError {
 }
 
 function Invoke-LLMWizardStep {
-    # Single-shot try/catch wrapper for one Spectre prompt. On error, logs the full record,
-    # pauses so the user can read the screen, and returns $null instead of throwing further.
     param(
         [Parameter(Mandatory = $true)][scriptblock]$Action,
         [Parameter(Mandatory = $true)][string]$Context,
@@ -2118,17 +1898,16 @@ function Start-LLMWizardSpectre {
     $modelKey     = $null
     $contextKey   = $null
     $action       = $null
-    $useQ8        = $false
     $useStrict    = $false
     $useVisionFlag = [bool]$UseVision
-    $backend      = 'ollama'
-    $llamaCppMode = $null
+    $llamaCppMode = (Resolve-LlamaCppMode -Mode '')
     $kvK          = $null
     $kvV          = $null
     $useAutoBest  = $false
     $autoBestProfile = 'auto'
     $saveAsDefault = $false
     $step         = 'model'
+    $visionAvail  = $null
 
     while ($true) {
         switch ($step) {
@@ -2145,19 +1924,20 @@ function Start-LLMWizardSpectre {
                 $useAutoBest = $false
                 $autoBestProfile = 'auto'
                 $saveAsDefault = $false
+                $visionAvail = $null
                 Invoke-LLMSpectreTransitionCooldown -Message 'Model selected'
                 $step = 'quant'
             }
 
             'quant' {
                 $def = Get-ModelDef -Key $modelKey
-                if (-not $def.ContainsKey("Quants")) { $step = 'backend'; break }
+                if (-not $def.ContainsKey("Quants")) { $step = 'mode'; break }
 
                 $quantKey = Invoke-LLMWizardStep -Context "select-quant ($modelKey)" -Action {
                     Select-LLMQuantKeySpectre -ModelKey $modelKey
                 } -RetryOnceOnNull -RetryDelayMs (Get-LLMSpectrePromptCooldownMs)
-                if ($null -eq $quantKey)      { $step = 'model';   break }   # back
-                if ($quantKey -eq '__keep__') { $step = 'backend'; break }
+                if ($null -eq $quantKey)      { $step = 'model'; break }
+                if ($quantKey -eq '__keep__') { $step = 'mode';  break }
                 try {
                     Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
                 }
@@ -2167,31 +1947,25 @@ function Start-LLMWizardSpectre {
                     $step = 'quant'
                     break
                 }
-                $step = 'backend'
+                $step = 'mode'
             }
 
-            'backend' {
+            'mode' {
                 $def = Get-ModelDef -Key $modelKey
-                $picked = Invoke-LLMWizardStep -Context "select-backend ($modelKey)" -Action {
-                    Select-LLMBackendSpectre -Def $def
+                $picked = Invoke-LLMWizardStep -Context "select-mode ($modelKey)" -Action {
+                    Select-LLMModeSpectre
                 } -RetryOnceOnNull -RetryDelayMs (Get-LLMSpectrePromptCooldownMs)
                 if ($null -eq $picked) {
                     $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
                     break
                 }
-                switch ($picked) {
-                    'ollama'              { $backend = 'ollama';   $llamaCppMode = $null }
-                    'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
-                    'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
-                    'llamacpp-mtpturbo'   { $backend = 'llamacpp'; $llamaCppMode = 'mtpturbo' }
-                }
-                # Check if this model has vision support: configured VisionModule, local mmproj file, or HF available.
-                $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def -Backend $backend
+                $llamaCppMode = $picked
+
+                $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def
                 $hasVision = $visionAvail.Local -or $visionAvail.AvailableOnHF
                 if (-not $hasVision) {
                     $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
                 } elseif ($useVisionFlag) {
-                    # Pre-set by -UseVision flag; skip vision prompt.
                     $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
                 } else {
                     $step = 'vision'
@@ -2199,14 +1973,14 @@ function Start-LLMWizardSpectre {
             }
 
             'vision' {
-                # Re-check availability after potential download from previous step
+                $def = Get-ModelDef -Key $modelKey
                 if (-not $visionAvail) {
-                    $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def -Backend $backend
+                    $visionAvail = Test-ModelVisionModuleAvailable -Key $modelKey -Def $def
                 }
                 if (-not $visionAvail.Local -and $visionAvail.AvailableOnHF) {
                     Write-Host "Downloading vision module '$($visionAvail.Filename)' from HuggingFace..." -ForegroundColor Yellow
                     try {
-                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def -Backend $backend
+                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def
                         Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $visionFolder | Out-Null
                         Write-Host "Downloaded '$($visionAvail.Filename)'." -ForegroundColor Green
                         $visionAvail.Local = $true
@@ -2214,11 +1988,10 @@ function Start-LLMWizardSpectre {
                         Write-Warning "Failed to download vision module: $_"
                     }
                 }
-                $capturedBackend = $backend
                 $useVision = Invoke-LLMWizardStep -Context 'vision-toggle' -Default $null -Action {
                     Read-LLMVisionToggleSpectre
                 }
-                if ($null -eq $useVision) { $step = 'backend'; break }
+                if ($null -eq $useVision) { $step = 'mode'; break }
                 $useVisionFlag = [bool]$useVision
                 $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
             }
@@ -2227,15 +2000,9 @@ function Start-LLMWizardSpectre {
                 $strict = Invoke-LLMWizardStep -Context "strict-toggle ($modelKey)" -Default $null -Action {
                     Read-LLMStrictToggleSpectre
                 }
-                if ($null -eq $strict) { $step = 'backend'; break }
+                if ($null -eq $strict) { $step = 'mode'; break }
                 $useStrict = [bool]$strict
-
-                if ($useStrict) {
-                    $contextKey = ""
-                    $step = 'action'
-                } else {
-                    $step = 'context'
-                }
+                $step = 'context'
             }
 
             'context' {
@@ -2244,26 +2011,24 @@ function Start-LLMWizardSpectre {
                 }
                 if ($null -eq $contextKey) {
                     $def = Get-ModelDef -Key $modelKey
-                    $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'backend' }
+                    $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'mode' }
                     break
                 }
                 $step = 'action'
             }
 
             'action' {
-                $captured = $backend
                 $action = Invoke-LLMWizardStep -Context 'select-action' -Action {
-                    Select-LLMActionSpectre -Backend $captured
+                    Select-LLMActionSpectre
                 }
                 if ([string]::IsNullOrWhiteSpace($action)) {
-                    $step = if ($useStrict) { 'strict' } else { 'context' }
+                    $step = 'context'
                     break
                 }
 
                 if ($action -eq "setdefault") {
-                    $capturedBackend = $backend
                     $target = Invoke-LLMWizardStep -Context 'llmdefault-target' -Action {
-                        Select-LLMDefaultTargetSpectre -Backend $capturedBackend
+                        Select-LLMDefaultTargetSpectre
                     }
                     if ([string]::IsNullOrWhiteSpace($target)) {
                         $step = 'action'
@@ -2275,12 +2040,8 @@ function Start-LLMWizardSpectre {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("chat", "unshackled", "claude", "codex", "remote")) {
-                    if ($backend -eq 'llamacpp') {
-                        $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
-                    } else {
-                        $step = 'q8'
-                    }
+                if ($action -in @("unshackled", "claude", "codex", "remote")) {
+                    $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false
                     $autoBestProfile = 'auto'
@@ -2311,15 +2072,6 @@ function Start-LLMWizardSpectre {
                 $step = 'kvcache'
             }
 
-            'q8' {
-                $q8 = Invoke-LLMWizardStep -Context 'q8-toggle' -Default $null -Action {
-                    Read-LLMQ8ToggleSpectre
-                }
-                if ($null -eq $q8) { $step = 'action'; break }   # back
-                $useQ8 = [bool]$q8
-                $step = 'launch'
-            }
-
             'kvcache' {
                 $captured = $llamaCppMode
                 $picked = Invoke-LLMWizardStep -Context "kvcache ($llamaCppMode)" -Default $null -Action {
@@ -2337,18 +2089,18 @@ function Start-LLMWizardSpectre {
                 try {
                     if ($saveAsDefault) {
                         Save-LLMDefaultLaunch -ModelKey $modelKey -ContextKey $contextKey -Action $action `
-                            -Backend $backend -LlamaCppMode $llamaCppMode `
-                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict `
+                            -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict `
                             -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
                         Pause-Menu
                     } else {
                         Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
-                            -Backend $backend -LlamaCppMode $llamaCppMode `
-                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseVision:$useVisionFlag -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -UseSpectrePrompts
+                            -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict -UseVision:$useVisionFlag -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -UseSpectrePrompts
                     }
                 }
                 catch {
-                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend/strict=$useStrict)"
+                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/strict=$useStrict)"
                     Pause-Menu
                 }
                 $saveAsDefault = $false
@@ -2367,9 +2119,6 @@ function Get-LocalLLMLaunchLogPath {
 }
 
 function Write-LaunchLog {
-    # Appends a timestamped line to ~/.local-llm/launch.log for debugging
-    # launch flows (vision, proxy, llama-server, claude). Follow with:
-    #   Get-Content -Tail 50 -Wait (Join-Path $HOME '.local-llm' 'launch.log')
     param(
         [Parameter(Mandatory = $true)][string]$Message,
         [ValidateSet('INFO', 'WARN', 'ERROR', 'VISION', 'PROXY', 'SERVER', 'LAUNCH')][string]$Level = 'INFO'
@@ -2387,7 +2136,6 @@ function Write-LaunchLog {
 }
 
 function llmlog {
-    # Print the tail of ~/.local-llm/launch.log (launch debug trace).
     param([int]$Lines = 80)
 
     $logPath = Get-LocalLLMLaunchLogPath
@@ -2401,7 +2149,6 @@ function llmlog {
 }
 
 function llmlogerr {
-    # Print the tail of ~/.local-llm/wizard-errors.log so a captured trace is easy to grab.
     param([int]$Lines = 80)
 
     $logPath = Get-LocalLLMErrorLogPath

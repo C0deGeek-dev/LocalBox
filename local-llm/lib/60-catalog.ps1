@@ -322,7 +322,7 @@ function Add-LocalLLMModel {
 
     Reload-LocalLLMConfig
 
-    Write-Host "Run 'initmodel $Key' to download the GGUF and create Ollama aliases." -ForegroundColor Yellow
+    Write-Host "Launch '$Key' via the wizard ('llm') or directly — the GGUF downloads on first launch." -ForegroundColor Yellow
 }
 
 function addllm {
@@ -491,7 +491,7 @@ function Update-LocalLLMModelQuants {
     Write-Host "Added $addedCount quant(s) to '$Key' in $script:LocalLLMConfigPath." -ForegroundColor Green
     Reload-LocalLLMConfig
 
-    Write-Host "Run 'initmodel $Key' to download the new quants on demand (only when you launch a context that needs them)." -ForegroundColor Yellow
+    Write-Host "New quants download on demand the first time you launch a context that needs them." -ForegroundColor Yellow
 }
 
 function updatellm {
@@ -508,12 +508,10 @@ function Get-RegisteredShortcutNamesForModel {
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
 
     $names = New-Object System.Collections.Generic.List[string]
-    $suffixes = @("", "q8", "chat")
+    $names.Add($Def.Root) | Out-Null
 
-    foreach ($base in (Get-ModelAliasNames -Def $Def)) {
-        foreach ($suffix in $suffixes) {
-            $names.Add("$base$suffix") | Out-Null
-        }
+    if ($Def.Contains("ShortName") -and -not [string]::IsNullOrWhiteSpace($Def.ShortName)) {
+        $names.Add([string]$Def.ShortName) | Out-Null
     }
 
     if ($Def.ContainsKey("Quants") -and $Def.ContainsKey("QuantShortcut")) {
@@ -540,25 +538,18 @@ function Remove-LocalLLMModel {
     }
 
     $def = $cfg.Models[$Key]
-    $aliasNames = @(Get-ModelAliasNames -Def $def)
     $folder = $null
 
-    if ($def.SourceType -eq 'gguf' -and -not $KeepFiles) {
-        $folder = Join-Path $script:Cfg.OllamaCommunityRoot $def.Root
+    if (-not $KeepFiles) {
+        $folder = Join-Path $script:Cfg.LlamaCppGgufRoot $def.Root
     }
 
     Write-Host ""
     Write-Host "Will remove '$Key'  ($($def.DisplayName))" -ForegroundColor Yellow
-    Write-Host "  Ollama aliases : $($aliasNames -join ', ')"
-
-    if ($def.SourceType -eq 'remote') {
-        Write-Host "  Ollama pull    : $($def.RemoteModel)"
-    }
 
     if ($folder) {
         Write-Host "  GGUF folder    : $folder  (will be deleted)"
-    }
-    elseif ($def.SourceType -eq 'gguf') {
+    } else {
         Write-Host "  GGUF folder    : kept (-KeepFiles)"
     }
 
@@ -567,11 +558,13 @@ function Remove-LocalLLMModel {
     $hostedAliases = New-Object System.Collections.Generic.List[string]
     $shortcutNames = Get-RegisteredShortcutNamesForModel -Def $def
 
-    foreach ($alias in @($cfg.CommandAliases.Keys)) {
-        $target = $cfg.CommandAliases[$alias]
+    if ($cfg.CommandAliases) {
+        foreach ($alias in @($cfg.CommandAliases.Keys)) {
+            $target = $cfg.CommandAliases[$alias]
 
-        if ($shortcutNames -contains $target -or $alias -in $shortcutNames) {
-            $hostedAliases.Add($alias) | Out-Null
+            if ($shortcutNames -contains $target -or $alias -in $shortcutNames) {
+                $hostedAliases.Add($alias) | Out-Null
+            }
         }
     }
 
@@ -588,10 +581,6 @@ function Remove-LocalLLMModel {
             return
         }
     }
-
-    Stop-OllamaModels
-    Remove-ModelAliases -Key $Key
-    Remove-ModelRemotePull -Key $Key
 
     if ($folder -and (Test-Path $folder)) {
         Remove-Item -Recurse -Force $folder -ErrorAction SilentlyContinue
@@ -640,129 +629,4 @@ function rmllm {
     )
 
     Remove-LocalLLMModel @PSBoundParameters
-}
-
-# Orphan Ollama models: present locally but not in llm-models.json.
-
-function Get-AllManagedOllamaNames {
-    # Names this profile considers "managed" -- every alias the catalog declares
-    # as well as the upstream remote pull (e.g. "devstral-small-2:latest"), with
-    # and without ":latest" so matches against `ollama list` succeed both ways.
-    $names = New-Object System.Collections.Generic.Hashset[string] ([System.StringComparer]::OrdinalIgnoreCase)
-
-    foreach ($key in (Get-ModelKeys)) {
-        $def = Get-ModelDef -Key $key
-
-        foreach ($alias in (Get-ModelAliasNames -Def $def)) {
-            $names.Add($alias) | Out-Null
-            $names.Add("${alias}:latest") | Out-Null
-        }
-
-        # Strict siblings — managed regardless of the current Strict flag, so
-        # leftovers from a previous build don't get classified as orphans
-        # before the next 'init -Force' or 'removellm' rebuilds the entry.
-        foreach ($contextKey in $def.Contexts.Keys) {
-            $strictName = Get-ModelStrictAliasName -Def $def -ContextKey $contextKey
-            $names.Add($strictName) | Out-Null
-            $names.Add("${strictName}:latest") | Out-Null
-        }
-
-        if ($def.SourceType -eq 'remote' -and $def.RemoteModel) {
-            $names.Add($def.RemoteModel) | Out-Null
-
-            if ($def.RemoteModel -notlike '*:*') {
-                $names.Add("$($def.RemoteModel):latest") | Out-Null
-            }
-            elseif ($def.RemoteModel -like '*:latest') {
-                $names.Add($def.RemoteModel.Substring(0, $def.RemoteModel.Length - 7)) | Out-Null
-            }
-        }
-    }
-
-    return $names
-}
-
-function Find-OrphanOllamaModels {
-    [CmdletBinding()]
-    param()
-
-    $managed = Get-AllManagedOllamaNames
-    $rawList = & ollama list 2>$null | Select-Object -Skip 1
-    $orphans = New-Object System.Collections.Generic.List[pscustomobject]
-
-    foreach ($line in $rawList) {
-        if (-not $line.Trim()) { continue }
-
-        $parts = $line -split '\s+'
-        if ($parts.Count -lt 3) { continue }
-
-        $name = $parts[0]
-
-        if ($managed.Contains($name)) { continue }
-
-        $base = if ($name -like '*:latest') { $name.Substring(0, $name.Length - 7) } else { $name }
-        if ($managed.Contains($base)) { continue }
-
-        $orphans.Add([pscustomobject]@{
-                Name = $name
-                Id   = $parts[1]
-                Size = ($parts[2..3] -join ' ')
-            }) | Out-Null
-    }
-
-    return $orphans
-}
-
-function Remove-OrphanOllamaModels {
-    [CmdletBinding()]
-    param([switch]$Force)
-
-    $orphans = @(Find-OrphanOllamaModels)
-
-    if ($orphans.Count -eq 0) {
-        Write-Host "No orphan Ollama models found." -ForegroundColor Green
-        return
-    }
-
-    Write-Host ""
-    Write-Host "Orphan Ollama models (in 'ollama list' but not in llm-models.json):" -ForegroundColor Yellow
-    Write-Host ""
-    $orphans | Format-Table -AutoSize | Out-String | Write-Host
-
-    if (-not $Force) {
-        $answer = (Read-Host "Type 'yes' to remove all $($orphans.Count) orphan model(s)").Trim()
-
-        if ($answer -ne 'yes') {
-            Write-Host "Aborted." -ForegroundColor DarkGray
-            return
-        }
-    }
-
-    Stop-OllamaModels
-
-    foreach ($orphan in $orphans) {
-        Write-Host "Removing $($orphan.Name)..." -ForegroundColor DarkGray
-        & ollama rm $orphan.Name 2>$null | Out-Null
-    }
-
-    Write-Host ""
-    Write-Host "Removed $($orphans.Count) orphan model(s)." -ForegroundColor Green
-}
-
-function cleanorphans {
-    [CmdletBinding()]
-    param([switch]$Force)
-
-    Remove-OrphanOllamaModels -Force:$Force
-}
-
-function listorphans {
-    $orphans = @(Find-OrphanOllamaModels)
-
-    if ($orphans.Count -eq 0) {
-        Write-Host "No orphan Ollama models." -ForegroundColor Green
-        return
-    }
-
-    $orphans | Format-Table -AutoSize
 }

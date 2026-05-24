@@ -11,11 +11,10 @@
 # top of llm-models.json). Used for legacy-shape detection and for clearer
 # error messages from Set-LocalLLMSetting.
 $script:LocalLLMDefaultsKeys = @(
-    'MinOllamaVersion', 'Default', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot',
-    'RequireAdvertisedTools', 'NoThinkProxyPort', 'NoThinkProxyRequiredVersion',
+    'Default', 'NoThinkProxyPort', 'NoThinkProxyRequiredVersion',
     'LlamaCppPort', 'LlamaCppServerPath',
     'LlamaCppTurboquantRoot', 'LlamaCppTurboquantRepo', 'LlamaCppMtpTurboRoot', 'LlamaCppGgufRoot',
-    'LlamaCppDefaultMode', 'LlamaCppHealthCheckTimeoutSec', 'LlamaCppCoexistOllama',
+    'LlamaCppDefaultMode', 'LlamaCppHealthCheckTimeoutSec',
     'LocalModelTools'
 )
 
@@ -138,9 +137,6 @@ function Import-LocalLLMConfig {
         $cfg[$key] = $settings[$key]
     }
 
-    $cfg.OllamaAppPath = Expand-LocalLLMPath $cfg.OllamaAppPath
-    $cfg.OllamaCommunityRoot = Expand-LocalLLMPath $cfg.OllamaCommunityRoot
-
     # llama.cpp backend defaults — added when missing so older catalogs keep working.
     if (-not $cfg.ContainsKey("LlamaCppPort"))                  { $cfg.LlamaCppPort = 8080 }
     if (-not $cfg.ContainsKey("LlamaCppServerPath"))            { $cfg.LlamaCppServerPath = "%USERPROFILE%\\.local-llm\\llama-cpp\\llama-server.exe" }
@@ -150,7 +146,6 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppGgufRoot"))              { $cfg.LlamaCppGgufRoot = "%USERPROFILE%\\.local-llm\\gguf" }
     if (-not $cfg.ContainsKey("LlamaCppDefaultMode"))           { $cfg.LlamaCppDefaultMode = "native" }
     if (-not $cfg.ContainsKey("LlamaCppHealthCheckTimeoutSec")) { $cfg.LlamaCppHealthCheckTimeoutSec = 300 }
-    if (-not $cfg.ContainsKey("LlamaCppCoexistOllama"))         { $cfg.LlamaCppCoexistOllama = $false }
     if (-not $cfg.ContainsKey("LlamaCppNCpuMoe"))               { $cfg.LlamaCppNCpuMoe = 35 }
     if (-not $cfg.ContainsKey("LlamaCppMlock"))                 { $cfg.LlamaCppMlock = $true }
     if (-not $cfg.ContainsKey("LlamaCppNoMmap"))                { $cfg.LlamaCppNoMmap = $true }
@@ -166,11 +161,13 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("CodexBypassApprovalsAndSandbox")) { $cfg.CodexBypassApprovalsAndSandbox = $true }
     if (-not $cfg.ContainsKey("CodexStreamIdleTimeoutMs"))       { $cfg.CodexStreamIdleTimeoutMs = 10000000 }
 
-    # Drop the obsolete docker-image setting if a stale settings.json or
-    # catalog still carries it.
+    # Drop obsolete settings (docker, old benchpilot toggles, Ollama-era keys).
     if ($cfg.ContainsKey("LlamaCppDockerImage")) { $cfg.Remove("LlamaCppDockerImage") | Out-Null }
     if ($cfg.ContainsKey("BenchPilotPreferExternal")) { $cfg.Remove("BenchPilotPreferExternal") | Out-Null }
     if ($cfg.ContainsKey("BenchPilotAllowLegacyFallback")) { $cfg.Remove("BenchPilotAllowLegacyFallback") | Out-Null }
+    foreach ($legacyKey in @('MinOllamaVersion', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot', 'RequireAdvertisedTools', 'LlamaCppCoexistOllama')) {
+        if ($cfg.ContainsKey($legacyKey)) { $cfg.Remove($legacyKey) | Out-Null }
+    }
 
     $cfg.LlamaCppServerPath     = Expand-LocalLLMPath $cfg.LlamaCppServerPath
     $cfg.LlamaCppTurboquantRoot = Expand-LocalLLMPath $cfg.LlamaCppTurboquantRoot
@@ -180,10 +177,6 @@ function Import-LocalLLMConfig {
     $cfg.LocalBoxRoot           = Expand-LocalLLMPath $cfg.LocalBoxRoot
 
     $cfg.UnshackledRoot = Expand-LocalLLMPath $cfg.UnshackledRoot
-
-    if (-not $cfg.ContainsKey("RequireAdvertisedTools")) {
-        $cfg.RequireAdvertisedTools = $true
-    }
 
     if (-not $cfg.ContainsKey("NoThinkProxyPort")) {
         $cfg.NoThinkProxyPort = 11435

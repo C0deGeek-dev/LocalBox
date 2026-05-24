@@ -1,123 +1,48 @@
 # Per-model shortcut function generator. For every catalog entry we bind a
 # global function (named after the model's Root or ShortName) that takes
-# -Ctx / -Q8 / -Unshackled / -Chat / -Strict / -Quant flags and dispatches to
-# Invoke-ModelShortcut.
+# -Ctx / -Unshackled / -Codex / -Strict / -Quant / -Mode flags and dispatches
+# to the llama-server launcher.
 
 function Invoke-ModelShortcut {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [switch]$UseQ8,
         [switch]$Unshackled,
         [switch]$Codex,
-        [switch]$Chat,
         [switch]$Strict,
         [switch]$UseVision,
+        [ValidateSet('native', 'turboquant', 'mtpturbo')][string]$Mode,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [switch]$AutoBest,
         [string[]]$ExtraUnshackledArgs,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
 
-    if ($Strict) {
-        if (-not (Get-ModelStrictEnabled -Def $def)) {
-            throw "Model '$Key' has Strict=false in the catalog; no strict sibling alias is built. Re-import via addllm and answer Yes to the strict prompt, or drop -Strict."
-        }
+    if ($Strict -and -not (Get-ModelStrictEnabled -Def $def)) {
+        throw "Model '$Key' has Strict=false in the catalog; refuse -Strict. Set Strict=true on the model def to enable the engineering overlay."
     }
 
-    # Q8 KV check sizes against the context that will actually be used. Strict
-    # without -Ctx keeps the legacy strict-base context; strict with -Ctx uses
-    # that context-specific strict alias.
-    if ($UseQ8) {
-        $q8CtxKey = if ($Strict -and [string]::IsNullOrWhiteSpace($ContextKey)) { Get-ModelStrictBaseContextKey -Def $def } else { $ContextKey }
-        $numCtx = Get-ModelContextValue -Def $def -ContextKey $q8CtxKey
-        $maxQ8 = Get-Q8KvMaxContext
+    $resolvedMode = Resolve-LlamaCppMode -Mode $Mode
 
-        if ($numCtx -gt $maxQ8) {
-            $ctxLabel = if ([string]::IsNullOrWhiteSpace($q8CtxKey)) { "default" } else { $q8CtxKey }
-            $vramInfo = Get-LocalLLMVRAMInfo
-            throw ("Refusing -Q8 with -Ctx $ctxLabel ($numCtx tokens). " +
-                   "q8_0 KV cache at this length exceeds the ceiling for this host ($($vramInfo.GB) GB VRAM, $($vramInfo.Source); Q8KvMaxContext=$maxQ8). " +
-                   "Drop -Q8 (pick a smaller -Ctx, drop -Strict, or raise the ceiling: Set-LocalLLMSetting Q8KvMaxContext <tokens>)")
-        }
-    }
+    Write-LaunchLog "Shortcut launch: key=$Key mode=$resolvedMode unshackled=$Unshackled codex=$Codex strict=$Strict" 'LAUNCH'
 
-    # Resolve vision module (mmproj) on demand when user opts in; always log availability.
-    $visionModulePath = if ($UseVision) {
-        Write-LaunchLog "Resolving vision module for Ollama launch (model=$Key)" 'VISION'
-        $result = Get-ModelVisionModulePath -Key $Key -Def $def -Backend ollama
-        if ($result) {
-            Write-LaunchLog "Vision module resolved: $([System.IO.Path]::GetFileName($result))" 'VISION'
-        } else {
-            Write-LaunchLog "No vision module found for $Key (Ollama)" 'WARN'
-        }
-        $result
-    } else {
-        $avail = Test-ModelVisionModuleAvailable -Key $Key -Def $def -Backend ollama
-        if ($avail.Local) {
-            Write-LaunchLog "Vision available locally ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
-        } elseif ($avail.AvailableOnHF) {
-            Write-LaunchLog "Vision available on HuggingFace ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
-        } else {
-            Write-LaunchLog "No vision module available for $Key (Ollama)" 'VISION'
-        }
-        ''
-    }
-
-    # DryRun resolves the alias name without rebuilding the Modelfile (which
-    # would create a side-effecting `ollama create`). Real launches still call
-    # Ensure-Model* so a stale or missing alias is rebuilt on the spot.
-    $modelName = if ($DryRun) {
-        if ($Strict) {
-            Get-ModelStrictAliasName -Def $def
-        } else {
-            Get-ModelAliasName -Def $def -ContextKey $ContextKey
-        }
-    } elseif ($Strict) {
-        Ensure-ModelStrictAlias -Key $Key
-    } else {
-        Ensure-ModelAlias -Key $Key -ContextKey $ContextKey -VisionModulePath $(if ($visionModulePath) { $visionModulePath } else { '' })
-    }
-
-    if ($Chat) {
-        Start-OllamaChat -Model $modelName -UseQ8:$UseQ8 -DryRun:$DryRun
-        return
-    }
-
-    $toolsList = if ($def.Contains("Tools") -and -not [string]::IsNullOrWhiteSpace($def.Tools)) {
-        $def.Tools
-    } else {
-        $script:Cfg.LocalModelTools
-    }
-
-    $thinkingPolicy = if ($def.Contains("ThinkingPolicy") -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) {
-        $def.ThinkingPolicy
-    } else {
-        "strip"
-    }
-
-    Write-LaunchLog "Ollama launch: model=$modelName vision=[$visionModulePath] unshackled=$Unshackled codex=$Codex strict=$Strict" 'LAUNCH'
-
-    $startArgs = @{
-        Model          = $modelName
-        Tools          = $toolsList
-        ThinkingPolicy = $thinkingPolicy
-        UseQ8          = $UseQ8
-        LimitTools     = [bool]$def.LimitTools
-        Unshackled     = $Unshackled
-        Codex          = $Codex
-        DryRun         = $DryRun
-    }
-
-    if ($def.Contains("IncludeInlineToolSchemas")) {
-        $startArgs.IncludeInlineToolSchemas = [bool]$def.IncludeInlineToolSchemas
-    }
-
-    if ($ExtraUnshackledArgs) {
-        $startArgs.ExtraUnshackledArgs = $ExtraUnshackledArgs
-    }
-
-    Start-ClaudeWithOllamaModel @startArgs
+    Start-ClaudeWithLlamaCppModel `
+        -Key $Key `
+        -ContextKey $ContextKey `
+        -Mode $resolvedMode `
+        -KvCacheK $KvCacheK `
+        -KvCacheV $KvCacheV `
+        -LimitTools:([bool]$def.LimitTools) `
+        -Unshackled:$Unshackled `
+        -Codex:$Codex `
+        -Strict:$Strict `
+        -UseVision:$UseVision `
+        -AutoBest:$AutoBest `
+        -ExtraUnshackledArgs $ExtraUnshackledArgs `
+        -DryRun:$DryRun
 }
 
 function Register-ShortcutFunction {
@@ -140,27 +65,12 @@ function Get-ModelShortcutName {
 }
 
 function Unregister-AllModelShortcuts {
-    # Idempotent cleanup: remove any function we may have registered earlier
-    # (with the old multi-suffix scheme or the new single-function scheme).
     foreach ($key in (Get-ModelKeys)) {
         $def = Get-ModelDef -Key $key
 
         $names = New-Object System.Collections.Generic.HashSet[string]
         $names.Add((Get-ModelShortcutName -Def $def)) | Out-Null
-
-        foreach ($contextKey in $def.Contexts.Keys) {
-            $base = Get-ModelAliasName -Def $def -ContextKey $contextKey
-            foreach ($suffix in @("", "chat", "q8")) {
-                $names.Add("$base$suffix") | Out-Null
-            }
-        }
-
-        foreach ($legacyContextKey in @('fast', 'deep', '128')) {
-            $base = "$($def.Root)$legacyContextKey"
-            foreach ($suffix in @("", "chat", "q8")) {
-                $names.Add("$base$suffix") | Out-Null
-            }
-        }
+        $names.Add($def.Root) | Out-Null
 
         if ($def.ContainsKey("Quants") -and $def.Contains("QuantShortcut")) {
             foreach ($quantKey in $def.Quants.Keys) {
@@ -190,9 +100,11 @@ function Register-ModelShortcuts {
                     [string]$Quant,
                     [switch]$Unshackled,
                     [switch]$Codex,
-                    [switch]$Chat,
-                    [switch]$Q8,
                     [switch]$Strict,
+                    [ValidateSet('native', 'turboquant', 'mtpturbo')][string]$Mode,
+                    [string]$KvK,
+                    [string]$KvV,
+                    [switch]$AutoBest,
                     [Alias('WhatIf')]
                     [switch]$DryRun
                 )
@@ -202,12 +114,10 @@ function Register-ModelShortcuts {
                     return
                 }
 
-                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -UseQ8:$Q8 -Unshackled:$Unshackled -Codex:$Codex -Chat:$Chat -Strict:$Strict -DryRun:$DryRun
+                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -Unshackled:$Unshackled -Codex:$Codex -Strict:$Strict -Mode $Mode -KvCacheK $KvK -KvCacheV $KvV -AutoBest:$AutoBest -DryRun:$DryRun
             }.GetNewClosure())
     }
 
-    # Manual aliases from JSON (rarely needed under the flag-based scheme,
-    # kept as an escape hatch).
     if ($script:Cfg.CommandAliases) {
         foreach ($alias in @($script:Cfg.CommandAliases.Keys)) {
             $target = $script:Cfg.CommandAliases[$alias]
@@ -220,8 +130,6 @@ function Register-ModelShortcuts {
 }
 
 function Resolve-ModelKeyByAnyName {
-    # Accepts a model key, ShortName, or Root and returns the canonical key.
-    # Returns $null if no match.
     param([Parameter(Mandatory = $true)][string]$Name)
 
     if ($script:Cfg.Models.Contains($Name)) {
@@ -322,12 +230,10 @@ function Save-LLMDefaultLaunch {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('claude','unshackled','codex','chat')][string]$Action,
-        [Parameter(Mandatory = $true)][ValidateSet('ollama','llamacpp')][string]$Backend,
+        [Parameter(Mandatory = $true)][ValidateSet('claude','unshackled','codex')][string]$Action,
         [string]$LlamaCppMode,
         [string]$KvCacheK,
         [string]$KvCacheV,
-        [switch]$UseQ8,
         [switch]$Strict,
         [switch]$UseAutoBest,
         [string]$AutoBestProfile = 'auto'
@@ -338,9 +244,7 @@ function Save-LLMDefaultLaunch {
         ModelKey        = $ModelKey
         ContextKey      = $ContextKey
         Action          = $Action
-        Backend         = $Backend
         Strict          = [bool]$Strict
-        UseQ8           = [bool]$UseQ8
         UseAutoBest     = [bool]$UseAutoBest
         AutoBestProfile = $AutoBestProfile
     }
@@ -369,8 +273,7 @@ function Format-LLMDefaultLaunchSummary {
     $launchMap = ConvertTo-LLMDefaultLaunchHashtable -Value $Launch
     $parts = @(
         [string]$launchMap.ModelKey,
-        [string]$launchMap.Action,
-        [string]$launchMap.Backend
+        [string]$launchMap.Action
     )
 
     $ctx = if ($launchMap.Contains("ContextKey")) { [string]$launchMap.ContextKey } else { "" }
@@ -390,9 +293,6 @@ function Format-LLMDefaultLaunchSummary {
     }
     if ($launchMap.Contains("Strict") -and [bool]$launchMap.Strict) {
         $parts += "strict"
-    }
-    if ($launchMap.Contains("UseQ8") -and [bool]$launchMap.UseQ8) {
-        $parts += "q8"
     }
 
     return ($parts -join " | ")
@@ -425,11 +325,9 @@ function Invoke-LLMDefaultLaunch {
 
     $contextKey = if ($launch.Contains("ContextKey")) { [string]$launch.ContextKey } else { "" }
     $action = if ($launch.Contains("Action")) { [string]$launch.Action } else { "claude" }
-    $backend = if ($launch.Contains("Backend")) { [string]$launch.Backend } else { "ollama" }
     $llamaCppMode = if ($launch.Contains("LlamaCppMode")) { [string]$launch.LlamaCppMode } else { $null }
     $kvK = if ($launch.Contains("KvCacheK")) { [string]$launch.KvCacheK } else { $null }
     $kvV = if ($launch.Contains("KvCacheV")) { [string]$launch.KvCacheV } else { $null }
-    $useQ8 = $launch.Contains("UseQ8") -and [bool]$launch.UseQ8
     $useStrict = ($launch.Contains("Strict") -and [bool]$launch.Strict) -or [bool]$Strict
     $useAutoBest = $launch.Contains("UseAutoBest") -and [bool]$launch.UseAutoBest
     $autoBestProfile = if ($launch.Contains("AutoBestProfile") -and -not [string]::IsNullOrWhiteSpace([string]$launch.AutoBestProfile)) {
@@ -439,8 +337,8 @@ function Invoke-LLMDefaultLaunch {
     }
 
     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
-        -Backend $backend -LlamaCppMode $llamaCppMode `
-        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict `
+        -LlamaCppMode $llamaCppMode `
+        -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict `
         -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -DryRun:$DryRun
 }
 
@@ -469,10 +367,4 @@ function llmdefaultcodex {
         [Alias('WhatIf')][switch]$DryRun
     )
     Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Codex -Strict:$Strict -DryRun:$DryRun
-}
-
-function llmdefaultchat {
-    [CmdletBinding()]
-    param([Alias('WhatIf')][switch]$DryRun)
-    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Chat -DryRun:$DryRun
 }

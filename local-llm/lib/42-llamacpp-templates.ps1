@@ -1,8 +1,8 @@
 # Parser → llama-server flags. Two responsibilities:
 # 1. Map a parser name (qwen3coder, qwen36, etc.) to a `--chat-template` or
 #    `--chat-template-file` argument set.
-# 2. Translate the Ollama PARAMETER lines from Get-ParserLines (40-parsers.ps1)
-#    into the equivalent llama-server CLI flags so sampling stays consistent.
+# 2. Translate the PARAMETER lines from Get-ParserLines (40-parsers.ps1) into
+#    the equivalent llama-server CLI flags so sampling stays consistent.
 
 function Get-LlamaCppTemplatesDir {
     return (Join-Path $HOME ".local-llm\llamacpp-templates")
@@ -59,7 +59,8 @@ function Get-LlamaCppReasoningArgs {
 function ConvertFrom-OllamaParameter {
     # Reads PARAMETER lines from Get-ParserLines (40-parsers.ps1) and emits the
     # equivalent llama-server CLI flags. Unknown PARAMETER names are skipped
-    # silently — they apply to Ollama-only Modelfile features.
+    # silently. Name retained from the Modelfile-era parser format the
+    # PARAMETER lines still use.
     param([Parameter(Mandatory = $true)][System.Collections.IEnumerable]$Lines)
 
     $out = New-Object System.Collections.Generic.List[string]

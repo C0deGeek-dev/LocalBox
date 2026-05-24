@@ -204,34 +204,18 @@ function Show-ClaudeTarget {
     Write-Host "Target : $(Get-ClaudeTargetSummary)" -ForegroundColor Yellow
 }
 
-function Show-OllamaStatus {
+function Show-LocalBackendStatus {
+    Write-Section "llama-server"
+
+    if (Get-Command Get-LlamaServerStatus -ErrorAction SilentlyContinue) {
+        Get-LlamaServerStatus
+    } else {
+        Write-Host "(status helper unavailable — load lib/34-llamacpp-status.ps1)" -ForegroundColor DarkGray
+    }
+}
+
+function Show-ConfiguredGgufQuants {
     param([switch]$All)
-
-    Write-Section "Ollama"
-
-    $loaded = Get-OllamaLoadedModels
-
-    if (-not $loaded -or $loaded.Count -eq 0) {
-        Write-Host "Loaded models : none"
-    }
-    else {
-        Write-Host "Loaded models :" -ForegroundColor Yellow
-
-        foreach ($item in $loaded) {
-            Write-Host "  $($item.Name)  |  ctx $($item.Context)  |  $($item.Processor)  |  $($item.Size)"
-        }
-    }
-
-    $stale = @(Get-StaleModelAliases)
-
-    if ($stale.Count -gt 0) {
-        Write-Host ""
-        Write-Host "Stale aliases (this profile would emit a different Modelfile now): $($stale.Count)" -ForegroundColor Yellow
-        foreach ($entry in $stale) {
-            Write-Host "  $($entry.AliasName)" -ForegroundColor DarkYellow
-        }
-        Write-Host "  Run 'init -Stale' to rebuild only the stale ones." -ForegroundColor DarkGray
-    }
 
     Write-Host ""
     Write-Host "Configured GGUF quants/files:" -ForegroundColor Yellow
@@ -241,29 +225,10 @@ function Show-OllamaStatus {
 
         if ($def.ContainsKey("Quants")) {
             Write-Host "  $key -> $($def.Quant) ($($def.Quants[$def.Quant]))"
-        }
-        elseif ($def.SourceType -eq "gguf") {
+        } else {
             Write-Host "  $key -> $(Get-ModelFileName -Def $def)"
         }
     }
-}
-
-function Format-AliasBuiltList {
-    param(
-        [Parameter(Mandatory = $true)][string[]]$Names,
-        [Parameter(Mandatory = $true)][object]$Installed
-    )
-
-    $parts = foreach ($name in $Names) {
-        if ($Installed -contains $name -or $Installed -contains "${name}:latest") {
-            "+$name"
-        }
-        else {
-            "-$name"
-        }
-    }
-
-    return ($parts -join ', ')
 }
 
 # Spectre.Console renderer (soft dependency)
@@ -349,7 +314,6 @@ function Show-ModelCatalogSpectre {
     Format-SpectrePanel -Header "Models" -Color Blue -Data ("VRAM: [yellow]{0} GB[/] ({1})" -f $vramInfo.GB, (ConvertTo-LocalLLMSpectreSafe $sourceLabel)) | Out-Host
 
     $visibleKeys = @(Get-FilteredModelKeys -IncludeAll:$All)
-    $installed = @(Get-OllamaInstalledModelNames)
 
     $rows = New-Object System.Collections.Generic.List[object]
 
@@ -381,20 +345,6 @@ function Show-ModelCatalogSpectre {
         })
         $contexts = ($contextLabels -join ' · ')
 
-        $aliases = @($def.Contexts.Keys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ })
-        $builtCount = 0
-        foreach ($a in $aliases) {
-            if ($installed -contains $a -or $installed -contains "${a}:latest") { $builtCount++ }
-        }
-        $built = "$builtCount/$($aliases.Count)"
-        if ($builtCount -eq $aliases.Count) {
-            $built = "[green]$built[/]"
-        } elseif ($builtCount -eq 0) {
-            $built = "[grey50]$built[/]"
-        } else {
-            $built = "[yellow]$built[/]"
-        }
-
         $rows.Add([pscustomobject]@{
             Key      = "[white]$key[/]"
             Name     = ConvertTo-LocalLLMSpectreSafe $def.DisplayName
@@ -402,7 +352,6 @@ function Show-ModelCatalogSpectre {
             Default  = $defaultQuant
             Quants   = $quants
             Contexts = ConvertTo-LocalLLMSpectreSafe $contexts
-            Built    = $built
         }) | Out-Null
     }
 
@@ -415,7 +364,6 @@ function Show-ModelCatalogSpectre {
     Write-Host "!" -ForegroundColor Red -NoNewline; Write-Host " over  " -ForegroundColor DarkGray -NoNewline
     Write-Host "?" -ForegroundColor DarkGray -NoNewline; Write-Host " size unknown   " -ForegroundColor DarkGray -NoNewline
     Write-Host "*name = current default quant" -ForegroundColor DarkGray
-    Write-Host "  Built column: aliases-installed / aliases-configured." -ForegroundColor DarkGray
 
     if (-not $All) {
         $hiddenCount = (@(Get-ModelKeys)).Count - $visibleKeys.Count
@@ -431,8 +379,7 @@ function Show-ModelCatalogSpectre {
     Write-Host "Manage:" -ForegroundColor White
     Write-Host "  addllm <hf-url> -Key <key>     Add a model from HuggingFace (auto-fills size + description)" -ForegroundColor DarkGray
     Write-Host "  removellm <key>                Remove a model + its files" -ForegroundColor DarkGray
-    Write-Host "  initmodel <key> [-Force]       (Re)build Ollama aliases for a model" -ForegroundColor DarkGray
-    Write-Host "  cleanorphans, listorphans, reloadllm, purge, ops, qkill, ostop, llm, llmdocs" -ForegroundColor DarkGray
+    Write-Host "  reloadllm, purge, lps, lstop, llm, llmdocs" -ForegroundColor DarkGray
     Write-Host "  Config: $script:LocalLLMConfigPath" -ForegroundColor DarkGray
 }
 
@@ -449,7 +396,7 @@ function Show-ModelDetailSpectre {
     }
 
     $description = Get-ModelDescription -Def $def
-    $source = if ($def.SourceType -eq 'gguf') { "GGUF · $($def.Repo)" } else { "Remote · $($def.RemoteModel)" }
+    $source = "GGUF · $($def.Repo)"
     $parser = if ($def.Parser) { $def.Parser } else { 'none' }
     $limitTools = if ($def.ContainsKey('LimitTools')) { [bool]$def.LimitTools } else { $true }
 
@@ -506,11 +453,9 @@ function Show-ModelDetailSpectre {
         $label = if ([string]::IsNullOrWhiteSpace($ck)) { 'default' } else { $ck }
         $tokens = Get-ModelContextValue -Def $def -ContextKey $ck
         $note = Get-ModelContextNote -Def $def -ContextKey $ck
-        $alias = Get-ModelAliasName -Def $def -ContextKey $ck
 
         [pscustomobject]@{
             Context = $label
-            Alias   = ConvertTo-LocalLLMSpectreSafe $alias
             Tokens  = "{0:N0}" -f [int]$tokens
             Note    = ConvertTo-LocalLLMSpectreSafe $note
         }
@@ -520,13 +465,8 @@ function Show-ModelDetailSpectre {
     Write-Host "Contexts" -ForegroundColor White
     $ctxRows | Format-SpectreTable -Border Rounded -Color $tierColor -AllowMarkup -Wrap | Out-Host
 
-    $installed = @(Get-OllamaInstalledModelNames)
-    $aliases = @($def.Contexts.Keys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ })
-    $built = Format-AliasBuiltList -Names $aliases -Installed $installed
-    Write-Host ""
-    Write-Host "Built : $built" -ForegroundColor DarkGray
-
     if ($def.Contains('Tools') -and -not [string]::IsNullOrWhiteSpace($def.Tools)) {
+        Write-Host ""
         Write-Host "Tools : $($def.Tools)" -ForegroundColor DarkGray
     }
 
@@ -535,7 +475,7 @@ function Show-ModelDetailSpectre {
         if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
     })
     $ctxFlag = if ($contextLabels.Count -gt 1) { "[-Ctx $($contextLabels -join '|')]" } else { '' }
-    $usage = "$cmdName $ctxFlag [-Unshackled] [-Chat] [-Q8]".Trim()
+    $usage = "$cmdName $ctxFlag [-Unshackled] [-Codex] [-Strict] [-Mode native|turboquant|mtpturbo]".Trim()
     if ($def.ContainsKey('Quants')) {
         $usage += " [-Quant $((@($def.Quants.Keys)) -join '|')]"
     }
@@ -567,7 +507,6 @@ function Show-ModelCatalog {
     Write-Host ""
 
     $visibleKeys = @(Get-FilteredModelKeys -IncludeAll:$All)
-    $installed = @(Get-OllamaInstalledModelNames)
 
     foreach ($key in $visibleKeys) {
         $def = Get-ModelDef -Key $key
@@ -583,8 +522,6 @@ function Show-ModelCatalog {
             ""
         }
 
-        $aliases = $contextKeys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ }
-
         $tierBadge = Format-ModelTierBadge -Def $def
 
         Write-Host "$($def.DisplayName) " -ForegroundColor White -NoNewline
@@ -595,7 +532,7 @@ function Show-ModelCatalog {
             Write-Host "  $description" -ForegroundColor Gray
         }
 
-        $usage = "$cmdName $ctxFlag [-Unshackled] [-Chat] [-Q8]".Trim()
+        $usage = "$cmdName $ctxFlag [-Unshackled] [-Codex] [-Strict] [-Mode native|turboquant|mtpturbo]".Trim()
 
         if ($def.ContainsKey("Quants")) {
             $quantNames = @($def.Quants.Keys) -join '|'
@@ -603,7 +540,6 @@ function Show-ModelCatalog {
         }
 
         Write-Host "  $usage" -ForegroundColor White
-        Write-Host "  Built  : $(Format-AliasBuiltList -Names $aliases -Installed $installed)" -ForegroundColor DarkGray
 
         if ($def.Contains("Tools") -and -not [string]::IsNullOrWhiteSpace($def.Tools)) {
             Write-Host "  Tools  : $($def.Tools)" -ForegroundColor DarkGray
@@ -674,15 +610,12 @@ function Show-ModelCatalog {
         }
     }
 
-    Write-Host "Built-status legend: +name = Ollama alias exists, -name = not yet built" -ForegroundColor DarkGray
-    Write-Host "Quant-fit legend:    [fits] weights + ~7 GB headroom for KV  [tight] weights only  [over] partial offload" -ForegroundColor DarkGray
+    Write-Host "Quant-fit legend: [fits] weights + ~7 GB headroom for KV  [tight] weights only  [over] partial offload" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "Manage:" -ForegroundColor White
     Write-Host "  addllm <hf-url> -Key <key>     Add a model from HuggingFace" -ForegroundColor DarkGray
     Write-Host "  removellm <key>                Remove a model + its files" -ForegroundColor DarkGray
-    Write-Host "  initmodel <key> [-Force]       (Re)build Ollama aliases for a model" -ForegroundColor DarkGray
-    Write-Host "  cleanorphans                   List Ollama models not in llm-models.json" -ForegroundColor DarkGray
-    Write-Host "  reloadllm, purge, ops, qkill, ostop, llm, llmdocs" -ForegroundColor DarkGray
+    Write-Host "  reloadllm, purge, lps, lstop, llm, llmdocs" -ForegroundColor DarkGray
     Write-Host "  Config: $script:LocalLLMConfigPath" -ForegroundColor DarkGray
 }
 
@@ -703,8 +636,7 @@ function Show-ModelDetailFallback {
         Write-Host "  $description" -ForegroundColor Gray
     }
 
-    $source = if ($def.SourceType -eq 'gguf') { "GGUF · $($def.Repo)" } else { "Remote · $($def.RemoteModel)" }
-    Write-Host "  Source : $source" -ForegroundColor DarkGray
+    Write-Host "  Source : GGUF · $($def.Repo)" -ForegroundColor DarkGray
     Write-Host "  Parser : $($def.Parser)    LimitTools: $([bool]$def.LimitTools)" -ForegroundColor DarkGray
 
     if ($def.ContainsKey('VisionModule') -and -not [string]::IsNullOrWhiteSpace($def.VisionModule)) {
@@ -739,18 +671,13 @@ function Show-ModelDetailFallback {
     foreach ($ck in $def.Contexts.Keys) {
         $label = if ([string]::IsNullOrWhiteSpace($ck)) { "default" } else { $ck }
         $tokens = Get-ModelContextValue -Def $def -ContextKey $ck
-        $alias = Get-ModelAliasName -Def $def -ContextKey $ck
         $note = Get-ModelContextNote -Def $def -ContextKey $ck
         if ($note) {
-            Write-Host ("    {0,-8}  {1,-22}  {2}" -f $label, $alias, $note) -ForegroundColor DarkGray
+            Write-Host ("    {0,-8}  {1}" -f $label, $note) -ForegroundColor DarkGray
         } else {
-            Write-Host ("    {0,-8}  {1,-22}  {2,7} tokens" -f $label, $alias, $tokens) -ForegroundColor DarkGray
+            Write-Host ("    {0,-8}  {1,7} tokens" -f $label, $tokens) -ForegroundColor DarkGray
         }
     }
-
-    $installed = @(Get-OllamaInstalledModelNames)
-    $aliases = @($def.Contexts.Keys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ })
-    Write-Host "  Built  : $(Format-AliasBuiltList -Names $aliases -Installed $installed)" -ForegroundColor DarkGray
 
     if ($def.Contains('Tools') -and -not [string]::IsNullOrWhiteSpace($def.Tools)) {
         Write-Host "  Tools  : $($def.Tools)" -ForegroundColor DarkGray
@@ -765,7 +692,8 @@ function Show-LLMProfileInfo {
     Write-Host "LocalBox dashboard" -ForegroundColor Green
 
     Show-ClaudeTarget
-    Show-OllamaStatus -All:$All
+    Show-LocalBackendStatus
+    Show-ConfiguredGgufQuants -All:$All
     Show-BenchPilotLauncherStatus -Quiet | Out-Null
     Show-ModelCatalog -All:$All
 
@@ -789,7 +717,7 @@ function Show-LocalBoxCommandReference {
     }
 
     Write-Host "LocalBox model commands" -ForegroundColor Green
-    Write-Host "  One function is generated for each configured model. Use -Ctx, -Chat, -Codex, -Q8, -Strict, -Unshackled, -UseVision, and -Quant where supported." -ForegroundColor DarkGray
+    Write-Host "  One function is generated for each configured model. Use -Ctx, -Codex, -Strict, -Unshackled, -Mode, -KvK/-KvV, -AutoBest, and -Quant where supported." -ForegroundColor DarkGray
     foreach ($key in (@(Get-ModelKeys) | Sort-Object)) {
         $def = Get-ModelDef -Key $key
         $name = Get-ModelShortcutName -Def $def
@@ -816,32 +744,22 @@ function Show-LocalBoxCommandReference {
     Write-CommandRow -Command "llmdefault" -Description "Launch the configured default recipe, or the default model when no recipe is saved."
     Write-CommandRow -Command "llmdefaultunshackled" -Description "Launch the default model through Unshackled."
     Write-CommandRow -Command "llmdefaultcodex" -Description "Launch the default model through Codex."
-    Write-CommandRow -Command "llmdefaultchat" -Description "Launch the default model as plain Ollama chat."
     Write-CommandRow -Command "llmlogerr, llmlogerrclear" -Description "Show or clear wizard error logs."
     Write-CommandRow -Command "llmlog" -Description "Show launch debug log (~/.local-llm/launch.log)."
 
     Write-Host ""
     Write-Host "LocalBox model setup and catalog" -ForegroundColor Green
-    Write-CommandRow -Command "init [-All] [-Force] [-Stale]" -Description "Create or refresh configured Ollama aliases."
-    Write-CommandRow -Command "initmodel <key> [-Force]" -Description "Create or refresh one configured model."
     Write-CommandRow -Command "addllm <hf-url-or-repo> -Key <key>" -Description "Add a GGUF model to llm-models.json."
     Write-CommandRow -Command "updatellm <key>" -Description "Refresh quant metadata for a catalog model."
     Write-CommandRow -Command "removellm, rmllm" -Description "Remove a configured model."
-    Write-CommandRow -Command "listorphans" -Description "List Ollama models not managed by LocalBox."
-    Write-CommandRow -Command "cleanorphans" -Description "Remove unmanaged Ollama models after confirmation."
-    Write-CommandRow -Command "purge" -Description "Remove configured aliases and GGUF files."
-    Write-CommandRow -Command "setllm <key> <value>" -Description "Update LocalBox settings.json."
+    Write-CommandRow -Command "purge" -Description "Stop running llama-server and delete cached GGUF files."
 
     Write-Host ""
     Write-Host "LocalBox runtime operations" -ForegroundColor Green
-    Write-CommandRow -Command "ops" -Description "Show ollama ps."
-    Write-CommandRow -Command "qkill" -Description "Unload Ollama models."
-    Write-CommandRow -Command "ostop" -Description "Stop Ollama and leave it stopped."
     Write-CommandRow -Command "lps" -Description "Show llama-server status."
     Write-CommandRow -Command "lstop" -Description "Stop every llama-server.exe."
-    Write-CommandRow -Command "unloadall, llmstop, llm-stop" -Description "Free local model VRAM across Ollama and llama.cpp."
-    Write-CommandRow -Command "ospeed" -Description "Run an Ollama throughput probe."
-    Write-CommandRow -Command "obench" -Description "Show Ollama benchmark history."
+    Write-CommandRow -Command "unloadall, llmstop, llm-stop" -Description "Free local model VRAM by stopping every running llama-server."
+    Write-CommandRow -Command "obench" -Description "Show legacy bench history."
 
     Write-Host ""
     Write-Host "LocalBox companion tools" -ForegroundColor Green
@@ -948,11 +866,11 @@ function Show-LLMDynamicModelSummary {
 
         foreach ($key in $byTier[$tier]) {
             $def = Get-ModelDef -Key $key
-            $source = if ($def.SourceType -eq "gguf") { "GGUF: $($def.Repo)" } else { "Remote: $($def.RemoteModel)" }
+            $source = "GGUF: $($def.Repo)"
             $contexts = @($def.Contexts.Keys | ForEach-Object {
-                    $aliasName = Get-ModelAliasName -Def $def -ContextKey $_
+                    $label = if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { [string]$_ }
                     $ctx = Get-ModelContextValue -Def $def -ContextKey $_
-                    "$aliasName=$ctx"
+                    "$label=$ctx"
                 }) -join ", "
 
             Write-Host "$key" -ForegroundColor White
@@ -983,35 +901,30 @@ function Show-LLMDynamicModelSummary {
 function Show-LLMQuickReference {
     Write-Section "Quick Reference"
 
-    $q8Max = Get-Q8KvMaxContext
-    $q8MaxLabel = if ($q8Max -ge 1024) { "{0}k" -f [int]($q8Max / 1024) } else { "$q8Max" }
-
     Write-Host @"
 One function per model — flags select what to do.
-  qcoder -Ctx 32k -Unshackled   Code agent (Qwen3-Coder, 32k, Unshackled)
-  q36p -Ctx 32k -Unshackled     General Qwen 3.6 agent (32k, Unshackled)
-  dev -Ctx 32k                  Smaller / faster (Devstral 24B, 32k)
-  q36p -Ctx 128k -Unshackled    Big context (Qwen 3.6 Plus, 128k)
-  qcoder -Ctx 256 -Quant iq4xs  256k coder context (4090 ceiling — no -Q8)
-  q36p -Chat                    Raw ollama chat, no Claude Code
-  q36p -Q8                      Use q8 KV cache for higher quality
-  q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
-  q36p -UseVision               Launch with vision (mmproj) support
-  llm -UseVision                Same, via wizard (skips vision prompt if mmproj available)
-  llmdefault                    Launch the configured Default model
-  llm                           Guided wizard (Spectre when available)
-  llmc                          Native selectable wizard
-  llms                          Spectre wizard (explicit)
+  qcoder -Ctx 32k -Unshackled    Code agent (Qwen3-Coder, 32k, Unshackled)
+  q36p -Ctx 32k -Unshackled      General Qwen 3.6 agent (32k, Unshackled)
+  dev -Ctx 32k                   Smaller / faster (Devstral 24B, 32k)
+  q36p -Ctx 128k -Unshackled     Big context (Qwen 3.6 Plus, 128k)
+  qcoder -Ctx 256 -Quant iq4xs   256k coder context (4090 ceiling)
+  q36p -Quant q6kp               Switch the GGUF quant
+  q36p -Mode turboquant -KvK turbo4 -KvV turbo4   turbo KV via fork binary
+  q36p -AutoBest                 Replay the saved best tuner config
+  llmdefault                     Launch the configured Default model
+  llm                            Guided wizard (Spectre when available)
+  llmc                           Native selectable wizard
+  llms                           Spectre wizard (explicit)
 
 Flags
   -Ctx <name>     One of the model's contexts (e.g. 32k, 64k, 128k, 256k). Omit for default.
   -Unshackled     Use Unshackled instead of Claude Code.
-  -Chat           Run plain ollama chat (skips Claude Code entirely).
-  -Q8             Set OLLAMA_KV_CACHE_TYPE=q8_0 for this launch.
-                  Refused above $q8MaxLabel tokens — q8 KV at long context OOMs a 24GB card.
-                  Override the threshold with: Set-LocalLLMSetting Q8KvMaxContext 262144
-  -Quant <name>   Switch the model's selected quant (no launch). GGUF models only.
-  -UseVision      Enable vision/multimodal support (loads mmproj module). Requires a model with VisionModule configured or an mmproj-*.gguf file present.
+  -Codex          Use OpenAI Codex instead of Claude Code.
+  -Strict         Apply the strict engineering overlay (tighter sampler + system prompt).
+  -Mode <name>    Pick the llama.cpp binary flavor: native | turboquant | mtpturbo.
+  -KvK / -KvV     Override the KV cache types passed to llama-server.
+  -AutoBest       Replay the latest saved tuner profile for this (model, ctx, mode).
+  -Quant <name>   Switch the model's selected GGUF quant.
 
 Tradeoffs / sizes
   Per-quant and per-context tradeoffs (file size, KV pressure, when to pick what)
@@ -1025,26 +938,17 @@ Manage
   info -Commands        Full LocalBox and BenchPilot command list
   reloadllm             Reload llm-models.json and regenerate commands
   llm-update            Update LocalBox, Unshackled, and BenchPilot when installed
-  ops, qkill, ostop     Ollama: list / stop loaded / restart
-  init                  Setup all recommended models
-  init -All             Setup every configured model
-  init -Force           Rebuild all aliases
-  init -Stale           Rebuild only aliases whose parser stamp is missing/stale
-  initmodel <key> [-Force]
+  lps, lstop            llama-server: status / stop
+  purge                 Stop running llama-server and delete cached GGUF files
   bpstatus              Show BenchPilot discovery/version status
   Install-BenchPilot    Clone/configure the managed BenchPilot checkout
   Update-BenchPilot     Pull the configured BenchPilot checkout
   Install-Unshackled    Clone/configure the managed Unshackled checkout
   Update-Unshackled     Pull the configured Unshackled checkout
-  listorphans           Show Ollama models not present in llm-models.json
-  cleanorphans          Remove orphan Ollama models (confirms first)
-  purge                 Remove every configured alias and every GGUF file
-  obench [-Model name]  Show benchmark history (~/.local-llm/bench-history.jsonl)
+  obench [-Model name]  Show legacy bench history (~/.local-llm/bench-history.jsonl)
   findbest <key> -ContextKey <ctx> [-Mode native|turboquant|mtpturbo] [-Quick|-Deep] [-Budget 100]
-                        Auto-tune llama.cpp launch flags for this box. Uses
-                        BenchPilot when available, with legacy fallback (writes
-                        ~/.local-llm/tuner/best-<key>.json). Use with
-                        Start-ClaudeWithLlamaCppModel -AutoBest later.
+                        Auto-tune llama.cpp launch flags for this box via BenchPilot.
+                        Saved profiles are picked up by -AutoBest at launch time.
                         The wizard also exposes Find best settings and
                         Delete best settings for llama.cpp models.
 
@@ -1052,7 +956,6 @@ Add or remove a model
   addllm <hf-url-or-repo> -Key <key>
   addllm <hf-url-or-repo> -Key <key> -Quants Q4_K_P,IQ4_XS -DefaultQuant Q4_K_P -Tier recommended
   addllm <hf-url-or-repo> -Key <key> -Description '...' -QuantNotes @{q4='~17 GB'} -ContextNotes @{'128'='131k'}
-  initmodel <key>
   removellm <key> [-KeepFiles] [-Force]
 
   Auto-fill on add: Description (from base_model README), QuantSizesGB (from HF blob sizes),
@@ -1063,14 +966,10 @@ Tiers
   experimental   Works but uncensored / abliterated / niche; hidden by default.
   legacy         Kept for comparison; hidden by default.
 
-Benchmark
-  qkill ; q36p -Ctx 32k -Chat ; ospeed q36plus32k -Runs 3
-  qkill ; qcoder -Ctx 32k -Chat ; ospeed qcoder3032k -Runs 3
-
 Notes
-  Thinking: q36opus47abl uses ThinkingPolicy=keep, which routes it directly at
-            Ollama (port 11434) and leaves Claude Code's thinking env vars unset.
-            All other models go through the strip proxy on 11435.
+  Thinking: models with ThinkingPolicy=keep skip the no-think proxy and route
+            directly at llama-server; the proxy still strips <think>...</think>
+            blocks for everything else.
 "@
 
     Show-LLMDynamicModelSummary

@@ -5,7 +5,7 @@ $script:LocalLLMVRAMCache = $null
 
 function Get-AutoDetectVRAMGB {
     # Returns the largest GPU's VRAM in GB via nvidia-smi, or $null if nvidia-smi
-    # isn't on PATH / fails. Multi-GPU: takes the max (Ollama loads to one card).
+    # isn't on PATH / fails. Multi-GPU: takes the max (llama-server runs on one card).
     try {
         $cmd = Get-Command nvidia-smi -ErrorAction SilentlyContinue
         if (-not $cmd) { return $null }

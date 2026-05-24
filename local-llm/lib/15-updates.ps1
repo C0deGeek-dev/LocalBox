@@ -343,15 +343,14 @@ function llmupdate {
 }
 
 function Get-LocalLLMDeployedProxyPath {
-    return Join-Path $HOME '.ollama-proxy\no-think-proxy.py'
+    return Join-Path $HOME '.localbox-proxy\no-think-proxy.py'
 }
 
 function Get-LocalLLMRepoProxyPath {
-    # The proxy source-of-truth alongside the launcher checkout. Walk up from
-    # the profile root until we find ../ollama-proxy/no-think-proxy.py.
+    # The proxy source-of-truth alongside the launcher checkout.
     $root = Resolve-LocalBoxRoot
     if ([string]::IsNullOrWhiteSpace($root)) { return $null }
-    $candidate = Join-Path $root 'ollama-proxy\no-think-proxy.py'
+    $candidate = Join-Path $root 'localbox-proxy\no-think-proxy.py'
     if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     return $null
 }
@@ -433,7 +432,7 @@ function Update-LocalLLMProxy {
     $deployed = Get-LocalLLMDeployedProxyPath
     $source = Get-LocalLLMRepoProxyPath
     if (-not $source) {
-        throw "Cannot locate ollama-proxy\no-think-proxy.py in the launcher repo. Set LOCALBOX_ROOT or re-run install.ps1."
+        throw "Cannot locate localbox-proxy\no-think-proxy.py in the launcher repo. Set LOCALBOX_ROOT or re-run install.ps1."
     }
 
     # Symlink deployments stay in sync automatically.

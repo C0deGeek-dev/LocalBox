@@ -1,6 +1,6 @@
 # =========================
 # LocalBox profile entry point
-# Ollama + Claude Code + Unshackled
+# llama.cpp + Claude Code + Unshackled
 # Windows / PowerShell only — does not work in WSL/bash.
 # =========================
 #
@@ -38,10 +38,6 @@ foreach ($file in (Get-ChildItem -Path $libDir -Filter '*.ps1' | Sort-Object Nam
 # time and depend on functions from the lib files above).
 $script:Cfg = Import-LocalLLMConfig
 $script:NoThinkProxyPort = [int]$script:Cfg.NoThinkProxyPort
-
-# Enforcer — Claude Code, when invoked from within an Unshackled-style flow,
-# runs through the local backend wrapper.
-$env:ENFORCER_CLAUDE_CMD = "pwsh -NoProfile -File $HOME\.ollama-proxy\enforcer-claude.ps1"
 
 # Warn once per session if the deployed no-think proxy is older than the
 # launcher's required version. The check is non-fatal (proxy may still work);
