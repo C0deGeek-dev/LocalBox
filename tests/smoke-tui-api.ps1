@@ -34,6 +34,16 @@ if ($defaultPlan.contextKey -ne '' -or $defaultPlan.launchCommand -notmatch "-Co
     throw 'New-LocalBoxTuiLaunchPlan did not normalize the default context alias.'
 }
 
+$findBestPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action findbest -Mode native
+if ($findBestPlan.launchCommand -notmatch 'Invoke-LocalBoxTuiFindBest' -or $findBestPlan.launchCommand -match 'Invoke-LLMSelection') {
+    throw 'New-LocalBoxTuiLaunchPlan routed findbest through the interactive wizard path.'
+}
+
+$resetBestPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action resetbest -Mode native
+if ($resetBestPlan.launchCommand -notmatch 'Invoke-LocalBoxTuiResetBest' -or $resetBestPlan.launchCommand -match 'Invoke-LLMSelection') {
+    throw 'New-LocalBoxTuiLaunchPlan routed resetbest through the interactive wizard path.'
+}
+
 $settings = Get-LocalBoxTuiSettings
 if (-not $settings.path) {
     throw 'Get-LocalBoxTuiSettings did not return a settings path.'
@@ -44,5 +54,5 @@ if ($null -eq $benchPilot.available) {
     throw 'Get-LocalBoxTuiBenchPilotStatus did not return structured availability.'
 }
 
-@($status, $models[0], $detail, $plan, $defaultPlan, $settings, $benchPilot) | ConvertTo-Json -Depth 16 -Compress | Out-Null
+@($status, $models[0], $detail, $plan, $defaultPlan, $findBestPlan, $resetBestPlan, $settings, $benchPilot) | ConvertTo-Json -Depth 16 -Compress | Out-Null
 Write-Host "LocalBox TUI API smoke test passed."
