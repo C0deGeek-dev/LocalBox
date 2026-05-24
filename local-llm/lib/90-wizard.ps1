@@ -1791,6 +1791,25 @@ function Get-LocalLLMErrorLogPath {
     return (Join-Path $dir "wizard-errors.log")
 }
 
+function Write-LocalLLMSafeHost {
+    param(
+        [AllowNull()][object]$Message = "",
+        [string]$ForegroundColor
+    )
+
+    $text = [string]$Message
+    try {
+        if ([string]::IsNullOrWhiteSpace($ForegroundColor)) {
+            Write-Host $text
+        } else {
+            Write-Host $text -ForegroundColor $ForegroundColor
+        }
+    }
+    catch {
+        try { [Console]::Out.WriteLine($text) } catch { }
+    }
+}
+
 function Save-LocalLLMWizardError {
     param(
         [Parameter(Mandatory = $true)]$ErrorRecord,
@@ -1818,12 +1837,12 @@ function Save-LocalLLMWizardError {
 
     try { Add-Content -LiteralPath $logPath -Value $block -ErrorAction Stop } catch { }
 
-    Write-Host ""
-    Write-Host "=== ERROR captured ($Context) ===" -ForegroundColor Red
-    Write-Host $ex.Message -ForegroundColor Yellow
-    Write-Host $ErrorRecord.InvocationInfo.PositionMessage -ForegroundColor DarkGray
-    Write-Host "Logged to $logPath" -ForegroundColor DarkGray
-    Write-Host ""
+    Write-LocalLLMSafeHost ""
+    Write-LocalLLMSafeHost "=== ERROR captured ($Context) ===" -ForegroundColor Red
+    Write-LocalLLMSafeHost $ex.Message -ForegroundColor Yellow
+    Write-LocalLLMSafeHost $ErrorRecord.InvocationInfo.PositionMessage -ForegroundColor DarkGray
+    Write-LocalLLMSafeHost "Logged to $logPath" -ForegroundColor DarkGray
+    Write-LocalLLMSafeHost ""
 }
 
 function Invoke-LLMWizardStep {
