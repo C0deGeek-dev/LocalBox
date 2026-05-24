@@ -61,23 +61,35 @@ function bptui {
     }
 
     $project = $null
+    $benchPilotRoot = $null
     foreach ($root in @($candidateRoots | Where-Object { $_ } | Select-Object -Unique)) {
+        $modulePath = Join-Path $root 'src\BenchPilot.psm1'
+        if (-not $benchPilotRoot -and (Test-Path -LiteralPath $modulePath)) {
+            $benchPilotRoot = $root
+        }
+
         $candidateProject = Join-Path $root 'tui\BenchPilot.Tui\BenchPilot.Tui.csproj'
         if (Test-Path -LiteralPath $candidateProject) {
             $project = $candidateProject
+            $benchPilotRoot = $root
             break
         }
     }
 
     $exe = Join-Path $HOME '.local-llm\tools\benchpilot\bin\BenchPilot.Tui.exe'
+    $tuiArgs = @()
+    if (-not [string]::IsNullOrWhiteSpace($benchPilotRoot)) {
+        $tuiArgs += @('--root', $benchPilotRoot)
+    }
+    $tuiArgs += $args
 
     if ($project -and (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        & dotnet run --project $project -- @args
+        & dotnet run --project $project -- @tuiArgs
         return
     }
 
     if (Test-Path -LiteralPath $exe) {
-        & $exe @args
+        & $exe @tuiArgs
         return
     }
 
