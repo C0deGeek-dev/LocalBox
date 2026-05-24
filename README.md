@@ -330,6 +330,7 @@ After install, open a fresh PowerShell:
 
 ```powershell
 llm                              # interactive wizard — pick model, mode, action
+llmtui                           # Terminal.Gui TUI, explicit preview path
 info                             # verify: VRAM, default model, configured quants
 ```
 
@@ -360,6 +361,7 @@ llmdefault                        Launch the configured default recipe/model
 llmdefaultunshackled              Same, via Unshackled
 llmdefaultcodex                   Same, via Codex
 llm                               Guided wizard (Spectre when available)
+llmtui                            Terminal.Gui TUI preview
 llmc                              Native selectable wizard, explicit alias
 llms                              Spectre wizard, explicit alias
 info                              Dashboard
@@ -378,6 +380,11 @@ llm-update                        Update LocalBox + installed companion checkout
 | `-KvK / -KvV` | Override the KV cache types passed to llama-server. |
 | `-AutoBest` | Replay the latest saved tuner profile for this (model, ctx, mode). |
 | `-Quant <name>` | Switch the model's selected GGUF quant (no launch). |
+
+Quant keys are model-local labels, not a universal naming scheme. For example,
+`mtp-apex` means the Genesis V2 MTP-enabled APEX GGUF file, while another model
+may use a simpler `mtp` label when there is only one MTP variant. Use
+`info <key>` to see the exact filename behind each quant key.
 
 ### 256 k context on a 24 GB card
 
@@ -643,6 +650,40 @@ native-picker alias.
 $env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS = '750'
 $env:LOCAL_LLM_NO_SPECTRE = '1'   # disable Spectre everywhere / make llm use native
 ```
+
+---
+
+## Terminal.Gui TUI
+
+`llmtui` launches the C# Terminal.Gui frontend. It is currently an explicit
+preview path; `llm` still opens the existing PowerShell wizard flow.
+
+Build and install it from the repo:
+
+```powershell
+pwsh .\tui\publish-tui.ps1 -Install
+reloadllm
+llmtui
+```
+
+When installed, the launcher runs `~/.local-llm/bin/LocalBox.Tui.exe` and passes
+the active `LocalLLMProfile.ps1` path with `--profile`. From a repo checkout, it
+can also run the TUI project directly with `dotnet run`, so the command works on
+fresh developer machines before publishing.
+
+Useful controls:
+
+| Key | Action |
+|-----|--------|
+| `Up` / `Down` | Move in the active list. |
+| `Enter` / `Right` | Advance through model -> context -> quant -> action -> mode -> AutoBest -> confirm. |
+| `Left` | Go back one wizard step. |
+| `Space` | Cycle the current step. |
+| `Tab` | Move focus to details so long text can scroll. |
+| `Ctrl+B` | Open BenchPilot.Tui when BenchPilot is installed and has a TUI build. |
+| `F5` | Refresh backend data. |
+| `F9` | Show dry-run launch command. |
+| `F10` | Quit. |
 
 ---
 
