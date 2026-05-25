@@ -317,6 +317,9 @@ function New-LocalBoxTuiSelectionCommand {
             '-ContextKey', (ConvertTo-LocalBoxTuiPowerShellLiteral $ContextKey),
             '-Mode', (ConvertTo-LocalBoxTuiPowerShellLiteral $Mode)
         )
+        if (-not [string]::IsNullOrWhiteSpace($Quant)) {
+            $parts += @('-Quant', (ConvertTo-LocalBoxTuiPowerShellLiteral $Quant))
+        }
         if ($DryRun) { $parts += '-DryRun' }
         return ($parts -join ' ')
     }
@@ -328,6 +331,9 @@ function New-LocalBoxTuiSelectionCommand {
             '-ContextKey', (ConvertTo-LocalBoxTuiPowerShellLiteral $ContextKey),
             '-Mode', (ConvertTo-LocalBoxTuiPowerShellLiteral $Mode)
         )
+        if (-not [string]::IsNullOrWhiteSpace($Quant)) {
+            $parts += @('-Quant', (ConvertTo-LocalBoxTuiPowerShellLiteral $Quant))
+        }
         if ($DryRun) { $parts += '-DryRun' }
         return ($parts -join ' ')
     }
@@ -357,15 +363,26 @@ function Invoke-LocalBoxTuiFindBest {
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [string]$Quant,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
     $resolvedContext = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
-    $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
+    $quant = if (-not [string]::IsNullOrWhiteSpace($Quant)) {
+        Resolve-ModelQuantKey -Def $def -Quant $Quant
+    } elseif ($def.Contains('Quant')) {
+        [string]$def.Quant
+    } else {
+        ''
+    }
     $contextLabel = if ([string]::IsNullOrWhiteSpace($resolvedContext)) { 'default' } else { $resolvedContext }
 
     if ($DryRun) {
+        $command = "findbest $(ConvertTo-LocalBoxTuiPowerShellLiteral $Key) -ContextKey $(ConvertTo-LocalBoxTuiPowerShellLiteral $resolvedContext) -Mode $(ConvertTo-LocalBoxTuiPowerShellLiteral $Mode)"
+        if (-not [string]::IsNullOrWhiteSpace($quant)) {
+            $command += " -Quant $(ConvertTo-LocalBoxTuiPowerShellLiteral $quant)"
+        }
         [pscustomobject]@{
             action = 'findbest'
             key = $Key
@@ -373,7 +390,7 @@ function Invoke-LocalBoxTuiFindBest {
             contextLabel = $contextLabel
             mode = $Mode
             quant = $quant
-            command = "findbest $(ConvertTo-LocalBoxTuiPowerShellLiteral $Key) -ContextKey $(ConvertTo-LocalBoxTuiPowerShellLiteral $resolvedContext) -Mode $(ConvertTo-LocalBoxTuiPowerShellLiteral $Mode)"
+            command = $command
         }
         return
     }
@@ -420,12 +437,19 @@ function Invoke-LocalBoxTuiResetBest {
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [string]$Quant,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
     $resolvedContext = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
-    $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
+    $quant = if (-not [string]::IsNullOrWhiteSpace($Quant)) {
+        Resolve-ModelQuantKey -Def $def -Quant $Quant
+    } elseif ($def.Contains('Quant')) {
+        [string]$def.Quant
+    } else {
+        ''
+    }
     $contextLabel = if ([string]::IsNullOrWhiteSpace($resolvedContext)) { 'default' } else { $resolvedContext }
 
     if ($DryRun) {

@@ -24,6 +24,7 @@ if (-not $detail -or -not $detail.summary) {
 }
 
 $contextKey = if (@($model.contexts).Count -gt 0) { [string]$model.contexts[0].key } else { '' }
+$quantKey = if (@($model.quants).Count -gt 0) { [string]$model.quants[0].key } else { '' }
 $plan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action claude -Mode native
 if (-not $plan.launchCommand -or $plan.launchCommand -notmatch 'Invoke-LLMSelection') {
     throw 'New-LocalBoxTuiLaunchPlan did not return a launcher command.'
@@ -42,6 +43,18 @@ if ($findBestPlan.launchCommand -notmatch 'Invoke-LocalBoxTuiFindBest' -or $find
 $resetBestPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action resetbest -Mode native
 if ($resetBestPlan.launchCommand -notmatch 'Invoke-LocalBoxTuiResetBest' -or $resetBestPlan.launchCommand -match 'Invoke-LLMSelection') {
     throw 'New-LocalBoxTuiLaunchPlan routed resetbest through the interactive wizard path.'
+}
+
+if (-not [string]::IsNullOrWhiteSpace($quantKey)) {
+    $quantFindBestPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action findbest -Mode native -Quant $quantKey
+    if ($quantFindBestPlan.launchCommand -notmatch "-Quant '$([regex]::Escape($quantKey))'") {
+        throw 'New-LocalBoxTuiLaunchPlan did not preserve quant for findbest.'
+    }
+
+    $quantResetBestPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action resetbest -Mode native -Quant $quantKey
+    if ($quantResetBestPlan.launchCommand -notmatch "-Quant '$([regex]::Escape($quantKey))'") {
+        throw 'New-LocalBoxTuiLaunchPlan did not preserve quant for resetbest.'
+    }
 }
 
 $settings = Get-LocalBoxTuiSettings
