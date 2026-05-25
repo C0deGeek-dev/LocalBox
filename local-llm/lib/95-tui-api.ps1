@@ -307,6 +307,13 @@ function New-LocalBoxTuiSelectionCommand {
         [switch]$UseVision,
         [switch]$UseAutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [int]$Budget = 0,
+        [int]$Runs = 0,
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('','greedy','beam')][string]$SearchStrategy = '',
+        [int]$BeamWidth = 0,
+        [int[]]$NCpuMoeCandidates,
         [switch]$DryRun
     )
 
@@ -319,6 +326,15 @@ function New-LocalBoxTuiSelectionCommand {
         )
         if (-not [string]::IsNullOrWhiteSpace($Quant)) {
             $parts += @('-Quant', (ConvertTo-LocalBoxTuiPowerShellLiteral $Quant))
+        }
+        if ($Budget -gt 0) { $parts += @('-Budget', [string]$Budget) }
+        if ($Runs -gt 0) { $parts += @('-Runs', [string]$Runs) }
+        if ($Optimize -ne 'coding-agent') { $parts += @('-Optimize', (ConvertTo-LocalBoxTuiPowerShellLiteral $Optimize)) }
+        if ($Profile -ne 'pure') { $parts += @('-Profile', (ConvertTo-LocalBoxTuiPowerShellLiteral $Profile)) }
+        if (-not [string]::IsNullOrWhiteSpace($SearchStrategy)) { $parts += @('-SearchStrategy', (ConvertTo-LocalBoxTuiPowerShellLiteral $SearchStrategy)) }
+        if ($BeamWidth -gt 0) { $parts += @('-BeamWidth', [string]$BeamWidth) }
+        if ($NCpuMoeCandidates -and $NCpuMoeCandidates.Count -gt 0) {
+            $parts += @('-NCpuMoeCandidates', (($NCpuMoeCandidates | ForEach-Object { [string][int]$_ }) -join ','))
         }
         if ($DryRun) { $parts += '-DryRun' }
         return ($parts -join ' ')
@@ -364,6 +380,13 @@ function Invoke-LocalBoxTuiFindBest {
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
+        [int]$Budget = 0,
+        [int]$Runs = 0,
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('','greedy','beam')][string]$SearchStrategy = '',
+        [int]$BeamWidth = 0,
+        [int[]]$NCpuMoeCandidates,
         [switch]$DryRun
     )
 
@@ -383,6 +406,15 @@ function Invoke-LocalBoxTuiFindBest {
         if (-not [string]::IsNullOrWhiteSpace($quant)) {
             $command += " -Quant $(ConvertTo-LocalBoxTuiPowerShellLiteral $quant)"
         }
+        if ($Budget -gt 0) { $command += " -Budget $Budget" }
+        if ($Runs -gt 0) { $command += " -Runs $Runs" }
+        if ($Optimize -ne 'coding-agent') { $command += " -Optimize $(ConvertTo-LocalBoxTuiPowerShellLiteral $Optimize)" }
+        if ($Profile -ne 'pure') { $command += " -Profile $(ConvertTo-LocalBoxTuiPowerShellLiteral $Profile)" }
+        if (-not [string]::IsNullOrWhiteSpace($SearchStrategy)) { $command += " -SearchStrategy $(ConvertTo-LocalBoxTuiPowerShellLiteral $SearchStrategy)" }
+        if ($BeamWidth -gt 0) { $command += " -BeamWidth $BeamWidth" }
+        if ($NCpuMoeCandidates -and $NCpuMoeCandidates.Count -gt 0) {
+            $command += " -NCpuMoeCandidates $(($NCpuMoeCandidates | ForEach-Object { [string][int]$_ }) -join ',')"
+        }
         [pscustomobject]@{
             action = 'findbest'
             key = $Key
@@ -390,6 +422,13 @@ function Invoke-LocalBoxTuiFindBest {
             contextLabel = $contextLabel
             mode = $Mode
             quant = $quant
+            budget = $Budget
+            runs = $Runs
+            optimize = $Optimize
+            profile = $Profile
+            searchStrategy = $SearchStrategy
+            beamWidth = $BeamWidth
+            nCpuMoeCandidates = @($NCpuMoeCandidates)
             command = $command
         }
         return
@@ -410,6 +449,13 @@ function Invoke-LocalBoxTuiFindBest {
         Optimize = 'coding-agent'
         Profile = 'pure'
     }
+    if ($Budget -gt 0) { $params.Budget = $Budget }
+    if ($Runs -gt 0) { $params.Runs = $Runs }
+    if (-not [string]::IsNullOrWhiteSpace($Optimize)) { $params.Optimize = $Optimize }
+    if (-not [string]::IsNullOrWhiteSpace($Profile)) { $params.Profile = $Profile }
+    if (-not [string]::IsNullOrWhiteSpace($SearchStrategy)) { $params.SearchStrategy = $SearchStrategy }
+    if ($BeamWidth -gt 0) { $params.BeamWidth = $BeamWidth }
+    if ($NCpuMoeCandidates -and $NCpuMoeCandidates.Count -gt 0) { $params.NCpuMoeCandidates = [int[]]$NCpuMoeCandidates }
 
     $results = @(Find-BestLlamaCppConfig @params | Where-Object { $_ })
     if ($results.Count -eq 0) {
@@ -490,10 +536,17 @@ function Invoke-LocalBoxTuiLaunch {
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
-        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [int]$Budget = 0,
+        [int]$Runs = 0,
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('','greedy','beam')][string]$SearchStrategy = '',
+        [int]$BeamWidth = 0,
+        [int[]]$NCpuMoeCandidates
     )
 
-    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Quant $Quant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Quant $Quant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Budget $Budget -Runs $Runs -Optimize $Optimize -Profile $Profile -SearchStrategy $SearchStrategy -BeamWidth $BeamWidth -NCpuMoeCandidates $NCpuMoeCandidates
     $started = (Get-Date).ToUniversalTime().ToString('o')
     $output = (& ([scriptblock]::Create($cmd)) *>&1 | Out-String).Trim()
 
@@ -520,7 +573,14 @@ function New-LocalBoxTuiLaunchPlan {
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
-        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [int]$Budget = 0,
+        [int]$Runs = 0,
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('','greedy','beam')][string]$SearchStrategy = '',
+        [int]$BeamWidth = 0,
+        [int[]]$NCpuMoeCandidates
     )
 
     $def = Get-ModelDef -Key $Key
@@ -531,8 +591,8 @@ function New-LocalBoxTuiLaunchPlan {
     } elseif ($def.ContainsKey('Quant')) {
         $resolvedQuant = [string]$def.Quant
     }
-    $dryRunCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Quant $resolvedQuant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
-    $launchCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Quant $resolvedQuant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+    $dryRunCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Quant $resolvedQuant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Budget $Budget -Runs $Runs -Optimize $Optimize -Profile $Profile -SearchStrategy $SearchStrategy -BeamWidth $BeamWidth -NCpuMoeCandidates $NCpuMoeCandidates -DryRun
+    $launchCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Quant $resolvedQuant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Budget $Budget -Runs $Runs -Optimize $Optimize -Profile $Profile -SearchStrategy $SearchStrategy -BeamWidth $BeamWidth -NCpuMoeCandidates $NCpuMoeCandidates
 
     [pscustomobject]@{
         key = $Key
@@ -547,6 +607,15 @@ function New-LocalBoxTuiLaunchPlan {
         useVision = [bool]$UseVision
         useAutoBest = [bool]$UseAutoBest
         autoBestProfile = $AutoBestProfile
+        tune = [pscustomobject]@{
+            budget = $Budget
+            runs = $Runs
+            optimize = $Optimize
+            profile = $Profile
+            searchStrategy = $SearchStrategy
+            beamWidth = $BeamWidth
+            nCpuMoeCandidates = @($NCpuMoeCandidates)
+        }
         dryRunCommand = $dryRunCommand
         launchCommand = $launchCommand
     }
@@ -563,10 +632,17 @@ function Invoke-LocalBoxTuiLaunchPreview {
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
-        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [int]$Budget = 0,
+        [int]$Runs = 0,
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('','greedy','beam')][string]$SearchStrategy = '',
+        [int]$BeamWidth = 0,
+        [int[]]$NCpuMoeCandidates
     )
 
-    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Quant $Quant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
+    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Quant $Quant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Budget $Budget -Runs $Runs -Optimize $Optimize -Profile $Profile -SearchStrategy $SearchStrategy -BeamWidth $BeamWidth -NCpuMoeCandidates $NCpuMoeCandidates -DryRun
     $output = (& ([scriptblock]::Create($cmd)) *>&1 | Out-String).Trim()
     [pscustomobject]@{
         command = $cmd

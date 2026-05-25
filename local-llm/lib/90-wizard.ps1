@@ -449,6 +449,118 @@ function Read-LLMTuneBudget {
     return [int]$items[$idx].Key
 }
 
+function Read-LLMTuneRuns {
+    $items = @(
+        [pscustomobject]@{ Key = '3';      Label = '3';      Description = 'Default - smoother averages' },
+        [pscustomobject]@{ Key = '1';      Label = '1';      Description = 'Fast - noisier, good for triage' },
+        [pscustomobject]@{ Key = '5';      Label = '5';      Description = 'Careful - slower, better confidence' },
+        [pscustomobject]@{ Key = 'custom'; Label = 'Custom'; Description = 'Enter a custom value' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Runs per trial" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+
+    if ($idx -lt 0) { return $null }
+    if ($items[$idx].Key -eq 'custom') {
+        $raw = Read-Host "Runs per trial (integer, e.g. 1)"
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        if ($raw -match '^\d+$' -and [int]$raw -gt 0) { return [int]$raw }
+        Write-Warning "Invalid value '$raw'. Using default 3."
+        return 3
+    }
+    return [int]$items[$idx].Key
+}
+
+function Read-LLMTuneSearchStrategy {
+    $items = @(
+        [pscustomobject]@{ Key = 'auto';   Label = 'Auto';   Description = 'Let BenchPilot choose for the selected depth/profile' },
+        [pscustomobject]@{ Key = 'beam';   Label = 'Beam';   Description = 'Keep multiple surviving candidates per phase' },
+        [pscustomobject]@{ Key = 'greedy'; Label = 'Greedy'; Description = 'Follow the current best candidate only' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Search strategy" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+
+    if ($idx -lt 0) { return $null }
+    return [string]$items[$idx].Key
+}
+
+function Read-LLMTuneBeamWidth {
+    $items = @(
+        [pscustomobject]@{ Key = '3';      Label = '3';      Description = 'Default beam width' },
+        [pscustomobject]@{ Key = '2';      Label = '2';      Description = 'Faster, less coverage' },
+        [pscustomobject]@{ Key = '5';      Label = '5';      Description = 'Wider, more trials' },
+        [pscustomobject]@{ Key = 'custom'; Label = 'Custom'; Description = 'Enter a custom value' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Beam width" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+
+    if ($idx -lt 0) { return $null }
+    if ($items[$idx].Key -eq 'custom') {
+        $raw = Read-Host "Beam width (integer, e.g. 3)"
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        if ($raw -match '^\d+$' -and [int]$raw -gt 0) { return [int]$raw }
+        Write-Warning "Invalid value '$raw'. Using default 3."
+        return 3
+    }
+    return [int]$items[$idx].Key
+}
+
+function Read-LLMTuneRunControls {
+    param([bool]$Deep = $false)
+
+    $defaultBudget = if ($Deep) { 100 } else { 100 }
+    $items = @(
+        [pscustomobject]@{ Key = 'default'; Label = 'Default'; Description = "budget=$defaultBudget runs=3 search=auto" },
+        [pscustomobject]@{ Key = 'fast';    Label = 'Fast';    Description = 'budget=50 runs=1 search=beam/2' },
+        [pscustomobject]@{ Key = 'careful'; Label = 'Careful'; Description = 'budget=100 runs=3 search=beam/3' },
+        [pscustomobject]@{ Key = 'custom';  Label = 'Custom';  Description = 'Choose budget, runs, search, and beam width' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Tuner run controls" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+
+    if ($idx -lt 0) { return $null }
+    switch ($items[$idx].Key) {
+        'fast' {
+            return [pscustomobject]@{ Budget = 50; Runs = 1; SearchStrategy = 'beam'; BeamWidth = 2 }
+        }
+        'careful' {
+            return [pscustomobject]@{ Budget = 100; Runs = 3; SearchStrategy = 'beam'; BeamWidth = 3 }
+        }
+        'custom' {
+            $budget = Read-LLMTuneBudget
+            if ($null -eq $budget) { return $null }
+            $runs = Read-LLMTuneRuns
+            if ($null -eq $runs) { return $null }
+            $search = Read-LLMTuneSearchStrategy
+            if ([string]::IsNullOrWhiteSpace($search)) { return $null }
+            $beam = 0
+            if ($search -eq 'beam') {
+                $beam = Read-LLMTuneBeamWidth
+                if ($null -eq $beam) { return $null }
+            }
+            return [pscustomobject]@{ Budget = [int]$budget; Runs = [int]$runs; SearchStrategy = $search; BeamWidth = [int]$beam }
+        }
+        default {
+            return [pscustomobject]@{ Budget = $defaultBudget; Runs = 3; SearchStrategy = 'auto'; BeamWidth = 0 }
+        }
+    }
+}
+
 function Read-LLMTuneOptimize {
     $items = @(
         [pscustomobject]@{ Key = 'coding-agent'; Label = 'Coding agent'; Description = 'Long-prompt end-to-end latency for Claude Code/Unshackled' },
@@ -605,15 +717,12 @@ function Invoke-LlamaCppTunerWizardFlow {
     if ([string]::IsNullOrWhiteSpace($depth)) { return }
     $useDeep = $depth -eq 'deep'
 
-    $budget = 100
-    if ($useDeep) {
-        $budget = if ($UseSpectrePrompts) {
-            Read-LLMTuneBudgetSpectre
-        } else {
-            Read-LLMTuneBudget
-        }
-        if ($null -eq $budget) { return }
+    $runControls = if ($UseSpectrePrompts) {
+        Read-LLMTuneRunControlsSpectre -Deep:$useDeep
+    } else {
+        Read-LLMTuneRunControls -Deep:$useDeep
     }
+    if ($null -eq $runControls) { return }
 
     $optimize = if ($UseSpectrePrompts) {
         Read-LLMTuneOptimizeSpectre
@@ -647,8 +756,12 @@ function Invoke-LlamaCppTunerWizardFlow {
 
     $ncpuMoeCandidates = $null
     $isMoE = $def.Contains('NCpuMoe') -and $null -ne $def.NCpuMoe
-    if ($isMoE -and -not $UseSpectrePrompts) {
-        $ncpuMoeCandidates = Read-LLMTuneNCpuMoeRange -ModelKey $ModelKey -ContextKey $ContextKey
+    if ($isMoE) {
+        $ncpuMoeCandidates = if ($UseSpectrePrompts) {
+            Read-LLMTuneNCpuMoeRangeSpectre -ModelKey $ModelKey -ContextKey $ContextKey
+        } else {
+            Read-LLMTuneNCpuMoeRange -ModelKey $ModelKey -ContextKey $ContextKey
+        }
     }
 
     $findParams = @{
@@ -658,10 +771,17 @@ function Invoke-LlamaCppTunerWizardFlow {
         Quant          = $quant
         AllowedKvTypes = $allowedKvTypes
         Deep           = $useDeep
-        Budget         = $budget
+        Budget         = [int]$runControls.Budget
+        Runs           = [int]$runControls.Runs
         Optimize       = $optimize
         Profile        = $selectionProfile
         NoSave         = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$runControls.SearchStrategy) -and [string]$runControls.SearchStrategy -ne 'auto') {
+        $findParams.SearchStrategy = [string]$runControls.SearchStrategy
+    }
+    if ($null -ne $runControls.BeamWidth -and [int]$runControls.BeamWidth -gt 0) {
+        $findParams.BeamWidth = [int]$runControls.BeamWidth
     }
     if ($ncpuMoeCandidates -and $ncpuMoeCandidates.Count -gt 0) {
         $findParams.NCpuMoeCandidates = [int[]]$ncpuMoeCandidates
@@ -1759,6 +1879,160 @@ function Read-LLMTuneBudgetSpectre {
         return 100
     }
     return [int]$val
+}
+
+function Read-LLMTuneRunsSpectre {
+    $choices = [ordered]@{
+        '3      - default, smoother averages' = 3
+        '1      - fast, noisier triage'       = 1
+        '5      - careful, better confidence' = 5
+        'Custom - enter a custom value'       = 'custom'
+        '[[Back]]'                            = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Runs per trial" -Choices @($choices.Keys) -PageSize 6
+    if ($null -eq $chosen) { return 3 }
+    if ($chosen -eq '[[Back]]') { return $null }
+    $val = $choices[$chosen]
+    if ($val -eq 'custom') {
+        $raw = Read-Host "Runs per trial (integer, e.g. 1)"
+        if ($raw -match '^\d+$' -and [int]$raw -gt 0) { return [int]$raw }
+        Write-Warning "Invalid value. Using default 3."
+        return 3
+    }
+    return [int]$val
+}
+
+function Read-LLMTuneSearchStrategySpectre {
+    $choices = [ordered]@{
+        'Auto   - let BenchPilot choose'              = 'auto'
+        'Beam   - keep multiple surviving candidates' = 'beam'
+        'Greedy - follow the current best only'       = 'greedy'
+        '[[Back]]'                                    = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Search strategy" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return 'auto' }
+    if ($chosen -eq '[[Back]]') { return $null }
+    return [string]$choices[$chosen]
+}
+
+function Read-LLMTuneBeamWidthSpectre {
+    $choices = [ordered]@{
+        '3      - default beam width' = 3
+        '2      - faster'             = 2
+        '5      - wider'              = 5
+        'Custom - enter a value'      = 'custom'
+        '[[Back]]'                    = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Beam width" -Choices @($choices.Keys) -PageSize 6
+    if ($null -eq $chosen) { return 3 }
+    if ($chosen -eq '[[Back]]') { return $null }
+    $val = $choices[$chosen]
+    if ($val -eq 'custom') {
+        $raw = Read-Host "Beam width (integer, e.g. 3)"
+        if ($raw -match '^\d+$' -and [int]$raw -gt 0) { return [int]$raw }
+        Write-Warning "Invalid value. Using default 3."
+        return 3
+    }
+    return [int]$val
+}
+
+function Read-LLMTuneRunControlsSpectre {
+    param([bool]$Deep = $false)
+
+    $defaultBudget = if ($Deep) { 100 } else { 100 }
+    $choices = [ordered]@{
+        "Default - budget=$defaultBudget runs=3 search=auto" = 'default'
+        'Fast    - budget=50 runs=1 search=beam/2'           = 'fast'
+        'Careful - budget=100 runs=3 search=beam/3'          = 'careful'
+        'Custom  - choose budget, runs, search, beam'        = 'custom'
+        '[[Back]]'                                           = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Tuner run controls" -Choices @($choices.Keys) -PageSize 6
+    if ($null -eq $chosen) { return $null }
+    if ($chosen -eq '[[Back]]') { return $null }
+
+    switch ($choices[$chosen]) {
+        'fast' {
+            return [pscustomobject]@{ Budget = 50; Runs = 1; SearchStrategy = 'beam'; BeamWidth = 2 }
+        }
+        'careful' {
+            return [pscustomobject]@{ Budget = 100; Runs = 3; SearchStrategy = 'beam'; BeamWidth = 3 }
+        }
+        'custom' {
+            $budget = Read-LLMTuneBudgetSpectre
+            if ($null -eq $budget) { return $null }
+            $runs = Read-LLMTuneRunsSpectre
+            if ($null -eq $runs) { return $null }
+            $search = Read-LLMTuneSearchStrategySpectre
+            if ([string]::IsNullOrWhiteSpace($search)) { return $null }
+            $beam = 0
+            if ($search -eq 'beam') {
+                $beam = Read-LLMTuneBeamWidthSpectre
+                if ($null -eq $beam) { return $null }
+            }
+            return [pscustomobject]@{ Budget = [int]$budget; Runs = [int]$runs; SearchStrategy = $search; BeamWidth = [int]$beam }
+        }
+        default {
+            return [pscustomobject]@{ Budget = $defaultBudget; Runs = 3; SearchStrategy = 'auto'; BeamWidth = 0 }
+        }
+    }
+}
+
+function Read-LLMTuneNCpuMoeRangeSpectre {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
+        [AllowEmptyString()][string]$ContextKey = ''
+    )
+
+    $parseRange = {
+        param([string]$input)
+        $trimmed = $input.Trim()
+        if ($trimmed -match '^(\d+)-(\d+):(\d+)$') {
+            $start = [int]$Matches[1]; $end = [int]$Matches[2]; $step = [int]$Matches[3]
+            if ($step -lt 1) { $step = 1 }
+            $vals = @()
+            for ($v = $start; $v -le $end; $v += $step) { $vals += $v }
+            return @($vals | Select-Object -Unique)
+        }
+        return $null
+    }
+
+    $topValues = @()
+    if (Get-Command Get-BenchPilotTopNCpuMoeValues -ErrorAction SilentlyContinue) {
+        $topValues = @(Get-BenchPilotTopNCpuMoeValues -Key $ModelKey -ContextKey $ContextKey -TopN 5)
+    }
+
+    $choices = [ordered]@{}
+    if ($topValues.Count -gt 0) {
+        $topStr = (($topValues | Sort-Object | ForEach-Object { [string]$_ }) -join ', ')
+        $minVal = ($topValues | Measure-Object -Minimum).Minimum
+        $maxVal = ($topValues | Measure-Object -Maximum).Maximum
+        $choices["Step=1 around previous best - $minVal..$maxVal ($topStr)"] = 'step1'
+    }
+    $choices['Defaults - auto-generate NCpuMoe candidates'] = 'default'
+    $choices['Custom  - enter range start-end:step'] = 'custom'
+    $choices['[[Back]]'] = '__back__'
+
+    $chosen = Read-SpectreSelection -Message "NCpuMoe expert offload range" -Choices @($choices.Keys) -PageSize 6
+    if ($null -eq $chosen) { return $null }
+    if ($chosen -eq '[[Back]]') { return $null }
+
+    switch ($choices[$chosen]) {
+        'step1' {
+            return @([int]$minVal..[int]$maxVal)
+        }
+        'custom' {
+            $raw = Read-Host "NCpuMoe range (start-end:step, e.g. 20-40:1)"
+            if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+            $parsed = & $parseRange $raw
+            if ($parsed -and $parsed.Count -gt 0) { return $parsed }
+            Write-Warning "Could not parse '$raw' as start-end:step range. Using defaults."
+            return $null
+        }
+        default {
+            return $null
+        }
+    }
 }
 
 function Read-LLMTuneOptimizeSpectre {
