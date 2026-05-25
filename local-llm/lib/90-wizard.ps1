@@ -1145,6 +1145,7 @@ function Invoke-LLMSelection {
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Action,
+        [string]$Quant,
         [string]$LlamaCppMode = 'native',
         [string]$KvCacheK,
         [string]$KvCacheV,
@@ -1157,6 +1158,10 @@ function Invoke-LLMSelection {
     )
 
     $def = Get-ModelDef -Key $ModelKey
+    if (-not [string]::IsNullOrWhiteSpace($Quant)) {
+        Set-ModelQuantForSelectedLaunch -ModelKey $ModelKey -QuantKey $Quant
+        $def = Get-ModelDef -Key $ModelKey
+    }
 
     switch ($Action) {
         "claude" {

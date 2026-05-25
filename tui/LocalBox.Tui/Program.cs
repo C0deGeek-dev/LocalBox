@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Drawing;
 using System.Text;
 using System.Text.Json;
 using Terminal.Gui.App;
@@ -140,6 +141,7 @@ void SelectInitialModel()
 {
     if (string.IsNullOrWhiteSpace(options.Key))
     {
+        selectedQuantIndex = DefaultQuantIndex(CurrentModel());
         return;
     }
 
@@ -149,8 +151,20 @@ void SelectInitialModel()
         list.SelectedItem = index;
         var model = visibleModels[index];
         selectedContextIndex = Math.Max(0, model.Contexts.FindIndex(c => c.Key.Equals(options.ContextKey, StringComparison.OrdinalIgnoreCase)));
+        selectedQuantIndex = DefaultQuantIndex(model);
         selectedAutoBestIndex = InitialAutoBestIndex(options.AutoBest);
     }
+}
+
+int DefaultQuantIndex(LocalBoxModel? model)
+{
+    if (model is null || model.Quants.Count == 0)
+    {
+        return 0;
+    }
+
+    var index = model.Quants.FindIndex(q => q.Key.Equals(model.DefaultQuant, StringComparison.OrdinalIgnoreCase));
+    return index >= 0 ? index : 0;
 }
 
 void ClampSelection()
@@ -221,6 +235,11 @@ string PlanExpression(string functionName)
     {
         parts.Add("-UseAutoBest");
     }
+    if (model.Quants.Count > 0)
+    {
+        parts.Add("-Quant");
+        parts.Add(Ps(SelectedQuantLabel()));
+    }
     return string.Join(" ", parts);
 }
 
@@ -276,6 +295,7 @@ void RenderModel(int? index)
     if (index is null || index < 0 || index >= visibleModels.Count)
     {
         detail.Text = "No model selected.";
+        detail.ScrollTo(new Point(0, 0));
         RenderFooter();
         return;
     }
@@ -297,6 +317,7 @@ void RenderModel(int? index)
         modes[selectedModeIndex],
         autoBestChoices[selectedAutoBestIndex],
         strict);
+    detail.ScrollTo(new Point(0, 0));
     RenderFooter();
     ScheduleAutoBestLoad(model, cacheKey, renderVersion);
 }
@@ -558,11 +579,13 @@ void ShowPreview()
     {
         var preview = client.InvokeAsync<LaunchPreview>(PlanExpression("Invoke-LocalBoxTuiLaunchPreview")).GetAwaiter().GetResult();
         detail.Text = preview?.Output ?? "No preview output.";
+        detail.ScrollTo(new Point(0, 0));
         RenderFooter();
     }
     catch (Exception ex)
     {
         detail.Text = ex.Message;
+        detail.ScrollTo(new Point(0, 0));
     }
 }
 
@@ -694,6 +717,20 @@ void HandleKey(dynamic key)
         }
     }
 
+    if (key.KeyCode == KeyCode.PageUp)
+    {
+        detail.ScrollTo(new Point(0, Math.Max(0, detail.CurrentRow - (detail.Frame.Height - 1))));
+        key.Handled = true;
+        return;
+    }
+
+    if (key.KeyCode == KeyCode.PageDown)
+    {
+        detail.ScrollTo(new Point(0, detail.CurrentRow + (detail.Frame.Height - 1)));
+        key.Handled = true;
+        return;
+    }
+
     if (key.KeyCode == KeyCode.CursorLeft || key.KeyCode == KeyCode.Backspace)
     {
         PreviousStep();
@@ -732,6 +769,7 @@ void HandleKey(dynamic key)
         catch (Exception ex)
         {
             detail.Text = ex.Message;
+            detail.ScrollTo(new Point(0, 0));
         }
         key.Handled = true;
         return;
@@ -785,6 +823,7 @@ void HandleKey(dynamic key)
         catch (Exception ex)
         {
             detail.Text = ex.Message;
+            detail.ScrollTo(new Point(0, 0));
         }
         key.Handled = true;
         return;
@@ -809,6 +848,7 @@ void HandleKey(dynamic key)
         if (benchPilot?.Available != true || string.IsNullOrWhiteSpace(benchPilot.Root))
         {
             detail.Text = $"BenchPilot is unavailable: {benchPilot?.Reason ?? "not found"}";
+            detail.ScrollTo(new Point(0, 0));
             return;
         }
 
@@ -839,7 +879,7 @@ list.ValueChanged += (_, args) =>
     pickerOpen = false;
     pickerChoices = [];
     selectedContextIndex = 0;
-    selectedQuantIndex = 0;
+    selectedQuantIndex = DefaultQuantIndex(CurrentModel());
     step = WizardStep.Model;
     RenderModel(args.NewValue);
 };
@@ -855,6 +895,7 @@ window.Add(list, wizard, detail, footer);
 if (visibleModels.Count > 0)
 {
     list.SelectedItem = Math.Clamp(list.SelectedItem ?? 0, 0, visibleModels.Count - 1);
+    selectedQuantIndex = DefaultQuantIndex(CurrentModel());
     RenderModel(list.SelectedItem);
 }
 else
@@ -863,6 +904,7 @@ else
 }
 
 app.Run(window);
+Console.Clear();
 if (!string.IsNullOrWhiteSpace(pendingLaunchCommand))
 {
     Console.WriteLine($"Launching: {pendingLaunchCommand}");

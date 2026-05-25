@@ -302,6 +302,7 @@ function New-LocalBoxTuiSelectionCommand {
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [string]$Quant,
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
@@ -317,6 +318,9 @@ function New-LocalBoxTuiSelectionCommand {
         '-LlamaCppMode', (ConvertTo-LocalBoxTuiPowerShellLiteral $Mode),
         '-AutoBestProfile', (ConvertTo-LocalBoxTuiPowerShellLiteral $AutoBestProfile)
     )
+    if (-not [string]::IsNullOrWhiteSpace($Quant)) {
+        $parts += @('-Quant', (ConvertTo-LocalBoxTuiPowerShellLiteral $Quant))
+    }
     if ($Strict) { $parts += '-Strict' }
     if ($UseVision) { $parts += '-UseVision' }
     if ($UseAutoBest) { $parts += '-UseAutoBest' }
@@ -332,13 +336,14 @@ function Invoke-LocalBoxTuiLaunch {
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [string]$Quant,
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
     )
 
-    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Quant $Quant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
     $started = (Get-Date).ToUniversalTime().ToString('o')
     $output = (& ([scriptblock]::Create($cmd)) *>&1 | Out-String).Trim()
 
@@ -361,6 +366,7 @@ function New-LocalBoxTuiLaunchPlan {
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [string]$Quant,
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
@@ -369,9 +375,14 @@ function New-LocalBoxTuiLaunchPlan {
 
     $def = Get-ModelDef -Key $Key
     $context = ConvertTo-LocalBoxTuiContext -Def $def -ContextKey $ContextKey
-    $quant = if ($def.ContainsKey('Quant')) { [string]$def.Quant } else { '' }
-    $dryRunCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
-    $launchCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+    $resolvedQuant = ''
+    if (-not [string]::IsNullOrWhiteSpace($Quant)) {
+        $resolvedQuant = Resolve-ModelQuantKey -Def $def -Quant $Quant
+    } elseif ($def.ContainsKey('Quant')) {
+        $resolvedQuant = [string]$def.Quant
+    }
+    $dryRunCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Quant $resolvedQuant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
+    $launchCommand = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $context.key -Action $Action -Mode $Mode -Quant $resolvedQuant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
 
     [pscustomobject]@{
         key = $Key
@@ -381,7 +392,7 @@ function New-LocalBoxTuiLaunchPlan {
         contextKey = $context.key
         contextLabel = $context.label
         contextTokens = $context.tokens
-        quant = $quant
+        quant = $resolvedQuant
         strict = [bool]$Strict
         useVision = [bool]$UseVision
         useAutoBest = [bool]$UseAutoBest
@@ -398,13 +409,14 @@ function Invoke-LocalBoxTuiLaunchPreview {
         [AllowEmptyString()][string]$ContextKey = '',
         [ValidateSet('claude','codex','unshackled','remote','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [string]$Quant,
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$UseAutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto'
     )
 
-    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
+    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Quant $Quant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun
     $output = (& ([scriptblock]::Create($cmd)) *>&1 | Out-String).Trim()
     [pscustomobject]@{
         command = $cmd
