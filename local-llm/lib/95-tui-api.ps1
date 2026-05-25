@@ -310,6 +310,28 @@ function New-LocalBoxTuiSelectionCommand {
         [switch]$DryRun
     )
 
+    if ($Action -eq 'findbest') {
+        $parts = @(
+            'Invoke-LocalBoxTuiFindBest',
+            '-Key', (ConvertTo-LocalBoxTuiPowerShellLiteral $Key),
+            '-ContextKey', (ConvertTo-LocalBoxTuiPowerShellLiteral $ContextKey),
+            '-Mode', (ConvertTo-LocalBoxTuiPowerShellLiteral $Mode)
+        )
+        if ($DryRun) { $parts += '-DryRun' }
+        return ($parts -join ' ')
+    }
+
+    if ($Action -eq 'resetbest') {
+        $parts = @(
+            'Invoke-LocalBoxTuiResetBest',
+            '-Key', (ConvertTo-LocalBoxTuiPowerShellLiteral $Key),
+            '-ContextKey', (ConvertTo-LocalBoxTuiPowerShellLiteral $ContextKey),
+            '-Mode', (ConvertTo-LocalBoxTuiPowerShellLiteral $Mode)
+        )
+        if ($DryRun) { $parts += '-DryRun' }
+        return ($parts -join ' ')
+    }
+
     $parts = @(
         'Invoke-LLMSelection',
         '-ModelKey', (ConvertTo-LocalBoxTuiPowerShellLiteral $Key),
@@ -327,6 +349,110 @@ function New-LocalBoxTuiSelectionCommand {
     if ($DryRun) { $parts += '-DryRun' }
 
     return ($parts -join ' ')
+}
+
+function Invoke-LocalBoxTuiFindBest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [switch]$DryRun
+    )
+
+    $def = Get-ModelDef -Key $Key
+    $resolvedContext = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
+    $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
+    $contextLabel = if ([string]::IsNullOrWhiteSpace($resolvedContext)) { 'default' } else { $resolvedContext }
+
+    if ($DryRun) {
+        [pscustomobject]@{
+            action = 'findbest'
+            key = $Key
+            contextKey = $resolvedContext
+            contextLabel = $contextLabel
+            mode = $Mode
+            quant = $quant
+            command = "findbest $(ConvertTo-LocalBoxTuiPowerShellLiteral $Key) -ContextKey $(ConvertTo-LocalBoxTuiPowerShellLiteral $resolvedContext) -Mode $(ConvertTo-LocalBoxTuiPowerShellLiteral $Mode)"
+        }
+        return
+    }
+
+    Write-Host "Running BenchPilot AutoBest tuning..." -ForegroundColor Cyan
+    Write-Host "  model   : $Key" -ForegroundColor DarkGray
+    Write-Host "  quant   : $quant" -ForegroundColor DarkGray
+    Write-Host "  context : $contextLabel" -ForegroundColor DarkGray
+    Write-Host "  mode    : $Mode" -ForegroundColor DarkGray
+    Write-Host ""
+
+    $params = @{
+        Key = $Key
+        ContextKey = $resolvedContext
+        Mode = $Mode
+        Quant = $quant
+        Optimize = 'coding-agent'
+        Profile = 'pure'
+    }
+
+    $results = @(Find-BestLlamaCppConfig @params | Where-Object { $_ })
+    if ($results.Count -eq 0) {
+        Write-Warning "BenchPilot did not return a saved tuning result."
+        return
+    }
+
+    Write-Host ""
+    Write-Host "AutoBest tuning complete." -ForegroundColor Green
+    foreach ($item in $results) {
+        $profileLabel = if ($item.Profile) { [string]$item.Profile } else { 'pure' }
+        Write-Host ("  [{0}] score     : {1:N2} ({2})" -f $profileLabel, $item.Score, $item.ScoreUnit) -ForegroundColor Green
+        if ($item.Overrides) {
+            Write-Host ("  [{0}] overrides : {1}" -f $profileLabel, (Format-LlamaCppOverrides -Overrides $item.Overrides)) -ForegroundColor DarkGray
+        }
+        if ($item.report_path) {
+            Write-Host ("  [{0}] report    : {1}" -f $profileLabel, $item.report_path) -ForegroundColor DarkGray
+        }
+    }
+}
+
+function Invoke-LocalBoxTuiResetBest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
+        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
+        [switch]$DryRun
+    )
+
+    $def = Get-ModelDef -Key $Key
+    $resolvedContext = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
+    $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
+    $contextLabel = if ([string]::IsNullOrWhiteSpace($resolvedContext)) { 'default' } else { $resolvedContext }
+
+    if ($DryRun) {
+        [pscustomobject]@{
+            action = 'resetbest'
+            key = $Key
+            contextKey = $resolvedContext
+            contextLabel = $contextLabel
+            mode = $Mode
+            quant = $quant
+            command = "Remove-LlamaCppBestConfig -Key $(ConvertTo-LocalBoxTuiPowerShellLiteral $Key) -ContextKey $(ConvertTo-LocalBoxTuiPowerShellLiteral $resolvedContext) -Mode $(ConvertTo-LocalBoxTuiPowerShellLiteral $Mode) -Quant $(ConvertTo-LocalBoxTuiPowerShellLiteral $quant) -AllPromptLengths"
+        }
+        return
+    }
+
+    $result = Remove-LlamaCppBestConfig -Key $Key -ContextKey $resolvedContext -Mode $Mode -Quant $quant -AllPromptLengths
+    if ($result.Removed -gt 0) {
+        Write-Host "Deleted $($result.Removed) saved AutoBest setting(s)." -ForegroundColor Green
+        if ($result.DeletedFile) {
+            Write-Host "Removed $($result.Path)" -ForegroundColor DarkGray
+        } else {
+            Write-Host "$($result.Remaining) saved setting(s) remain in $($result.Path)" -ForegroundColor DarkGray
+        }
+        return
+    }
+
+    Write-Host "No matching saved AutoBest settings found for $Key / $contextLabel / $Mode / $quant." -ForegroundColor DarkGray
 }
 
 function Invoke-LocalBoxTuiLaunch {
