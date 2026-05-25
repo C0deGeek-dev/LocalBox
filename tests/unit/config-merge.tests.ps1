@@ -67,6 +67,16 @@ Describe 'Import-LocalLLMConfig precedence' {
         Remove-Item -Recurse -Force $root
     }
 
+    It 'adds a smoke test timeout default for older defaults files' {
+        $root = New-TempProfile `
+            -Defaults @{ NoThinkProxyPort = 22222; Default = 'm1' } `
+            -Catalog  @{ Models = $script:MinimalModels; CommandAliases = @{} }
+
+        $cfg = Invoke-ConfigLoad -Root $root
+        $cfg.LlamaCppSmokeTestTimeoutSec | Should -Be 300
+        Remove-Item -Recurse -Force $root
+    }
+
     It 'lets settings.json overlay defaults.json' {
         $root = New-TempProfile `
             -Defaults @{ NoThinkProxyPort = 22222; Default = 'm1' } `

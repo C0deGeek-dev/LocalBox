@@ -907,8 +907,12 @@ function Test-ClaudeLocalVisibleResponse {
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][string]$Model,
         [string]$SystemPrompt,
-        [int]$TimeoutSec = 90
+        [int]$TimeoutSec = 0
     )
+
+    if ($TimeoutSec -le 0) {
+        $TimeoutSec = if ($script:Cfg.Contains('LlamaCppSmokeTestTimeoutSec')) { [int]$script:Cfg.LlamaCppSmokeTestTimeoutSec } else { 300 }
+    }
 
     $payload = @{
         model = $Model

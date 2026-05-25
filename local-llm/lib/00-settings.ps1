@@ -14,7 +14,7 @@ $script:LocalLLMDefaultsKeys = @(
     'Default', 'NoThinkProxyPort', 'NoThinkProxyRequiredVersion',
     'LlamaCppPort', 'LlamaCppServerPath',
     'LlamaCppTurboquantRoot', 'LlamaCppTurboquantRepo', 'LlamaCppMtpTurboRoot', 'LlamaCppGgufRoot',
-    'LlamaCppDefaultMode', 'LlamaCppHealthCheckTimeoutSec',
+    'LlamaCppDefaultMode', 'LlamaCppHealthCheckTimeoutSec', 'LlamaCppSmokeTestTimeoutSec',
     'LocalModelTools'
 )
 
@@ -146,6 +146,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppGgufRoot"))              { $cfg.LlamaCppGgufRoot = "%USERPROFILE%\\.local-llm\\gguf" }
     if (-not $cfg.ContainsKey("LlamaCppDefaultMode"))           { $cfg.LlamaCppDefaultMode = "native" }
     if (-not $cfg.ContainsKey("LlamaCppHealthCheckTimeoutSec")) { $cfg.LlamaCppHealthCheckTimeoutSec = 300 }
+    if (-not $cfg.ContainsKey("LlamaCppSmokeTestTimeoutSec"))   { $cfg.LlamaCppSmokeTestTimeoutSec = 300 }
     if (-not $cfg.ContainsKey("LlamaCppNCpuMoe"))               { $cfg.LlamaCppNCpuMoe = 35 }
     if (-not $cfg.ContainsKey("LlamaCppMlock"))                 { $cfg.LlamaCppMlock = $true }
     if (-not $cfg.ContainsKey("LlamaCppNoMmap"))                { $cfg.LlamaCppNoMmap = $true }

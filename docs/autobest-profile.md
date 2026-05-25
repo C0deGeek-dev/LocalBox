@@ -61,7 +61,8 @@ launches also disable reasoning generation with `--reasoning off` and
 tags. If that proxy route does not produce visible text, LocalBox tries the
 direct llama-server route for the same session. If neither route succeeds,
 AutoBest launch aborts so a high-throughput profile cannot silently become an
-unusable interactive session.
+unusable interactive session. The smoke request timeout defaults to 300 seconds
+and can be overridden with `LlamaCppSmokeTestTimeoutSec` in `settings.json`.
 
 Claude/Unshackled llama.cpp launches are single-session agent workloads, so the
 launcher also applies `--parallel 1` and `--cache-reuse 256` by default outside
