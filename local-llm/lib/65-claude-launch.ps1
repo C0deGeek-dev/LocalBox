@@ -706,24 +706,57 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
         Write-LaunchLog "llama-server remote backend argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
 
-        $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
-        Set-CurrentBackendSession -Session @{
-            Backend  = 'llamacpp'
-            Mode     = $Mode
-            Port     = $port
-            BaseUrl  = "http://localhost:$port"
-            Model    = $def.Root
-            GgufPath = $ggufPath
-            Pid      = $proc.Id
-            OutLog   = $logPaths.Out
-            ErrLog   = $logPaths.Err
-        }
         try {
+            $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+            Set-CurrentBackendSession -Session @{
+                Backend  = 'llamacpp'
+                Mode     = $Mode
+                Port     = $port
+                BaseUrl  = "http://localhost:$port"
+                Model    = $def.Root
+                GgufPath = $ggufPath
+                Pid      = $proc.Id
+                OutLog   = $logPaths.Out
+                ErrLog   = $logPaths.Err
+            }
             Wait-LlamaServer -Port $port -Process $proc -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
         }
         catch {
             Stop-LlamaServer -Quiet
-            throw
+            if ((Test-LlamaCppSpecFallbackEligible -ErrorRecord $_ -BuildParams $buildParams) -and (Disable-LlamaCppSpecDecode -BuildParams $buildParams)) {
+                Write-Warning "llama-server failed while loading the MTP head; retrying once without speculative MTP."
+                Write-LaunchLog "llama-server MTP head load failed; retrying without --spec-type" 'WARN'
+                $serverArgs = Build-LlamaServerArgs @buildParams
+                $logPaths = New-LlamaServerLogPaths
+                $backendOutLog = $logPaths.Out
+                $backendErrLog = $logPaths.Err
+                Write-Host "  Retry Args: $(Format-LocalLLMArgvLine -Argv $serverArgs)" -ForegroundColor DarkGray
+                Write-Host "  Retry Logs: $($logPaths.Out)" -ForegroundColor DarkGray
+                Write-Host "              $($logPaths.Err)" -ForegroundColor DarkGray
+                Write-LaunchLog "llama-server remote backend retry argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
+
+                $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+                Set-CurrentBackendSession -Session @{
+                    Backend  = 'llamacpp'
+                    Mode     = $Mode
+                    Port     = $port
+                    BaseUrl  = "http://localhost:$port"
+                    Model    = $def.Root
+                    GgufPath = $ggufPath
+                    Pid      = $proc.Id
+                    OutLog   = $logPaths.Out
+                    ErrLog   = $logPaths.Err
+                }
+                try {
+                    Wait-LlamaServer -Port $port -Process $proc -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+                }
+                catch {
+                    Stop-LlamaServer -Quiet
+                    throw
+                }
+            } else {
+                throw
+            }
         }
     }
 
@@ -741,6 +774,31 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         BackendOutLog = $backendOutLog
         BackendErrLog = $backendErrLog
     }
+}
+
+function Test-LlamaCppSpecFallbackEligible {
+    param(
+        [Parameter(Mandatory = $true)]$ErrorRecord,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$BuildParams
+    )
+
+    if (-not $BuildParams.Contains('SpecType')) { return $false }
+
+    $msg = [string]$ErrorRecord.Exception.Message
+    return ($msg -match 'failed to load MTP head|invalid vector subscript')
+}
+
+function Disable-LlamaCppSpecDecode {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$BuildParams)
+
+    $changed = $false
+    foreach ($key in @('SpecType', 'SpecDraftNMax')) {
+        if ($BuildParams.Contains($key)) {
+            $BuildParams.Remove($key)
+            $changed = $true
+        }
+    }
+    return $changed
 }
 
 function Start-LocalLLMRemoteGateway {
@@ -1547,7 +1605,44 @@ function Start-ClaudeWithLlamaCppModel {
     }
     catch {
         Stop-LlamaServer -Quiet
-        throw
+        if ((Test-LlamaCppSpecFallbackEligible -ErrorRecord $_ -BuildParams $buildParams) -and (Disable-LlamaCppSpecDecode -BuildParams $buildParams)) {
+            Write-Warning "llama-server failed while loading the MTP head; retrying once without speculative MTP."
+            Write-LaunchLog "llama-server MTP head load failed; retrying without --spec-type" 'WARN'
+            $serverArgs = Build-LlamaServerArgs @buildParams
+            $logPaths = New-LlamaServerLogPaths
+
+            Write-Host "  Retry Logs : $($logPaths.Out)" -ForegroundColor DarkGray
+            Write-Host "               $($logPaths.Err)" -ForegroundColor DarkGray
+            Write-Host "  Retry Args : $(Format-LocalLLMArgvLine -Argv $serverArgs)" -ForegroundColor DarkGray
+            Write-LaunchLog "llama-server retry argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
+
+            $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+            Write-Host "  Retry PID  : $($proc.Id)" -ForegroundColor DarkGray
+            Write-LaunchLog "llama-server retry started: pid=$($proc.Id) port=$port" 'SERVER'
+
+            $session = @{
+                Backend  = 'llamacpp'
+                Mode     = $Mode
+                Port     = $port
+                BaseUrl  = "http://localhost:$port"
+                Model    = $def.Root
+                GgufPath = $ggufPath
+                Pid      = $proc.Id
+                OutLog   = $logPaths.Out
+                ErrLog   = $logPaths.Err
+            }
+            Set-CurrentBackendSession -Session $session
+
+            try {
+                Wait-LlamaServer -Port $port -Process $proc -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+            }
+            catch {
+                Stop-LlamaServer -Quiet
+                throw
+            }
+        } else {
+            throw
+        }
     }
 
     $contextTokens = Get-ModelContextValue -Def $def -ContextKey $ContextKey
