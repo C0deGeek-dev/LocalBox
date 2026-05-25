@@ -209,6 +209,33 @@ function Set-ClaudeLocalEnv {
     $env:ENABLE_TOOL_SEARCH = "false"
 }
 
+function Set-LocalBackendTelemetryEnv {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$OutLogPath,
+        [Parameter(Mandatory = $true)][string]$ErrLogPath,
+        [Parameter(Mandatory = $true)][string]$GgufPath,
+        [Parameter(Mandatory = $true)][string]$Model,
+        [Parameter(Mandatory = $true)][string]$ContextKey,
+        [int]$ContextTokens = 0
+    )
+
+    $env:LOCALBOX_BACKEND = "llama.cpp"
+    $env:LOCALBOX_LLAMA_SERVER_PID = [string]$ProcessId
+    $env:LOCALBOX_LLAMA_SERVER_PORT = [string]$Port
+    $env:LOCALBOX_LLAMA_SERVER_OUT_LOG = $OutLogPath
+    $env:LOCALBOX_LLAMA_SERVER_ERR_LOG = $ErrLogPath
+    $env:LOCALBOX_LLAMA_SERVER_GGUF = $GgufPath
+    $env:LOCALBOX_LLAMA_SERVER_MODEL = $Model
+    $env:LOCALBOX_CONTEXT_KEY = $ContextKey
+    if ($ContextTokens -gt 0) {
+        $env:LOCALBOX_CONTEXT_TOKENS = [string]$ContextTokens
+    }
+    $env:LOCALBOX_LOW_TPS_WARNING = "2"
+}
+
 function Start-NoThinkProxy {
     # Puts the no-think proxy in front of llama-server at -TargetPort. The
     # proxy strips Anthropic thinking-config from requests and <think>...
@@ -1591,6 +1618,7 @@ function Start-ClaudeWithLlamaCppModel {
     }
 
         Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep') -ContextTokens $contextTokens
+        Set-LocalBackendTelemetryEnv -ProcessId $proc.Id -Port $port -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err -GgufPath $ggufPath -Model $def.Root -ContextKey $ContextKey -ContextTokens $contextTokens
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
