@@ -673,9 +673,11 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         Write-Host "Starting llama-server remote backend for $($def.Root)..." -ForegroundColor Cyan
         Write-Host "  Server   : $serverPath" -ForegroundColor DarkGray
         Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+        Write-Host "  Args     : $(Format-LocalLLMArgvLine -Argv $serverArgs)" -ForegroundColor DarkGray
         Write-Host "  Port     : $port" -ForegroundColor DarkGray
         Write-Host "  Logs     : $($logPaths.Out)" -ForegroundColor DarkGray
         Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
+        Write-LaunchLog "llama-server remote backend argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
 
         $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
         Set-CurrentBackendSession -Session @{
@@ -1490,8 +1492,10 @@ function Start-ClaudeWithLlamaCppModel {
     Write-Host "  Port     : $port" -ForegroundColor DarkGray
     Write-Host "  Logs     : $($logPaths.Out)" -ForegroundColor DarkGray
     Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
+    Write-Host "  Args     : $(Format-LocalLLMArgvLine -Argv $serverArgs)" -ForegroundColor DarkGray
 
     Write-LaunchLog "llama-server: path=$serverPath port=$port gguf=$ggufPath mode=$Mode" 'SERVER'
+    Write-LaunchLog "llama-server argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
 
     $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
     Write-Host "  PID      : $($proc.Id)" -ForegroundColor DarkGray
