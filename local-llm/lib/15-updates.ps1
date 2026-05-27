@@ -420,6 +420,15 @@ function Update-LocalLLMSuite {
         }
     }
 
+    # Refresh the llama.cpp binaries too: cheap release downloads (native/turboquant)
+    # auto-update; the mtpturbo source build is only checked + warned (rebuild via
+    # update-llama -Mode mtpturbo -Force). On -DryRun, only report what's stale.
+    if (Get-Command Update-LlamaCppBinaries -ErrorAction SilentlyContinue) {
+        Write-Section 'llama.cpp binaries'
+        try { Update-LlamaCppBinaries -Mode all -CheckOnly:$DryRun }
+        catch { Write-Warning "llama.cpp binary update failed: $($_.Exception.Message)" }
+    }
+
     Write-LocalLLMUpdateSummary -Results $results
     return $results
 }

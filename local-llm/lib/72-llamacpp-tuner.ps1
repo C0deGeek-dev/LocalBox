@@ -477,6 +477,13 @@ function Find-BestLlamaCppConfig {
     }
 
     Write-Host "findbest: using BenchPilot ($($bpStatus.Version), $($bpStatus.Source))." -ForegroundColor Cyan
+    # Pre-flight: ensure the llama.cpp build for this mode is current before we
+    # benchmark against it. Cheap release downloads (native/turboquant) auto-update;
+    # the mtpturbo source build is only checked + warned (rebuild via update-llama
+    # -Force). Non-fatal and skippable via Cfg.SkipLlamaUpdateCheck.
+    if (Get-Command Invoke-LlamaCppUpdatePreflight -ErrorAction SilentlyContinue) {
+        Invoke-LlamaCppUpdatePreflight -Mode $Mode
+    }
     return Invoke-BenchPilotLauncherFindBest @PSBoundParameters
 }
 
