@@ -42,12 +42,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # handling). LocalBox compares this against NoThinkProxyRequiredVersion in
 # defaults.json and warns when the deployed proxy is older than the launcher
 # expects. Format: SemVer "MAJOR.MINOR.PATCH".
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 TARGET_HOST = "127.0.0.1"
 TARGET_PORT = 8080
 AUTH_TOKEN = ""
+
+# Emitted in place of a text block that strips to nothing because the model's
+# entire output was a <think> block (often an unclosed one, when generation
+# stops on EOS/max_tokens mid-reasoning). Without this, the proxy forwards an
+# empty assistant turn, which downstream consumers (Unshackled) record as a
+# blank response and can choke on. A short, non-reasoning marker keeps the turn
+# non-empty and parseable without leaking the stripped reasoning.
+EMPTY_AFTER_THINK_FALLBACK = "[no output]"
 
 THINK_TAGS = {
     "<think>": "</think>",
@@ -133,6 +141,10 @@ class ThinkStripper:
         self.in_think = False
         self.buffer = ""
         self.close_tag = None
+        # True once any non-empty (non-think) text has been emitted. Used to
+        # detect the "stripped to nothing" case so callers can substitute a
+        # fallback rather than forward an empty assistant turn.
+        self.emitted_any = False
 
     def feed(self, text):
         if not text:
@@ -187,7 +199,10 @@ class ThinkStripper:
             self.in_think = True
             self.close_tag = close_tag
 
-        return "".join(out_parts)
+        out = "".join(out_parts)
+        if out:
+            self.emitted_any = True
+        return out
 
     def flush(self):
         """Emit any remaining buffered text (called at end-of-stream)."""
@@ -196,6 +211,8 @@ class ThinkStripper:
         self.buffer = ""
         self.in_think = False
         self.close_tag = None
+        if out:
+            self.emitted_any = True
         return out
 
 
@@ -214,7 +231,12 @@ def _strip_think_in_obj(obj):
 
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
-                cleaned = stripper.feed(block.get("text", "")) + stripper.flush()
+                original = block.get("text", "")
+                cleaned = stripper.feed(original) + stripper.flush()
+                # Whole block was reasoning that stripped to nothing — substitute
+                # a marker so the turn isn't a blank assistant response.
+                if not cleaned and not stripper.emitted_any and original:
+                    cleaned = EMPTY_AFTER_THINK_FALLBACK
                 # Reset for the next block — think tags shouldn't span blocks.
                 stripper = ThinkStripper()
                 block["text"] = cleaned
@@ -397,8 +419,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             if event_type == "content_block_stop":
                 idx = data.get("index", 0)
+                # Only a block that actually streamed text deltas has a stripper
+                # here. Non-text blocks (tool_use → input_json_delta) never call
+                # get_stripper during deltas, so guard on prior existence to
+                # avoid injecting a text fallback into a non-text block.
+                had_stripper = idx in strippers
                 stripper = get_stripper(idx)
                 tail = stripper.flush()
+
+                # Text block stripped to nothing (entire output was reasoning,
+                # often an unclosed <think> truncated at EOS/max_tokens) — inject
+                # a marker so the consumer doesn't see a blank assistant turn.
+                if not tail and had_stripper and not stripper.emitted_any:
+                    tail = EMPTY_AFTER_THINK_FALLBACK
 
                 if tail:
                     synthetic = {

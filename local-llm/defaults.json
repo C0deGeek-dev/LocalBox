@@ -1,7 +1,7 @@
 {
   "Default": "qcoder30",
   "NoThinkProxyPort": 11435,
-  "NoThinkProxyRequiredVersion": "1.1.0",
+  "NoThinkProxyRequiredVersion": "1.2.0",
   "LlamaCppPort": 8080,
   "LlamaCppServerPath": "%USERPROFILE%\\.local-llm\\llama-cpp\\llama-server.exe",
   "LlamaCppTurboquantRoot": "%USERPROFILE%\\.local-llm\\llama-cpp-turboquant",
