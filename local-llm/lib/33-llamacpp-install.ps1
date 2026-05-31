@@ -6,6 +6,67 @@ function Get-LlamaCppInstallRoot {
     return (Join-Path $HOME ".local-llm\llama-cpp")
 }
 
+function Get-LocalBoxDownloadPin {
+    # Expected SHA-256 for a downloaded asset, by asset name. Pins live in
+    # settings.json under LlamaCppDownloadPins: { "<asset-name>": "<sha256>" }.
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    if (-not $script:Cfg -or -not $script:Cfg.Contains('LlamaCppDownloadPins')) { return $null }
+    $pins = $script:Cfg.LlamaCppDownloadPins
+    if (-not $pins) { return $null }
+
+    if ($pins -is [hashtable]) {
+        if ($pins.ContainsKey($Key)) { return [string]$pins[$Key] }
+        return $null
+    }
+    $prop = $pins.PSObject.Properties[$Key]
+    if ($prop) { return [string]$prop.Value }
+    return $null
+}
+
+function Invoke-LocalBoxVerifiedDownload {
+    # Download $Uri to $OutFile, then verify SHA-256 against a configured pin.
+    #   pin present -> mismatch deletes the file and throws.
+    #   pin absent  -> compute + print the hash (trust-on-first-use); abort only
+    #                  when LlamaCppRequireDownloadPins is set.
+    # This turns "download a binary from a third-party release and run it" into a
+    # verifiable step without forcing a pin on users who don't want one.
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [int]$TimeoutSec = 600
+    )
+
+    $oldProgress = $global:ProgressPreference
+    $global:ProgressPreference = 'SilentlyContinue'
+    try {
+        Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -TimeoutSec $TimeoutSec
+    }
+    finally {
+        $global:ProgressPreference = $oldProgress
+    }
+
+    $actual = (Get-FileHash -LiteralPath $OutFile -Algorithm SHA256).Hash.ToLower()
+    $expected = Get-LocalBoxDownloadPin -Key $Name
+
+    if (-not [string]::IsNullOrWhiteSpace($expected)) {
+        if ($actual -ne $expected.ToLower()) {
+            Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+            throw "Checksum mismatch for '$Name': expected $($expected.ToLower()), got $actual. Refusing to use the download."
+        }
+        Write-Host "  Verified $Name (sha256 ok)" -ForegroundColor DarkGreen
+        return
+    }
+
+    Write-Host "  Downloaded $Name sha256=$actual (unpinned)." -ForegroundColor DarkYellow
+    Write-Host "  To pin it, add `"$Name`": `"$actual`" under LlamaCppDownloadPins in settings.json." -ForegroundColor DarkGray
+    if ($script:Cfg -and $script:Cfg.Contains('LlamaCppRequireDownloadPins') -and [bool]$script:Cfg.LlamaCppRequireDownloadPins) {
+        Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+        throw "LlamaCppRequireDownloadPins is enabled but no pin exists for '$Name'. Add its sha256 to settings.json LlamaCppDownloadPins."
+    }
+}
+
 function Find-LlamaServerExe {
     # 1) explicit path from catalog/settings
     $configured = $script:Cfg.LlamaCppServerPath
@@ -171,14 +232,7 @@ function Install-LlamaServerNative {
     $tmpZip = Join-Path $env:TEMP $asset.name
     if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force }
 
-    $oldProgress = $global:ProgressPreference
-    $global:ProgressPreference = 'SilentlyContinue'
-    try {
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 600
-    }
-    finally {
-        $global:ProgressPreference = $oldProgress
-    }
+    Invoke-LocalBoxVerifiedDownload -Uri $asset.browser_download_url -OutFile $tmpZip -Name $asset.name -TimeoutSec 600
 
     Write-Host "Extracting to $installRoot..." -ForegroundColor Cyan
     Expand-Archive -LiteralPath $tmpZip -DestinationPath $installRoot -Force
@@ -213,14 +267,7 @@ function Install-LlamaServerNative {
             $cudartZip = Join-Path $env:TEMP $cudartAsset.name
             if (Test-Path $cudartZip) { Remove-Item $cudartZip -Force }
             Write-Host "Downloading CUDA runtime ($($cudartAsset.name))..." -ForegroundColor Cyan
-            $oldProgress = $global:ProgressPreference
-            $global:ProgressPreference = 'SilentlyContinue'
-            try {
-                Invoke-WebRequest -Uri $cudartAsset.browser_download_url -OutFile $cudartZip -UseBasicParsing -TimeoutSec 600
-            }
-            finally {
-                $global:ProgressPreference = $oldProgress
-            }
+            Invoke-LocalBoxVerifiedDownload -Uri $cudartAsset.browser_download_url -OutFile $cudartZip -Name $cudartAsset.name -TimeoutSec 600
             Expand-Archive -LiteralPath $cudartZip -DestinationPath $installRoot -Force
             Remove-Item $cudartZip -Force -ErrorAction SilentlyContinue
         }
@@ -445,14 +492,7 @@ function Install-LlamaServerTurboquant {
     }
 
     Write-Host "Downloading $sizeMB MB to $tmpZip..." -ForegroundColor Cyan
-    $oldProgress = $global:ProgressPreference
-    $global:ProgressPreference = 'SilentlyContinue'
-    try {
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 1800
-    }
-    finally {
-        $global:ProgressPreference = $oldProgress
-    }
+    Invoke-LocalBoxVerifiedDownload -Uri $asset.browser_download_url -OutFile $tmpZip -Name $asset.name -TimeoutSec 1800
 
     Write-Host "Extracting to $installRoot..." -ForegroundColor Cyan
     Expand-Archive -LiteralPath $tmpZip -DestinationPath $installRoot -Force
@@ -914,7 +954,24 @@ function Build-LlamaServerMtpTurbo {
         if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
     }
 
+    # Commit pin: a moving branch ref can be force-pushed to ship different code.
+    # When LlamaCppMtpTurboCommit is set, check out that exact commit so the build
+    # is reproducible and can't change underneath you.
+    $pinnedCommit = if ($script:Cfg -and $script:Cfg.Contains('LlamaCppMtpTurboCommit')) { [string]$script:Cfg.LlamaCppMtpTurboCommit } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($pinnedCommit)) {
+        Write-Host "Pinning to commit $pinnedCommit..." -ForegroundColor Cyan
+        & git -C $srcRoot fetch --depth 1 origin $pinnedCommit 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git fetch of pinned commit $pinnedCommit failed (does the branch contain it?)" }
+        & git -C $srcRoot checkout -f $pinnedCommit 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git checkout of pinned commit $pinnedCommit failed" }
+    }
+
     $headSha = (& git -C $srcRoot rev-parse --short HEAD).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($pinnedCommit)) {
+        Write-Host "  Building pinned commit $headSha" -ForegroundColor DarkGreen
+    } else {
+        Write-Host "  Building branch HEAD $headSha (unpinned — set LlamaCppMtpTurboCommit to pin)" -ForegroundColor DarkYellow
+    }
 
     # Resolve compute capability — fallback to a broad set if nvidia-smi is missing.
     $cc = Get-LocalNvidiaComputeCapability
