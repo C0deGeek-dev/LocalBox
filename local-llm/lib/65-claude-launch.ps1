@@ -623,7 +623,9 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         VisionModulePath = $(if ($visionModulePath) { $visionModulePath } else { '' })
     }
     if ($agentParallel -gt 0) { $buildParams.Parallel = $agentParallel }
-    if ($agentCacheReuse -gt 0) { $buildParams.CacheReuse = $agentCacheReuse }
+    # CacheReuse is applied as a fallback AFTER the AutoBest merge (below) so a
+    # tuned profile's value (including 0 = reuse disabled, needed for vision)
+    # takes precedence over the hardcoded config default.
     if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
     if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
     if ($Strict)    { $buildParams.Strict = $true }
@@ -639,10 +641,10 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         $loadedProfile = $AutoBestProfile
 
         if ($promptProfileOverride) {
-            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision
             $loadedProfile = "pure/$promptProfileOverride"
         } else {
-            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile -Vision $UseVision
             if ($preferred) {
                 $bestEntry = $preferred.Entry
                 $loadedProfile = "$($preferred.Profile)/$($preferred.PromptLength)"
@@ -670,6 +672,12 @@ function Start-LocalLLMLlamaCppRemoteBackend {
             $profileHint = if ($promptProfileOverride) { $promptProfileOverride } else { 'long' }
             Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
         }
+    }
+
+    # Fallback: only apply the config CacheReuse default when neither a tuned
+    # profile nor an explicit launch setting already bound it.
+    if (-not $buildParams.ContainsKey('CacheReuse') -and $agentCacheReuse -gt 0) {
+        $buildParams.CacheReuse = $agentCacheReuse
     }
 
     $serverArgs = Build-LlamaServerArgs @buildParams
@@ -1363,7 +1371,9 @@ function Start-ClaudeWithLlamaCppModel {
         VisionModulePath = $(if ($visionModulePath) { $visionModulePath } else { '' })
     }
     if ($agentParallel -gt 0) { $buildParams.Parallel = $agentParallel }
-    if ($agentCacheReuse -gt 0) { $buildParams.CacheReuse = $agentCacheReuse }
+    # CacheReuse is applied as a fallback AFTER the AutoBest merge (below) so a
+    # tuned profile's value (including 0 = reuse disabled, needed for vision)
+    # takes precedence over the hardcoded config default.
 
     if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
     if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
@@ -1383,10 +1393,10 @@ function Start-ClaudeWithLlamaCppModel {
         $promptProfileOverride = if ($AutoBestProfile -in @('short', 'long')) { $AutoBestProfile } else { $null }
         $loadedProfile = $AutoBestProfile
         if ($promptProfileOverride) {
-            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision
             $loadedProfile = "pure/$promptProfileOverride"
         } else {
-            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile -Vision $UseVision
             if ($preferred) {
                 $bestEntry = $preferred.Entry
                 $loadedProfile = "$($preferred.Profile)/$($preferred.PromptLength)"
@@ -1429,7 +1439,7 @@ function Start-ClaudeWithLlamaCppModel {
             $candidates = @()
             foreach ($selectionName in $selectionProfilesToCheck) {
                 foreach ($profileName in $profilesToCheck) {
-                    $candidates += @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $profileName -Quant $quant -Profile $selectionName)
+                    $candidates += @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $profileName -Quant $quant -Profile $selectionName -Vision $UseVision)
                 }
             }
             foreach ($candidate in $candidates) {
@@ -1441,6 +1451,12 @@ function Start-ClaudeWithLlamaCppModel {
             $profileHint = if ($promptProfileOverride) { $promptProfileOverride } else { 'long' }
             Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
         }
+    }
+
+    # Fallback: only apply the config CacheReuse default when neither a tuned
+    # profile nor an explicit launch setting already bound it.
+    if (-not $buildParams.ContainsKey('CacheReuse') -and $agentCacheReuse -gt 0) {
+        $buildParams.CacheReuse = $agentCacheReuse
     }
 
     $serverArgs = Build-LlamaServerArgs @buildParams

@@ -196,6 +196,7 @@ function Invoke-BenchPilotLauncherFindBest {
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
+        [switch]$UseVision,
         [switch]$NoSave
     )
 
@@ -227,6 +228,7 @@ function Invoke-BenchPilotLauncherFindBest {
         AllowKvQualityRegression = $AllowKvQualityRegression
         Profile = $Profile
         NoSave = $NoSave
+        UseVision = $UseVision
         LauncherRoot = $script:LLMProfileRoot
     }
     if ($PSBoundParameters.ContainsKey('SearchStrategy') -and -not [string]::IsNullOrWhiteSpace($SearchStrategy)) {

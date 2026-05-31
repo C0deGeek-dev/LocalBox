@@ -182,7 +182,8 @@ function Get-BestLlamaCppConfig {
         [ValidateSet('short','long')][string]$PromptLength = 'short',
         [string]$Quant,
         [int]$VramGB,
-        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure',
+        [bool]$Vision = $false
     )
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
@@ -213,6 +214,9 @@ function Get-BestLlamaCppConfig {
         if ($entryPromptLength -ne $PromptLength) { continue }
         $entryProfile = if ($entry.profile) { [string]$entry.profile } else { 'pure' }
         if ($entryProfile -ne $Profile) { continue }
+        # Vision and text-only profiles are not interchangeable (mmproj changes VRAM
+        # + behaviour). Missing 'vision' on legacy entries reads as text-only.
+        if (([bool]$entry.vision) -ne $Vision) { continue }
         if ($Quant -and $entry.quant -ne $Quant) { continue }
         $delta = [Math]::Abs([int]$entry.vramGB - [int]$VramGB)
         if ($delta -gt 1) { continue }
@@ -235,14 +239,15 @@ function Get-PreferredLlamaCppBestConfig {
         [Parameter(Mandatory = $true)][string]$Mode,
         [string]$Quant,
         [int]$VramGB,
-        [ValidateSet('auto','pure','balanced')][string]$Profile = 'auto'
+        [ValidateSet('auto','pure','balanced')][string]$Profile = 'auto',
+        [bool]$Vision = $false
     )
 
     $candidates = @()
     $selectionProfiles = if ($Profile -eq 'auto') { @('balanced', 'pure') } else { @($Profile) }
     foreach ($selectionProfile in $selectionProfiles) {
         foreach ($promptProfile in @('long', 'short')) {
-            $entry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfile -Quant $Quant -VramGB $VramGB -Profile $selectionProfile
+            $entry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfile -Quant $Quant -VramGB $VramGB -Profile $selectionProfile -Vision $Vision
             if ($entry) {
                 $unit = [string]$entry.scoreUnit
                 $rank = if ($selectionProfile -eq 'balanced') { 0 } else { 1 }
@@ -274,7 +279,8 @@ function Get-LlamaCppBestConfigCandidates {
         [Parameter(Mandatory = $true)][string]$Mode,
         [ValidateSet('short','long')][string]$PromptLength = 'short',
         [string]$Quant,
-        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure',
+        [bool]$Vision = $false
     )
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
@@ -292,6 +298,7 @@ function Get-LlamaCppBestConfigCandidates {
         $_.mode -eq $Mode -and
         ($(if ($_.prompt_length) { [string]$_.prompt_length } else { 'short' }) -eq $PromptLength) -and
         ($(if ($_.profile) { [string]$_.profile } else { 'pure' }) -eq $Profile) -and
+        (([bool]$_.vision) -eq $Vision) -and
         ([string]::IsNullOrWhiteSpace($Quant) -or $_.quant -eq $Quant)
     })
 }
@@ -463,6 +470,7 @@ function Find-BestLlamaCppConfig {
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
+        [switch]$UseVision,
         [switch]$NoSave
     )
 
@@ -556,6 +564,7 @@ function findbest {
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
+        [switch]$UseVision,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
@@ -586,6 +595,7 @@ function tunellm {
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
+        [switch]$UseVision,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
