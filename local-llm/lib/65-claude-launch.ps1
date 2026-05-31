@@ -159,7 +159,8 @@ function Set-ClaudeLocalEnv {
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][string]$Model,
         [bool]$KeepThinking = $false,
-        [int]$ContextTokens = 0
+        [int]$ContextTokens = 0,
+        [int]$MaxImagesPerRequest = 0
     )
 
     $env:ANTHROPIC_BASE_URL = $BaseUrl
@@ -207,6 +208,16 @@ function Set-ClaudeLocalEnv {
     # fields that local proxies tolerate inconsistently.
     $env:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1"
     $env:ENABLE_TOOL_SEARCH = "false"
+
+    # Per-model image-per-request ceiling for the local vision backend.
+    # Unshackled's capImagesForLocalBackend defaults to 1 (llama.cpp + mmproj
+    # typically collapses into degenerate "/////" output beyond one image). A
+    # model known to handle more sets MaxImagesPerRequest in its catalog def to
+    # raise the cap; unset leaves Unshackled's default of 1. For the esoteric
+    # 0 (drop all) / -1 (disable cap) values, set CLAUDE_LOCAL_MAX_IMAGES by hand.
+    if ($MaxImagesPerRequest -gt 0) {
+        $env:CLAUDE_LOCAL_MAX_IMAGES = [string]$MaxImagesPerRequest
+    }
 }
 
 function Set-LocalBackendTelemetryEnv {
@@ -1517,10 +1528,14 @@ function Start-ClaudeWithLlamaCppModel {
             "claude via llama.cpp ($Mode)"
         }
 
+        $snapshotMaxImages = 0
+        if ($def.ContainsKey('MaxImagesPerRequest')) {
+            try { $snapshotMaxImages = [int]$def.MaxImagesPerRequest } catch { $snapshotMaxImages = 0 }
+        }
         $env = if ($Codex) {
             [ordered]@{}
         } else {
-            Get-LocalLLMClaudeEnvSnapshot -BaseUrl $baseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep')
+            Get-LocalLLMClaudeEnvSnapshot -BaseUrl $baseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep') -MaxImagesPerRequest $snapshotMaxImages
         }
 
         $launchExe = if ($Unshackled) { 'unshackled' } elseif ($Codex) { 'codex' } else { 'claude' }
@@ -1732,7 +1747,14 @@ function Start-ClaudeWithLlamaCppModel {
         }
     }
 
-        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep') -ContextTokens $contextTokens
+        # Lift the local-backend image cap only when the model def declares it can
+        # handle more than one image per request; otherwise leave Unshackled's
+        # safe default of 1. Only meaningful for a vision (-UseVision) launch.
+        $maxImagesPerRequest = 0
+        if ($def.ContainsKey('MaxImagesPerRequest')) {
+            try { $maxImagesPerRequest = [int]$def.MaxImagesPerRequest } catch { $maxImagesPerRequest = 0 }
+        }
+        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep') -ContextTokens $contextTokens -MaxImagesPerRequest $maxImagesPerRequest
         Set-LocalBackendTelemetryEnv -ProcessId $proc.Id -Port $port -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err -GgufPath $ggufPath -Model $def.Root -ContextKey $ContextKey -ContextTokens $contextTokens
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }

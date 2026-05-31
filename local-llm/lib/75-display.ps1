@@ -161,7 +161,8 @@ function Get-LocalLLMClaudeEnvSnapshot {
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][string]$Model,
         [bool]$KeepThinking = $false,
-        [string]$AuthToken = 'local'
+        [string]$AuthToken = 'local',
+        [int]$MaxImagesPerRequest = 0
     )
 
     $env = [ordered]@{
@@ -195,6 +196,12 @@ function Get-LocalLLMClaudeEnvSnapshot {
     $env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'
     $env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1'
     $env.ENABLE_TOOL_SEARCH = 'false'
+
+    # Mirror Set-ClaudeLocalEnv: emit the image cap only when a model raises it
+    # above Unshackled's default of 1.
+    if ($MaxImagesPerRequest -gt 0) {
+        $env.CLAUDE_LOCAL_MAX_IMAGES = [string]$MaxImagesPerRequest
+    }
 
     return $env
 }

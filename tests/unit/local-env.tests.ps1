@@ -48,6 +48,27 @@ Describe 'Local Claude environment' {
         $snapshot.ENABLE_TOOL_SEARCH | Should -Be 'false'
     }
 
+    It 'emits CLAUDE_LOCAL_MAX_IMAGES when a model raises the image cap' {
+        Set-ClaudeLocalEnv -BaseUrl 'http://localhost:11435' -Model 'local-test' -MaxImagesPerRequest 4
+
+        $env:CLAUDE_LOCAL_MAX_IMAGES | Should -Be '4'
+    }
+
+    It 'leaves CLAUDE_LOCAL_MAX_IMAGES unset when the model does not raise the cap' {
+        Remove-Item Env:CLAUDE_LOCAL_MAX_IMAGES -ErrorAction SilentlyContinue
+        Set-ClaudeLocalEnv -BaseUrl 'http://localhost:11435' -Model 'local-test'
+
+        $env:CLAUDE_LOCAL_MAX_IMAGES | Should -BeNullOrEmpty
+    }
+
+    It 'mirrors the image cap in dry-run env snapshots only when raised' {
+        $raised = Get-LocalLLMClaudeEnvSnapshot -BaseUrl 'http://localhost:11435' -Model 'local-test' -MaxImagesPerRequest 4
+        $raised.CLAUDE_LOCAL_MAX_IMAGES | Should -Be '4'
+
+        $default = Get-LocalLLMClaudeEnvSnapshot -BaseUrl 'http://localhost:11435' -Model 'local-test'
+        $default.Contains('CLAUDE_LOCAL_MAX_IMAGES') | Should -BeFalse
+    }
+
     It 'does not advertise ToolSearch in inline deferred schemas' {
         $prompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas
 
