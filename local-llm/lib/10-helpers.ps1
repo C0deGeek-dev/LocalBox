@@ -1,6 +1,27 @@
 # Generic filesystem / console / HuggingFace download primitives shared by
 # everything else. No dependencies on the catalog or model defs.
 
+function Get-LocalModelPermissionArgs {
+    # Resolve whether agent launches pass '--dangerously-skip-permissions'.
+    # Default is ON (skip permission prompts) to preserve the historical local
+    # workflow, but it is now opt-out: set LocalModelSkipPermissions=false in
+    # settings.json, or LOCAL_LLM_SKIP_PERMISSIONS=0 in the environment, to get
+    # Claude Code's normal per-action permission prompts back. Permission
+    # prompts are the human-in-the-loop that breaks prompt-injection / runaway
+    # tool calls, which matter more with smaller, less-aligned local models.
+    $skip = $true
+    if ($script:Cfg -and $script:Cfg.Contains('LocalModelSkipPermissions')) {
+        $skip = [bool]$script:Cfg.LocalModelSkipPermissions
+    }
+    if (-not [string]::IsNullOrEmpty($env:LOCAL_LLM_SKIP_PERMISSIONS)) {
+        $skip = $env:LOCAL_LLM_SKIP_PERMISSIONS -notin @('0', 'false', 'no', 'off')
+    }
+    # Callers wrap the result with @(...), so a scalar (skip on) or empty (off)
+    # both normalize cleanly without injecting a stray $null arg.
+    if ($skip) { return @('--dangerously-skip-permissions') }
+    return @()
+}
+
 function Ensure-Directory {
     param([Parameter(Mandatory = $true)][string]$Path)
 

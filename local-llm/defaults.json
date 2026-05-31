@@ -11,5 +11,6 @@
   "LlamaCppDefaultMode": "native",
   "LlamaCppHealthCheckTimeoutSec": 300,
   "LlamaCppSmokeTestTimeoutSec": 300,
+  "LocalModelSkipPermissions": true,
   "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop"
 }

@@ -1513,11 +1513,12 @@ function Start-ClaudeWithLlamaCppModel {
 
         $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
 
+        $permArgs = @(Get-LocalModelPermissionArgs)
         $launchArgs = if ($LimitTools) {
-            @('--dangerously-skip-permissions', '--tools', $Tools, '--append-system-prompt', $systemPrompt)
+            @($permArgs) + @('--tools', $Tools, '--append-system-prompt', $systemPrompt)
         }
         else {
-            @('--dangerously-skip-permissions', '--append-system-prompt', $systemPrompt)
+            @($permArgs) + @('--append-system-prompt', $systemPrompt)
         }
 
         $title = if ($Codex) {
@@ -1784,9 +1785,9 @@ function Start-ClaudeWithLlamaCppModel {
         Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray
         Write-Host ""
 
+        $permArgs = @(Get-LocalModelPermissionArgs)
         $launchArgs = if ($LimitTools) {
-            @(
-                '--dangerously-skip-permissions',
+            @($permArgs) + @(
                 '--tools',
                 $Tools,
                 '--append-system-prompt',
@@ -1794,8 +1795,7 @@ function Start-ClaudeWithLlamaCppModel {
             )
         }
         else {
-            @(
-                '--dangerously-skip-permissions',
+            @($permArgs) + @(
                 '--append-system-prompt',
                 $systemPrompt
             )
