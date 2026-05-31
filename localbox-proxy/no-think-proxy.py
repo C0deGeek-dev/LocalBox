@@ -30,11 +30,14 @@ Env-var fallbacks (used when arg not given):
     NO_THINK_PROXY_LISTEN_PORT
     NO_THINK_PROXY_TARGET
 """
+import hmac
 import http.client
 import json
 import os
 import socket
 import sys
+import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -48,6 +51,40 @@ __version__ = "1.2.0"
 TARGET_HOST = "127.0.0.1"
 TARGET_PORT = 8080
 AUTH_TOKEN = ""
+
+# Maximum request body we will buffer. A /v1/messages request is a few MB at
+# most; anything larger is either a bug or a memory-exhaustion attempt. We read
+# Content-Length-bounded bodies fully into memory, so this is the hard ceiling.
+MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024  # 64 MB
+
+# Online-guessing throttle for the auth gate. Keyed by client IP. After
+# AUTH_FAIL_FREE failures, each subsequent failure sleeps for a growing delay
+# (capped) before the 401 is returned, so a LAN attacker can't brute-force the
+# token at wire speed. A successful auth from the same IP resets the counter.
+AUTH_FAIL_FREE = 5
+AUTH_FAIL_DELAY_STEP = 0.5          # seconds added per failure past the free ones
+AUTH_FAIL_DELAY_MAX = 5.0           # seconds, ceiling per attempt
+AUTH_FAIL_WINDOW = 300.0            # seconds; failure counters older than this reset
+_auth_fail_lock = threading.Lock()
+_auth_fail_state = {}               # ip -> [fail_count, first_fail_monotonic]
+
+
+def _register_auth_failure(ip):
+    """Record a failed auth from `ip` and return how long to sleep before replying."""
+    now = time.monotonic()
+    with _auth_fail_lock:
+        count, first = _auth_fail_state.get(ip, (0, now))
+        if now - first > AUTH_FAIL_WINDOW:
+            count, first = 0, now
+        count += 1
+        _auth_fail_state[ip] = (count, first)
+    over = max(0, count - AUTH_FAIL_FREE)
+    return min(over * AUTH_FAIL_DELAY_STEP, AUTH_FAIL_DELAY_MAX)
+
+
+def _clear_auth_failures(ip):
+    with _auth_fail_lock:
+        _auth_fail_state.pop(ip, None)
 
 # Emitted in place of a text block that strips to nothing because the model's
 # entire output was a <think> block (often an unclosed one, when generation
@@ -82,48 +119,58 @@ def _header_value(headers, name):
     return None
 
 
+def _tokens_equal(presented, expected):
+    """Constant-time string comparison (defends against timing oracles)."""
+    if presented is None:
+        return False
+    # hmac.compare_digest requires same-type operands; compare as bytes.
+    return hmac.compare_digest(
+        presented.encode("utf-8", "replace"),
+        expected.encode("utf-8", "replace"),
+    )
+
+
 def is_request_authorized(headers, auth_token):
-    """Return True when no token is configured, or request headers carry it."""
+    """Return True when no token is configured, or request headers carry it.
+
+    Comparisons are constant-time so the response latency does not leak how
+    many leading bytes of the token matched.
+    """
     if not auth_token:
         return True
 
     api_key = _header_value(headers, "x-api-key")
-    if api_key == auth_token:
+    if _tokens_equal(api_key, auth_token):
         return True
 
     auth = _header_value(headers, "authorization") or ""
     prefix = "bearer "
-    if auth.lower().startswith(prefix) and auth[len(prefix):] == auth_token:
+    if auth.lower().startswith(prefix) and _tokens_equal(auth[len(prefix):], auth_token):
         return True
 
     return False
 
 
+# Anthropic's thinking/reasoning configuration lives at the TOP LEVEL of a
+# /v1/messages request body. We strip only those root keys. We deliberately do
+# NOT recurse: keys like "reasoning" or "budget_tokens" are ordinary words and
+# may legitimately appear inside message content, tool input schemas, or tool
+# results — recursively deleting them by name would silently corrupt tool
+# payloads, which is a real correctness hazard for an agentic harness.
+THINKING_ROOT_KEYS = frozenset({
+    "thinking",
+    "thinking_budget",
+    "budget_tokens",
+    "max_thinking_tokens",
+    "reasoning",
+    "reasoning_effort",
+})
+
+
 def strip_thinking_fields(value):
-    """Remove Anthropic thinking-related fields recursively from a request body."""
+    """Remove Anthropic thinking-related fields from the request body root only."""
     if isinstance(value, dict):
-        cleaned = {}
-
-        for key, item in value.items():
-            lowered = key.lower()
-
-            if lowered in {
-                "thinking",
-                "thinking_budget",
-                "budget_tokens",
-                "max_thinking_tokens",
-                "reasoning",
-                "reasoning_effort",
-            }:
-                continue
-
-            cleaned[key] = strip_thinking_fields(item)
-
-        return cleaned
-
-    if isinstance(value, list):
-        return [strip_thinking_fields(item) for item in value]
-
+        return {k: v for k, v in value.items() if k.lower() not in THINKING_ROOT_KEYS}
     return value
 
 
@@ -266,10 +313,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
             pass
 
     def _require_auth(self):
+        client_ip = self.client_address[0]
         if is_request_authorized(self.headers, AUTH_TOKEN):
+            if AUTH_TOKEN:
+                _clear_auth_failures(client_ip)
             return True
 
-        self.log_message("unauthorized %s %s from %s", self.command, self.path, self.client_address[0])
+        # Throttle repeated failures from the same IP to blunt online guessing.
+        delay = _register_auth_failure(client_ip)
+        if delay > 0:
+            time.sleep(delay)
+
+        self.log_message("unauthorized %s %s from %s", self.command, self.path, client_ip)
         self.send_response(401)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("WWW-Authenticate", "Bearer")
@@ -287,10 +342,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
         return False
 
     def _read_body(self):
+        """Read the request body, bounded by MAX_REQUEST_BODY_BYTES.
+
+        Returns the body bytes, or None if the body was rejected as too large
+        (in which case a 413 has already been sent and the caller must return).
+        """
         length = int(self.headers.get("Content-Length", "0") or "0")
 
         if length <= 0:
             return b""
+
+        if length > MAX_REQUEST_BODY_BYTES:
+            self.log_message(
+                "rejecting oversized body: %d bytes (max %d) from %s",
+                length, MAX_REQUEST_BODY_BYTES, self.client_address[0],
+            )
+            self._send_plain(413, "Request body too large.")
+            return None
 
         return self.rfile.read(length)
 
@@ -458,6 +526,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         body = self._read_body()
+        if body is None:
+            return  # oversized body; 413 already sent
         body = self._clean_request_body(body)
 
         headers = {}
