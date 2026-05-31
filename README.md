@@ -119,6 +119,11 @@ What happens:
    big prompts).
 6. Launches `claude --model <root> --dangerously-skip-permissions
    [--tools <allowlist>] --append-system-prompt <local-tool-rules>`.
+   The permission skip is the default (matching the historical local flow) but
+   is now opt-out: `Set-LocalLLMSetting LocalModelSkipPermissions $false` (or
+   `LOCAL_LLM_SKIP_PERMISSIONS=0`) restores Claude Code's per-action permission
+   prompts — worth doing for less-aligned local models, where the prompt is the
+   human-in-the-loop that catches a runaway or injected tool call.
 7. On exit, restores the original env, stops the proxy, and stops `llama-server`.
 
 The model believes it's Claude. Claude Code believes it's talking to Anthropic.
@@ -144,6 +149,12 @@ provider pointed at the running `llama-server`'s `/v1` endpoint.
 ```powershell
 qcoder -Ctx 32k -Codex
 ```
+
+> **Note.** The `codex` CLI itself, when pointed at OpenAI rather than a local
+> endpoint, drives OpenAI's hosted backend. If you use it against the Unshackled
+> Codex adapter (a reverse-engineered private endpoint), be aware that path may
+> violate OpenAI's Terms of Use. Against a local `llama-server` `/v1` endpoint
+> as shown here, this concern does not apply.
 
 ### Remote Unshackled gateway
 
@@ -481,17 +492,39 @@ Set-LocalLLMSetting VRAMGB 32                        # override auto-detect
 Set-LocalLLMSetting LlamaCppDefaultMode native       # or 'turboquant' / 'mtpturbo'
 Set-LocalLLMSetting LlamaCppMtpTurboRepo EsmaeelNabil/llama.cpp      # mtpturbo upstream
 Set-LocalLLMSetting LlamaCppMtpTurboBranch feat/mtp-turboquant-kv-cache   # mtpturbo branch
+Set-LocalLLMSetting LlamaCppMtpTurboCommit <sha>     # pin the mtpturbo build to an exact commit (not a force-pushable branch)
+Set-LocalLLMSetting LlamaCppRequireDownloadPins $true # fail any binary download that has no recorded SHA-256 pin
 Set-LocalLLMSetting LlamaCppNCpuMoe 35               # MoE expert CPU offload (default 35; 0 to disable)
 Set-LocalLLMSetting LlamaCppMlock $false             # disable RAM locking (default $true)
 Set-LocalLLMSetting LlamaCppNoMmap $false            # disable no-mmap (default $true)
 Set-LocalLLMSetting LlamaCppAgentParallel 1          # agent slots (default 1; 0 = llama.cpp auto)
 Set-LocalLLMSetting LlamaCppAgentCacheReuse 256      # prompt-cache reuse chunk size (default 256; 0 = llama.cpp default)
 Set-LocalLLMSetting LocalModelMaxOutputTokens 4096   # cap local Claude/Unshackled completions (0 = tool default)
+Set-LocalLLMSetting LocalModelSkipPermissions $false # require Claude Code permission prompts (default $true = skip them)
 Set-LocalLLMSetting UnshackledRoot $null             # remove an entry
 ```
 
 The `Models` and `CommandAliases` keys are catalog-only and rejected by
 `Set-LocalLLMSetting`. Everything else is fair game.
+
+### Verified binary downloads
+
+LocalBox downloads `llama-server` binaries from third-party GitHub releases and
+builds the `mtpturbo` binary from a fork branch. Every binary download now goes
+through a SHA-256 check:
+
+- **No pin recorded** → the download proceeds (trust-on-first-use) and prints the
+  computed `sha256=...`. Copy that into a `LlamaCppDownloadPins` map (keyed by the
+  exact asset filename) in `~/.local-llm/settings.json` to pin it:
+  ```json
+  "LlamaCppDownloadPins": { "llama-<tag>-bin-win-cuda-x64.zip": "<sha256>" }
+  ```
+  (`LlamaCppDownloadPins` is a nested map, so edit `settings.json` directly rather
+  than via `Set-LocalLLMSetting`.)
+- **Pin recorded** → a mismatch deletes the file and aborts the install.
+- `LlamaCppRequireDownloadPins $true` makes an *unpinned* download a hard failure.
+- `LlamaCppMtpTurboCommit <sha>` pins the from-source mtpturbo build to an exact
+  commit instead of a force-pushable branch HEAD.
 
 ### Per-workspace default model
 
