@@ -1485,6 +1485,12 @@ api_key_env = "UNSHACKLED_LOCAL_API_KEY"
         # Rust-specific: API key env var (empty for local).
         $env:UNSHACKLED_LOCAL_API_KEY = ""
 
+        # Pass the model's usable context window to Unshackled (Rust) so it uses
+        # the full context instead of its conservative default.
+        if ($contextTokens -gt 0) {
+            $tomlContent += "`n[harness]`ncontext_token_limit = $contextTokens`n"
+        }
+
         # Write .unshackled.toml to cwd.
         $tomlPath = Join-Path (Get-Location) '.unshackled.toml'
         Set-Content -Path $tomlPath -Value $tomlContent -Encoding UTF8
