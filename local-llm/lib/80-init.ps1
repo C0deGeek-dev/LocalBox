@@ -58,9 +58,9 @@ function Set-ModelQuant {
 
 function Unload-LocalLLM {
     # Frees all VRAM by stopping any running LocalBox-managed llama-server
-    # process, and tearing down the remote gateway if one is up.
-    if (Get-Command Stop-LocalLLMRemoteGateway -ErrorAction SilentlyContinue) {
-        Stop-LocalLLMRemoteGateway
+    # process, and tearing down the serve gateway if one is up.
+    if (Get-Command Stop-LocalLLMServeGateway -ErrorAction SilentlyContinue) {
+        Stop-LocalLLMServeGateway
     }
     Stop-AllLlamaServers
 }

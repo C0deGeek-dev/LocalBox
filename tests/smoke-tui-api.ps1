@@ -45,6 +45,16 @@ if ($resetBestPlan.launchCommand -notmatch 'Invoke-LocalBoxTuiResetBest' -or $re
     throw 'New-LocalBoxTuiLaunchPlan routed resetbest through the interactive wizard path.'
 }
 
+$launchOptions = Get-LocalBoxTuiLaunchOptions -Key $model.key
+if (-not (@($launchOptions.actions) | Where-Object { $_.key -eq 'serve' -and $_.label -eq 'Serve' })) {
+    throw 'Get-LocalBoxTuiLaunchOptions did not expose the serve action contract.'
+}
+
+$servePlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action serve -Mode native
+if ($servePlan.action -ne 'serve' -or $servePlan.launchCommand -notmatch "-Action 'serve'") {
+    throw 'New-LocalBoxTuiLaunchPlan did not preserve the serve action.'
+}
+
 if (-not [string]::IsNullOrWhiteSpace($quantKey)) {
     $quantFindBestPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action findbest -Mode native -Quant $quantKey
     if ($quantFindBestPlan.launchCommand -notmatch "-Quant '$([regex]::Escape($quantKey))'") {
@@ -67,5 +77,5 @@ if ($null -eq $benchPilot.available) {
     throw 'Get-LocalBoxTuiBenchPilotStatus did not return structured availability.'
 }
 
-@($status, $models[0], $detail, $plan, $defaultPlan, $findBestPlan, $resetBestPlan, $settings, $benchPilot) | ConvertTo-Json -Depth 16 -Compress | Out-Null
+@($status, $models[0], $detail, $plan, $defaultPlan, $findBestPlan, $resetBestPlan, $launchOptions, $servePlan, $settings, $benchPilot) | ConvertTo-Json -Depth 16 -Compress | Out-Null
 Write-Host "LocalBox TUI API smoke test passed."

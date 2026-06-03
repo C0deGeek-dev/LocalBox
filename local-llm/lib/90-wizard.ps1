@@ -193,7 +193,7 @@ function Select-LLMAction {
         [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
         [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled (TS/bun)" },
         [pscustomobject]@{ Key = "unshackled-rust"; Label = "Unshackled Rust"; Description = "Local agent via Unshackled Rust CLI" },
-        [pscustomobject]@{ Key = "remote"; Label = "Remote"; Description = "Serve this model for remote Unshackled clients" },
+        [pscustomobject]@{ Key = "serve"; Label = "Serve"; Description = "Serve this model to any agentic client" },
         [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
         [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
         [pscustomobject]@{ Key = "resetbest"; Label = "Delete best settings"; Description = "Reset saved AutoBest config" },
@@ -1317,8 +1317,8 @@ function Invoke-LLMSelection {
                 -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
         }
 
-        "remote" {
-            Start-LocalLLMRemoteGateway `
+        "serve" {
+            Start-LocalLLMServeGateway `
                 -Key $ModelKey -ContextKey $ContextKey -LlamaCppMode $LlamaCppMode `
                 -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
                 -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
@@ -1472,7 +1472,7 @@ function Start-LLMWizardClassic {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("unshackled", "unshackled-rust", "claude", "codex", "remote")) {
+                if ($action -in @("unshackled", "unshackled-rust", "claude", "codex", "serve")) {
                     $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false
@@ -1649,7 +1649,7 @@ function Select-LLMActionSpectre {
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
         "Unshackled    -  Local agent via Unshackled (TS)" = 'unshackled'
         "Unshackled Rust -  Local agent via Unshackled Rust" = 'unshackled-rust'
-        "Remote      -  Serve this model for Unshackled clients" = 'remote'
+        "Serve       -  Serve this model to any agentic client" = 'serve'
         "Set llmdefault - Save this model/profile/target" = 'setdefault'
         "Find best settings - Auto-tune for this machine" = 'findbest'
         "Delete best settings - Reset saved AutoBest config" = 'resetbest'
@@ -2353,7 +2353,7 @@ function Start-LLMWizardSpectre {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("unshackled", "unshackled-rust", "claude", "codex", "remote")) {
+                if ($action -in @("unshackled", "unshackled-rust", "claude", "codex", "serve")) {
                     $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false

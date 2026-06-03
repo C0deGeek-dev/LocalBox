@@ -58,7 +58,7 @@ var pickerStep = WizardStep.Context;
 var pickerIndex = 0;
 var pickerChoices = new List<PickerChoice>();
 var renderVersion = 0;
-var actions = new[] { "claude", "codex", "unshackled", "unshackled-rust", "remote", "chat", "setup", "findbest", "resetbest" };
+var actions = new[] { "claude", "codex", "unshackled", "unshackled-rust", "serve", "chat", "setup", "findbest", "resetbest" };
 var modes = new[] { "native", "turboquant", "mtpturbo" };
 var autoBestChoices = new[] { "off", "auto", "balanced", "pure" };
 var autoBestCache = new Dictionary<string, List<AutoBestProfile>>(StringComparer.OrdinalIgnoreCase);
@@ -214,6 +214,20 @@ string SelectedQuantLabel()
     return model.Quants[selectedQuantIndex].Key;
 }
 
+string ActionLabel(string action) => action switch
+{
+    "claude" => "Claude Code",
+    "codex" => "Codex",
+    "unshackled" => "Unshackled",
+    "unshackled-rust" => "Unshackled Rust",
+    "serve" => "Serve",
+    "chat" => "Ollama chat",
+    "setup" => "Setup/download only",
+    "findbest" => "Find best settings",
+    "resetbest" => "Delete best settings",
+    _ => action
+};
+
 string PlanExpression(string functionName)
 {
     var model = CurrentModel() ?? throw new InvalidOperationException("No model selected.");
@@ -313,7 +327,7 @@ void RenderModel(int? index)
         SelectedContextKey(),
         SelectedContextLabel(),
         SelectedQuantLabel(),
-        actions[selectedActionIndex],
+        ActionLabel(actions[selectedActionIndex]),
         modes[selectedModeIndex],
         autoBestChoices[selectedAutoBestIndex],
         strict);
@@ -330,7 +344,7 @@ void RenderWizard()
         new(WizardStep.Model, "Model", CurrentModel()?.Key ?? "-"),
         new(WizardStep.Context, "Context", SelectedContextLabel()),
         new(WizardStep.Quant, "Quant", SelectedQuantLabel()),
-        new(WizardStep.Action, "Action", actions[selectedActionIndex]),
+        new(WizardStep.Action, "Action", ActionLabel(actions[selectedActionIndex])),
         new(WizardStep.Mode, "Mode", modes[selectedModeIndex]),
         new(WizardStep.AutoBest, "AutoBest", autoBestChoices[selectedAutoBestIndex]),
         new(WizardStep.Confirm, "Confirm", "launch")
@@ -483,7 +497,7 @@ List<PickerChoice> BuildPickerChoices(WizardStep targetStep, LocalBoxModel? mode
             for (var i = 0; i < actions.Length; i++)
             {
                 var index = i;
-                choices.Add(new PickerChoice(actions[i], () => selectedActionIndex = index));
+                choices.Add(new PickerChoice(ActionLabel(actions[i]), () => selectedActionIndex = index));
             }
             break;
         case WizardStep.Mode:

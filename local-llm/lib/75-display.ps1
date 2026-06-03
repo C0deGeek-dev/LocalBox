@@ -766,7 +766,7 @@ function Show-LocalBoxCommandReference {
     Write-CommandRow -Command "llmtui" -Description "Open the Terminal.Gui LocalBox TUI preview."
     Write-CommandRow -Command "llmc" -Description "Open the native selectable launcher wizard."
     Write-CommandRow -Command "llms" -Description "Open the Spectre launcher wizard explicitly."
-    Write-CommandRow -Command "llmremote -Key <key> [-Ctx <context>] [-NoMonitor]" -Description "Serve a local model to normal remote Unshackled clients."
+    Write-CommandRow -Command "llmserve -Key <key> [-Ctx <context>] [-NoMonitor]" -Description "Serve a local model to any agentic client."
     Write-CommandRow -Command "info [-All] [<model>]" -Description "Show the dashboard or model details."
     Write-CommandRow -Command "info -Commands" -Description "Show this LocalBox and BenchPilot command list."
     Write-CommandRow -Command "llminfo" -Description "Alias for info."

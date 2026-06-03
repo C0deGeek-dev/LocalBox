@@ -95,7 +95,7 @@ function bptui {
 
     throw "BenchPilot.Tui was not found. Run from a BenchPilot repo checkout with dotnet available, or publish/install it with: pwsh .\tui\publish-tui.ps1 -Install"
 }
-function llmremote { Start-LocalLLMRemoteGateway @args }
+function llmserve { Start-LocalLLMServeGateway @args }
 function reloadllm { Reload-LocalLLMConfig }
 
 # llama.cpp: status + stop. The wizard handles launch interactively;

@@ -156,25 +156,25 @@ qcoder -Ctx 32k -Codex
 > violate OpenAI's Terms of Use. Against a local `llama-server` `/v1` endpoint
 > as shown here, this concern does not apply.
 
-### Remote Unshackled gateway
+### Serve gateway
 
-Choose `Remote` in `llm`, or use `llmremote`, to serve a model from this
-machine to normal Unshackled clients on another machine. The server starts
-`llama-server` and exposes only the LocalBox no-think gateway; `llama-server`
-itself stays bound to localhost.
+Choose `Serve` in `llm`, or use `llmserve`, to serve a model from this
+machine to any agentic client that can use an Anthropic-compatible endpoint.
+The server starts `llama-server` and exposes only the LocalBox no-think
+gateway; `llama-server` itself stays bound to localhost.
 
 ```powershell
-$env:LOCAL_LLM_REMOTE_PASS = "chosenpass"
-llmremote -Key qcoder30 -ContextKey 32k -LlamaCppMode native
+$env:LOCAL_LLM_SERVE_PASS = "chosenpass"
+llmserve -Key qcoder30 -ContextKey 32k -LlamaCppMode native
 ```
 
-After startup, LocalBox opens a remote monitor with the gateway status and live
+After startup, LocalBox opens a serve monitor with the gateway status and live
 request log. Press `Q` to return to the menu while leaving the server running,
-or `S` to stop the gateway and backend. Use `llmremote -NoMonitor` for scripted
+or `S` to stop the gateway and backend. Use `llmserve -NoMonitor` for scripted
 or detached starts.
 
 On the client, no LocalBox helper is required. Set the Anthropic-compatible
-environment variables and start the regular Unshackled CLI:
+environment variables for your agentic client. For Unshackled:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://192.168.178.61:11435"

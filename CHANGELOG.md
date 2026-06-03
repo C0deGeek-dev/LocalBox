@@ -2,6 +2,10 @@
 
 Past-tense record of shipped changes.
 
+## 2026-06-03 - Serve gateway rename
+
+- **Remote launch target renamed to Serve.** The TUI action contract now uses `serve`, the command is `llmserve`, the password environment variable is `LOCAL_LLM_SERVE_PASS`, and the docs describe the gateway as serving any Anthropic-compatible agentic client, with Unshackled as one example.
+
 ## 2026-05-24 — Terminal.Gui TUI and catalog polish
 
 - **`llmtui` documented as the explicit Terminal.Gui preview path.** README now covers publish/install, profile resolution, core navigation keys, and the BenchPilot handoff key.

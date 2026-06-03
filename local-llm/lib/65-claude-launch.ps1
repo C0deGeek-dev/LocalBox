@@ -4,7 +4,7 @@
 
 $script:ClaudeEnvBackup = @{}
 $script:NoThinkProxyProcess = $null
-$script:RemoteGatewaySession = $null
+$script:ServeGatewaySession = $null
 
 function Get-NoThinkProxyHealth {
     param(
@@ -88,7 +88,7 @@ function ConvertTo-LocalLLMPowerShellDoubleQuoted {
     return '"' + (([string]$Value) -replace '`', '``' -replace '"', '`"') + '"'
 }
 
-function Get-LocalLLMRemoteClientEnvCommands {
+function Get-LocalLLMServeClientEnvCommands {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$BaseUrl,
@@ -114,7 +114,7 @@ function Get-LocalLLMRemoteClientEnvCommands {
     }
 }
 
-function Test-LocalLLMRemotePublicHttp {
+function Test-LocalLLMServePublicHttp {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$BaseUrl)
 
@@ -271,11 +271,11 @@ function Start-NoThinkProxy {
     if ($targetMatches -eq $true) {
         if ($logsRequested) {
             if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
-                Write-LaunchLog "Restarting owned no-think proxy so remote gateway logs are captured." 'PROXY'
+                Write-LaunchLog "Restarting owned no-think proxy so serve gateway logs are captured." 'PROXY'
                 Stop-NoThinkProxy
             }
             else {
-                throw "No-think proxy port $ListenPort is already running for target $target, but remote gateway logs were requested and this shell does not own that process. Stop the existing proxy with llm-stop or free the port, then start Remote again."
+                throw "No-think proxy port $ListenPort is already running for target $target, but serve gateway logs were requested and this shell does not own that process. Stop the existing proxy with llm-stop or free the port, then start Serve again."
             }
         }
         else {
@@ -366,7 +366,7 @@ function Stop-NoThinkProxy {
     $script:NoThinkProxyProcess = $null
 }
 
-function New-LocalLLMRemoteGatewayLogPaths {
+function New-LocalLLMServeGatewayLogPaths {
     $dir = Join-Path $HOME ".local-llm\logs"
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -374,17 +374,17 @@ function New-LocalLLMRemoteGatewayLogPaths {
 
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
     return @{
-        Out = Join-Path $dir "remote-gateway-$stamp.out.log"
-        Err = Join-Path $dir "remote-gateway-$stamp.err.log"
+        Out = Join-Path $dir "serve-gateway-$stamp.out.log"
+        Err = Join-Path $dir "serve-gateway-$stamp.err.log"
     }
 }
 
-function Format-LocalLLMRemoteGatewayStatus {
+function Format-LocalLLMServeGatewayStatus {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][hashtable]$Session)
 
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("Remote gateway running") | Out-Null
+    $lines.Add("Serve gateway running") | Out-Null
     if ($Session.ContainsKey('Backend'))    { $lines.Add("Backend : $($Session.Backend)") | Out-Null }
     if ($Session.ContainsKey('Model'))      { $lines.Add("Model   : $($Session.Model)") | Out-Null }
     if ($Session.ContainsKey('GatewayPid')) { $lines.Add("Gateway : pid $($Session.GatewayPid)") | Out-Null }
@@ -419,28 +419,28 @@ function Format-LocalLLMRemoteGatewayStatus {
     return @($lines)
 }
 
-function Show-LocalLLMRemoteGatewayStatus {
+function Show-LocalLLMServeGatewayStatus {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][hashtable]$Session)
 
     Write-Host ""
-    foreach ($line in (Format-LocalLLMRemoteGatewayStatus -Session $Session)) {
+    foreach ($line in (Format-LocalLLMServeGatewayStatus -Session $Session)) {
         Write-Host $line -ForegroundColor Cyan
     }
 }
 
-function Watch-LocalLLMRemoteGateway {
+function Watch-LocalLLMServeGateway {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][hashtable]$Session)
 
-    Show-LocalLLMRemoteGatewayStatus -Session $Session
+    Show-LocalLLMServeGatewayStatus -Session $Session
     Write-Host ""
     Write-Host "Controls: Q = return to menu and keep running, S = stop gateway/backend, R = reprint client env vars" -ForegroundColor Yellow
     Write-Host "Gateway log follows: $($Session.GatewayOutLog)" -ForegroundColor DarkGray
     Write-Host ""
 
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
-        Write-Host "Non-interactive console detected; leaving remote gateway running. Use llm-stop to stop it." -ForegroundColor Yellow
+        Write-Host "Non-interactive console detected; leaving serve gateway running. Use llm-stop to stop it." -ForegroundColor Yellow
         return
     }
 
@@ -461,7 +461,7 @@ function Watch-LocalLLMRemoteGateway {
             $gatewayRunning = $null -ne (Get-Process -Id $Session.GatewayPid -ErrorAction SilentlyContinue)
         }
         if (-not $gatewayRunning) {
-            Write-Host "Remote gateway process has exited. Check logs above." -ForegroundColor Red
+            Write-Host "Serve gateway process has exited. Check logs above." -ForegroundColor Red
             return
         }
 
@@ -471,18 +471,18 @@ function Watch-LocalLLMRemoteGateway {
                 $key = [Console]::ReadKey($true).Key
                 switch ($key) {
                     'Q' {
-                        Write-Host "Remote gateway left running. Use llm-stop to stop it." -ForegroundColor Green
+                        Write-Host "Serve gateway left running. Use llm-stop to stop it." -ForegroundColor Green
                         return
                     }
                     'S' {
-                        Stop-LocalLLMRemoteGateway
+                        Stop-LocalLLMServeGateway
                         Stop-LlamaServer -Quiet
-                        Write-Host "Remote gateway stopped." -ForegroundColor Yellow
+                        Write-Host "Serve gateway stopped." -ForegroundColor Yellow
                         return
                     }
                     'R' {
                         if ($Session.BaseUrls -and $Session.Password) {
-                            Show-LocalLLMRemoteClientInstructions -BaseUrls $Session.BaseUrls -Password $Session.Password
+                            Show-LocalLLMServeClientInstructions -BaseUrls $Session.BaseUrls -Password $Session.Password
                         }
                     }
                 }
@@ -492,7 +492,7 @@ function Watch-LocalLLMRemoteGateway {
     }
 }
 
-function Get-LocalLLMRemoteAdvertiseHosts {
+function Get-LocalLLMServeAdvertiseHosts {
     [CmdletBinding()]
     param([string]$ListenHost)
 
@@ -520,7 +520,7 @@ function Get-LocalLLMRemoteAdvertiseHosts {
     return @($hosts)
 }
 
-function Show-LocalLLMRemoteClientInstructions {
+function Show-LocalLLMServeClientInstructions {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string[]]$BaseUrls,
@@ -528,10 +528,10 @@ function Show-LocalLLMRemoteClientInstructions {
     )
 
     $baseUrl = $BaseUrls[0]
-    $commands = Get-LocalLLMRemoteClientEnvCommands -BaseUrl $baseUrl -Password $Password
+    $commands = Get-LocalLLMServeClientEnvCommands -BaseUrl $baseUrl -Password $Password
 
     Write-Host ""
-    Write-Host "Remote gateway ready." -ForegroundColor Green
+    Write-Host "Serve gateway ready." -ForegroundColor Green
     Write-Host "  Base URL : $baseUrl" -ForegroundColor DarkGray
     if ($BaseUrls.Count -gt 1) {
         Write-Host "  Other LAN URLs:" -ForegroundColor DarkGray
@@ -540,7 +540,7 @@ function Show-LocalLLMRemoteClientInstructions {
         }
     }
 
-    if (Test-LocalLLMRemotePublicHttp -BaseUrl $baseUrl) {
+    if (Test-LocalLLMServePublicHttp -BaseUrl $baseUrl) {
         Write-Host ""
         Write-Host "WARNING: this is password-only HTTP on a public-looking address. Passwords and prompts are not encrypted." -ForegroundColor Yellow
     }
@@ -560,7 +560,7 @@ function Show-LocalLLMRemoteClientInstructions {
     Write-Host ""
 }
 
-function Start-LocalLLMLlamaCppRemoteBackend {
+function Start-LocalLLMLlamaCppServeBackend {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -716,14 +716,14 @@ function Start-LocalLLMLlamaCppRemoteBackend {
         $backendOutLog = $logPaths.Out
         $backendErrLog = $logPaths.Err
         Write-Host ""
-        Write-Host "Starting llama-server remote backend for $($def.Root)..." -ForegroundColor Cyan
+        Write-Host "Starting llama-server serve backend for $($def.Root)..." -ForegroundColor Cyan
         Write-Host "  Server   : $serverPath" -ForegroundColor DarkGray
         Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
         Write-Host "  Args     : $(Format-LocalLLMArgvLine -Argv $serverArgs)" -ForegroundColor DarkGray
         Write-Host "  Port     : $port" -ForegroundColor DarkGray
         Write-Host "  Logs     : $($logPaths.Out)" -ForegroundColor DarkGray
         Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
-        Write-LaunchLog "llama-server remote backend argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
+        Write-LaunchLog "llama-server serve backend argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
 
         try {
             $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
@@ -752,7 +752,7 @@ function Start-LocalLLMLlamaCppRemoteBackend {
                 Write-Host "  Retry Args: $(Format-LocalLLMArgvLine -Argv $serverArgs)" -ForegroundColor DarkGray
                 Write-Host "  Retry Logs: $($logPaths.Out)" -ForegroundColor DarkGray
                 Write-Host "              $($logPaths.Err)" -ForegroundColor DarkGray
-                Write-LaunchLog "llama-server remote backend retry argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
+                Write-LaunchLog "llama-server serve backend retry argv: $(Format-LocalLLMArgvLine -Argv (@($serverPath) + $serverArgs))" 'SERVER'
 
                 $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
                 Set-CurrentBackendSession -Session @{
@@ -820,7 +820,7 @@ function Disable-LlamaCppSpecDecode {
     return $changed
 }
 
-function Start-LocalLLMRemoteGateway {
+function Start-LocalLLMServeGateway {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -836,24 +836,24 @@ function Start-LocalLLMRemoteGateway {
         [string]$ListenHost = '0.0.0.0',
         [int]$ListenPort = $script:NoThinkProxyPort,
         [string]$AdvertiseHost,
-        [string]$Password = $env:LOCAL_LLM_REMOTE_PASS,
+        [string]$Password = $env:LOCAL_LLM_SERVE_PASS,
         [string[]]$ExtraArgs,
         [switch]$NoMonitor,
         [switch]$DryRun
     )
 
     if ([string]::IsNullOrWhiteSpace($Password)) {
-        throw "Remote gateway password is required. Set `$env:LOCAL_LLM_REMOTE_PASS or pass -Password."
+        throw "Serve gateway password is required. Set `$env:LOCAL_LLM_SERVE_PASS or pass -Password."
     }
 
     if ($ListenPort -le 0) {
         $ListenPort = $script:NoThinkProxyPort
     }
 
-    $backendInfo = Start-LocalLLMLlamaCppRemoteBackend -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict -UseVision:$UseVision -AutoBest:$AutoBest -AutoBestProfile $AutoBestProfile -ExtraArgs $ExtraArgs -DryRun:$DryRun
+    $backendInfo = Start-LocalLLMLlamaCppServeBackend -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict -UseVision:$UseVision -AutoBest:$AutoBest -AutoBestProfile $AutoBestProfile -ExtraArgs $ExtraArgs -DryRun:$DryRun
 
     $hosts = if ([string]::IsNullOrWhiteSpace($AdvertiseHost)) {
-        Get-LocalLLMRemoteAdvertiseHosts -ListenHost $ListenHost
+        Get-LocalLLMServeAdvertiseHosts -ListenHost $ListenHost
     } else {
         @($AdvertiseHost)
     }
@@ -861,16 +861,16 @@ function Start-LocalLLMRemoteGateway {
     $primaryBaseUrl = $baseUrls[0]
 
     if ($DryRun) {
-        $commands = Get-LocalLLMRemoteClientEnvCommands -BaseUrl $primaryBaseUrl -Password $Password
-        $notes = @("Client command: $($commands.Bash -join '; '); unshackled")
-        if (Test-LocalLLMRemotePublicHttp -BaseUrl $primaryBaseUrl) {
+        $commands = Get-LocalLLMServeClientEnvCommands -BaseUrl $primaryBaseUrl -Password $Password
+        $notes = @("Example Unshackled command: $($commands.Bash -join '; '); unshackled")
+        if (Test-LocalLLMServePublicHttp -BaseUrl $primaryBaseUrl) {
             $notes += "Password-only HTTP on a public-looking address is not encrypted."
         }
         if ($backendInfo.AutoBestProfile) {
             $notes += "AutoBest: loaded saved tuner profile=$($backendInfo.AutoBestProfile) (overrides applied to server argv)"
         }
         $plan = @{
-            Title       = "remote gateway via llama.cpp"
+            Title       = "serve gateway via llama.cpp"
             Backend     = 'llamacpp'
             Mode        = $backendInfo.Mode
             Key         = $Key
@@ -887,10 +887,10 @@ function Start-LocalLLMRemoteGateway {
         return
     }
 
-    $gatewayLogs = New-LocalLLMRemoteGatewayLogPaths
+    $gatewayLogs = New-LocalLLMServeGatewayLogPaths
     Start-NoThinkProxy -ListenHost $ListenHost -ListenPort $ListenPort -TargetHost $backendInfo.TargetHost -TargetPort $backendInfo.TargetPort -AuthToken $Password -OutLogPath $gatewayLogs.Out -ErrLogPath $gatewayLogs.Err
 
-    $script:RemoteGatewaySession = @{
+    $script:ServeGatewaySession = @{
         Backend    = 'llamacpp'
         Model      = $backendInfo.Model
         ListenHost = $ListenHost
@@ -905,19 +905,19 @@ function Start-LocalLLMRemoteGateway {
         BackendErrLog = $backendInfo.BackendErrLog
     }
 
-    Show-LocalLLMRemoteClientInstructions -BaseUrls $baseUrls -Password $Password
+    Show-LocalLLMServeClientInstructions -BaseUrls $baseUrls -Password $Password
 
     if (-not $NoMonitor) {
-        Watch-LocalLLMRemoteGateway -Session $script:RemoteGatewaySession
+        Watch-LocalLLMServeGateway -Session $script:ServeGatewaySession
     }
 }
 
-function Stop-LocalLLMRemoteGateway {
+function Stop-LocalLLMServeGateway {
     [CmdletBinding()]
     param()
 
     Stop-NoThinkProxy
-    $script:RemoteGatewaySession = $null
+    $script:ServeGatewaySession = $null
 }
 
 function Test-ClaudeLocalVisibleResponse {
@@ -2058,4 +2058,3 @@ function Start-ClaudeWithLlamaCppModel {
         Stop-LlamaServer
     }
 }
-
