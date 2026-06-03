@@ -1303,12 +1303,14 @@ function Start-UnshackledRust {
 
     $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
     $useNoThinkProxy = ($thinkingPolicy -ne 'keep')
-    # The Rust Unshackled client connects directly to llama-server: it strips
-    # inline <think> output itself, and the no-think proxy only rewrites the
-    # Anthropic /v1/messages path (not the OpenAI /v1/chat/completions this client
-    # uses), so the proxy is unnecessary and is not started for this launch. Use
+    # Default wiring talks straight to llama-server's OpenAI endpoint. For
+    # reasoning models the no-think proxy is started after the server is up and
+    # the client is switched to the Anthropic /v1/messages path through it (see
+    # below), which strips <think> blocks the same way the Claude Code wiring
+    # does and avoids the degenerate output seen on the raw OpenAI path. Use
     # 127.0.0.1 (not localhost) because llama-server binds IPv4 loopback and the
     # Rust client does not fall back from a localhost->::1 resolution on Windows.
+    $providerKind = 'openai-compatible'
     $effectiveBaseUrl = "http://127.0.0.1:$port"
 
     # Build llama-server args and start server.
@@ -1423,15 +1425,35 @@ function Start-UnshackledRust {
         throw
     }
 
-    # Generate .unshackled.toml in the current working directory.
+    # Reasoning models: put the no-think proxy in front of llama-server and route
+    # the client through the Anthropic /v1/messages path, so <think> output is
+    # stripped before it reaches Unshackled (mirrors the working Claude Code
+    # wiring). The proxy binds local loopback only, so it runs without auth.
+    if ($useNoThinkProxy) {
+        try {
+            Start-NoThinkProxy -ListenHost '127.0.0.1' -ListenPort $script:NoThinkProxyPort -TargetHost '127.0.0.1' -TargetPort $port -AuthToken ''
+            $providerKind = 'anthropic'
+            $effectiveBaseUrl = "http://127.0.0.1:$($script:NoThinkProxyPort)"
+            Write-Host "  Proxy    : no-think 127.0.0.1:$($script:NoThinkProxyPort) -> llama-server:$port" -ForegroundColor DarkGray
+        }
+        catch {
+            Write-Warning "No-think proxy failed to start ($_); falling back to the direct OpenAI endpoint."
+            $useNoThinkProxy = $false
+        }
+    }
+
+    # Generate .unshackled.toml in the current working directory. The Anthropic
+    # adapter normalizes a base_url ending in /v1 to /v1/messages; the
+    # OpenAI-compatible one to /v1/chat/completions.
+    $apiKeyEnv = if ($providerKind -eq 'anthropic') { 'ANTHROPIC_AUTH_TOKEN' } else { 'UNSHACKLED_LOCAL_API_KEY' }
     $tomlContent = @"
 [provider]
 default = "local"
 
 [providers.local]
-kind = "openai-compatible"
+kind = "$providerKind"
 base_url = "$effectiveBaseUrl/v1"
-api_key_env = "UNSHACKLED_LOCAL_API_KEY"
+api_key_env = "$apiKeyEnv"
 "@
 
     Write-Host ""
