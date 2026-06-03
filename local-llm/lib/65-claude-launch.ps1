@@ -1303,7 +1303,10 @@ function Start-UnshackledRust {
 
     $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
     $useNoThinkProxy = ($thinkingPolicy -ne 'keep')
-    $effectiveBaseUrl = if ($useNoThinkProxy) { "http://localhost:$($script:NoThinkProxyPort)" } else { "http://localhost:$port" }
+    # Use 127.0.0.1, not localhost: the no-think proxy and llama-server bind IPv4
+    # loopback, but `localhost` can resolve to IPv6 (::1) first on Windows, which
+    # the Rust client does not fall back from — causing connection-refused.
+    $effectiveBaseUrl = if ($useNoThinkProxy) { "http://127.0.0.1:$($script:NoThinkProxyPort)" } else { "http://127.0.0.1:$port" }
 
     # Build llama-server args and start server.
     $buildParams = @{
