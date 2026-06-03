@@ -1262,6 +1262,243 @@ function Get-ClaudeTargetSummary {
     return "Default (Anthropic API)"
 }
 
+function Start-UnshackledRust {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$LlamaCppMode,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [switch]$Strict,
+        [switch]$UseVision,
+        [switch]$UseAutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [switch]$DryRun
+    )
+
+    $def = Get-ModelDef -Key $Key
+
+    # Stop any prior llama-server we own.
+    if (-not $DryRun) {
+        Stop-LlamaServer -Quiet
+    }
+
+    # Resolve GGUF.
+    if ($DryRun) {
+        $folder = Join-Path $script:Cfg.LlamaCppGgufRoot $def.Root
+        $fileName = Get-ModelFileName -Def $def
+        $ggufPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $fileName
+        if (-not (Test-Path -LiteralPath $ggufPath)) {
+            Write-Host "GGUF not present locally; a real launch would download from $($def.Repo)/$fileName" -ForegroundColor DarkYellow
+        }
+    }
+    else {
+        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def
+    }
+
+    # Pick a free port.
+    $defaultPort = if ($script:Cfg.Contains('LlamaCppPort')) { [int]$script:Cfg.LlamaCppPort } else { 8080 }
+    $port = Find-LlamaCppFreePort -StartPort $defaultPort
+
+    $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
+    $useNoThinkProxy = ($thinkingPolicy -ne 'keep')
+    $effectiveBaseUrl = if ($useNoThinkProxy) { "http://localhost:$($script:NoThinkProxyPort)" } else { "http://localhost:$port" }
+
+    # Build llama-server args and start server.
+    $buildParams = @{
+        Def              = $def
+        ContextKey       = $ContextKey
+        Mode             = $LlamaCppMode
+        ModelArgPath     = $ggufPath
+        Port             = $port
+        ThinkingPolicy   = $thinkingPolicy
+        VisionModulePath = ''
+    }
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
+    if ($Strict) { $buildParams.Strict = $true }
+
+    if ($UseAutoBest) {
+        # AutoBest loading is the same as in Start-ClaudeWithLlamaCppModel
+        $bestEntry = $null
+        $selectionProfile = if ($AutoBestProfile -in @('pure', 'balanced')) { $AutoBestProfile } else { 'auto' }
+        $promptProfileOverride = if ($AutoBestProfile -in @('short', 'long')) { $AutoBestProfile } else { $null }
+        if ($promptProfileOverride) {
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision
+        } else {
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -Profile $selectionProfile -Vision $UseVision
+            if ($preferred) { $bestEntry = $preferred.Entry }
+        }
+        if ($bestEntry -and $bestEntry.overrides) {
+            Write-Host "AutoBest: loaded saved tuner config (profile=$AutoBestProfile)." -ForegroundColor Cyan
+            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse','SpecType','SpecDraftNMax')
+            foreach ($k in $tunable) {
+                if ($buildParams.ContainsKey($k)) { continue }
+                $val = $null
+                if ($bestEntry.overrides -is [System.Collections.IDictionary]) {
+                    if ($bestEntry.overrides.Contains($k)) { $val = $bestEntry.overrides[$k] }
+                } else {
+                    $prop = $bestEntry.overrides.PSObject.Properties[$k]
+                    if ($prop) { $val = $prop.Value }
+                }
+                if ($null -ne $val) { $buildParams[$k] = $val }
+            }
+        }
+    }
+
+    # Fallback: apply config CacheReuse default when not already set.
+    $agentCacheReuse = if ($script:Cfg.Contains('LlamaCppAgentCacheReuse')) {
+        try { [int]$script:Cfg.LlamaCppAgentCacheReuse } catch { 256 }
+    } else { 256 }
+    if (-not $buildParams.ContainsKey('CacheReuse') -and $agentCacheReuse -gt 0) {
+        $buildParams.CacheReuse = $agentCacheReuse
+    }
+
+    $serverArgs = Build-LlamaServerArgs @buildParams
+
+    # Resolve server binary.
+    if ($DryRun) {
+        $serverPath = switch ($LlamaCppMode) {
+            'turboquant' { try { Find-TurboquantServerExe } catch { $null } }
+            'mtpturbo'   { try { Find-MtpTurboServerExe   } catch { $null } }
+            default      { Find-LlamaServerExe }
+        }
+        if (-not $serverPath) { $serverPath = '<not installed>' }
+    }
+    else {
+        $serverPath = switch ($LlamaCppMode) {
+            'turboquant' { Ensure-LlamaServerTurboquant }
+            'mtpturbo'   { Ensure-LlamaServerMtpTurbo }
+            default      { Ensure-LlamaServerNative }
+        }
+    }
+
+    if ($DryRun) {
+        $title = "unshackled-rust via llama.cpp ($LlamaCppMode)"
+        $plan = @{
+            Title         = $title
+            Backend       = 'llamacpp'
+            Mode          = $LlamaCppMode
+            Key           = $Key
+            Model         = $def.Root
+            ContextKey    = $ContextKey
+            ServerPath    = $serverPath
+            ServerArgs    = $serverArgs
+            Port          = $port
+            BaseUrl       = $effectiveBaseUrl
+            LaunchExe     = 'unshackled'
+            LaunchArgs    = @('chat', '--model', $def.Root, '--bypass')
+            Notes         = @()
+        }
+        Show-LocalLLMLaunchPlan -Plan $plan
+        return
+    }
+
+    # Start llama-server.
+    $logPaths = New-LlamaServerLogPaths
+    Write-Host ""
+    Write-Host "Starting llama-server for $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
+    Write-Host "  Server   : $serverPath" -ForegroundColor DarkGray
+    Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+    Write-Host "  Port     : $port" -ForegroundColor DarkGray
+    Write-Host "  Logs     : $($logPaths.Out)" -ForegroundColor DarkGray
+    Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
+    Write-Host "  Args     : $(Format-LocalLLMArgvLine -Argv $serverArgs)" -ForegroundColor DarkGray
+
+    $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+    Write-Host "  PID      : $($proc.Id)" -ForegroundColor DarkGray
+
+    try {
+        Wait-LlamaServer -Port $port -Process $proc -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
+    }
+    catch {
+        Stop-LlamaServer -Quiet
+        throw
+    }
+
+    # Generate .unshackled.toml in the current working directory.
+    $tomlContent = @"
+[provider]
+default = "local"
+
+[providers.local]
+kind = "openai-compatible"
+base_url = "$effectiveBaseUrl/v1"
+api_key_env = "UNSHACKLED_LOCAL_API_KEY"
+"@
+
+    Write-Host ""
+    Write-Host "Launching unshackled-rust with $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
+    Write-Host "  Base URL : $effectiveBaseUrl" -ForegroundColor DarkGray
+    Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
+
+    # Set env vars for the local backend.
+    Save-ClaudeEnvBackup
+    try {
+        $env:ANTHROPIC_BASE_URL = $effectiveBaseUrl
+        $env:ANTHROPIC_AUTH_TOKEN = "local"
+        $env:ANTHROPIC_API_KEY = ""
+        $env:ANTHROPIC_MODEL = $def.Root
+        $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $def.Root
+        $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $def.Root
+        $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $def.Root
+        $env:CLAUDE_CODE_DISABLE_THINKING = "1"
+        $env:MAX_THINKING_TOKENS = "0"
+        $env:CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = "1"
+
+        $maxOutputTokens = if ($script:Cfg.Contains("LocalModelMaxOutputTokens")) {
+            try { [int]$script:Cfg.LocalModelMaxOutputTokens } catch { 4096 }
+        } else { 4096 }
+        if ($maxOutputTokens -gt 0) {
+            $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = [string]$maxOutputTokens
+        }
+
+        $contextTokens = Get-ModelContextValue -Def $def -ContextKey $ContextKey
+        if ($contextTokens -gt 0) {
+            $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = [string]$contextTokens
+            $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = [string]$contextTokens
+        }
+
+        $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
+        $env:DISABLE_PROMPT_CACHING = "1"
+        $env:API_TIMEOUT_MS = "1800000"
+        $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
+        $env:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1"
+        $env:ENABLE_TOOL_SEARCH = "false"
+
+        # Per-model image cap.
+        $maxImagesPerRequest = 0
+        if ($def.ContainsKey('MaxImagesPerRequest')) {
+            try { $maxImagesPerRequest = [int]$def.MaxImagesPerRequest } catch { $maxImagesPerRequest = 0 }
+        }
+        if ($maxImagesPerRequest -gt 0) {
+            $env:CLAUDE_LOCAL_MAX_IMAGES = [string]$maxImagesPerRequest
+        }
+
+        # Rust-specific: API key env var (empty for local).
+        $env:UNSHACKLED_LOCAL_API_KEY = ""
+
+        # Write .unshackled.toml to cwd.
+        $tomlPath = Join-Path (Get-Location) '.unshackled.toml'
+        Set-Content -Path $tomlPath -Value $tomlContent -Encoding UTF8
+        Write-Host "  Config   : $tomlPath" -ForegroundColor DarkGray
+
+        # Launch unshackled chat.
+        if (-not (Get-Command unshackled -ErrorAction SilentlyContinue)) {
+            throw "unshackled is not on PATH. Install with: cargo install unshackled-cli"
+        }
+
+        $launchArgs = @('chat', '--model', $def.Root, '--bypass')
+        & unshackled @launchArgs
+    }
+    finally {
+        Restore-ClaudeEnvBackup
+        if ($useNoThinkProxy) { Stop-NoThinkProxy }
+        Stop-LlamaServer
+    }
+}
+
 function Start-ClaudeWithLlamaCppModel {
     [CmdletBinding()]
     param(

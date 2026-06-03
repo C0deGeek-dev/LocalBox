@@ -191,7 +191,8 @@ function Select-LLMAction {
     $actions = @(
         [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
         [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled (TS/bun)" },
+        [pscustomobject]@{ Key = "unshackled-rust"; Label = "Unshackled Rust"; Description = "Local agent via Unshackled Rust CLI" },
         [pscustomobject]@{ Key = "remote"; Label = "Remote"; Description = "Serve this model for remote Unshackled clients" },
         [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
         [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
@@ -219,7 +220,8 @@ function Select-LLMDefaultTarget {
     $targets = @(
         [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
         [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" }
+        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+        [pscustomobject]@{ Key = "unshackled-rust"; Label = "Unshackled Rust"; Description = "Local agent via Unshackled Rust" }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -913,6 +915,9 @@ function Invoke-LlamaCppTunerWizardFlow {
         if ($launchAction -eq 'unshackled') {
             $launchArgs.Unshackled = $true
         }
+        if ($launchAction -eq 'unshackled-rust') {
+            $launchArgs.UnshackledRust = $true
+        }
         if ($launchAction -eq 'codex') {
             $launchArgs.Codex = $true
         }
@@ -1216,7 +1221,8 @@ function Select-LlamaCppPostTuneLaunchAction {
     $items = @(
         [pscustomobject]@{ Key = 'claude'; Label = 'Claude Code'; Description = 'Local model behind Claude Code' },
         [pscustomobject]@{ Key = 'codex'; Label = 'Codex'; Description = 'Local model behind OpenAI Codex' },
-        [pscustomobject]@{ Key = 'unshackled'; Label = 'Unshackled';   Description = 'Local agent via Unshackled' }
+        [pscustomobject]@{ Key = 'unshackled'; Label = 'Unshackled';   Description = 'Local agent via Unshackled' },
+        [pscustomobject]@{ Key = 'unshackled-rust'; Label = 'Unshackled Rust'; Description = 'Local agent via Unshackled Rust' }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -1303,6 +1309,12 @@ function Invoke-LLMSelection {
                 -Key $ModelKey -ContextKey $ContextKey `
                 -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
                 -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
+        }
+
+        "unshackled-rust" {
+            Start-UnshackledRust -Key $ModelKey -ContextKey $ContextKey `
+                -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
         }
 
         "remote" {
@@ -1460,7 +1472,7 @@ function Start-LLMWizardClassic {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("unshackled", "claude", "codex", "remote")) {
+                if ($action -in @("unshackled", "unshackled-rust", "claude", "codex", "remote")) {
                     $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false
@@ -1635,7 +1647,8 @@ function Select-LLMActionSpectre {
     $labelMap = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+        "Unshackled    -  Local agent via Unshackled (TS)" = 'unshackled'
+        "Unshackled Rust -  Local agent via Unshackled Rust" = 'unshackled-rust'
         "Remote      -  Serve this model for Unshackled clients" = 'remote'
         "Set llmdefault - Save this model/profile/target" = 'setdefault'
         "Find best settings - Auto-tune for this machine" = 'findbest'
@@ -1656,7 +1669,8 @@ function Select-LLMDefaultTargetSpectre {
     $labelMap = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+        "Unshackled    -  Local agent via Unshackled (TS)" = 'unshackled'
+        "Unshackled Rust -  Local agent via Unshackled Rust" = 'unshackled-rust'
         "[[Back]]"                                      = '__back__'
     }
 
@@ -1701,7 +1715,8 @@ function Select-LlamaCppPostTuneLaunchActionSpectre {
     $choices = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+        "Unshackled    -  Local agent via Unshackled (TS)" = 'unshackled'
+        "Unshackled Rust -  Local agent via Unshackled Rust" = 'unshackled-rust'
         "[[Cancel]]"                                    = '__cancel__'
     }
 
@@ -2338,7 +2353,7 @@ function Start-LLMWizardSpectre {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("unshackled", "claude", "codex", "remote")) {
+                if ($action -in @("unshackled", "unshackled-rust", "claude", "codex", "remote")) {
                     $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false

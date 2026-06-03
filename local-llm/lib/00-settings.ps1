@@ -161,6 +161,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("CodexEnableSearch"))             { $cfg.CodexEnableSearch = $false }
     if (-not $cfg.ContainsKey("CodexBypassApprovalsAndSandbox")) { $cfg.CodexBypassApprovalsAndSandbox = $true }
     if (-not $cfg.ContainsKey("CodexStreamIdleTimeoutMs"))       { $cfg.CodexStreamIdleTimeoutMs = 10000000 }
+    if (-not $cfg.ContainsKey("UnshackledRustRoot"))             { $cfg.UnshackledRustRoot = "%USERPROFILE%\RustroverProjects\Unshackled-Rust" }
 
     # Drop obsolete settings (docker, old benchpilot toggles, Ollama-era keys).
     if ($cfg.ContainsKey("LlamaCppDockerImage")) { $cfg.Remove("LlamaCppDockerImage") | Out-Null }
