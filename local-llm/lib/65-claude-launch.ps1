@@ -92,13 +92,13 @@ function Get-LocalLLMServeClientEnvCommands {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$BaseUrl,
-        [Parameter(Mandatory = $true)][string]$Password
+        [string]$Password = ''
     )
 
-    $vars = [ordered]@{
-        ANTHROPIC_BASE_URL   = $BaseUrl
-        ANTHROPIC_AUTH_TOKEN = $Password
-        ANTHROPIC_API_KEY    = $Password
+    $vars = [ordered]@{ ANTHROPIC_BASE_URL = $BaseUrl }
+    if (-not [string]::IsNullOrWhiteSpace($Password)) {
+        $vars['ANTHROPIC_AUTH_TOKEN'] = $Password
+        $vars['ANTHROPIC_API_KEY']    = $Password
     }
 
     $bash = @()
@@ -287,6 +287,17 @@ function Start-NoThinkProxy {
         throw "No-think proxy port $ListenPort is already in use by a proxy for a different or unverifiable target. Stop that process or change NoThinkProxyPort."
     }
 
+    # $targetMatches is $null: port is free OR something is listening but we cannot
+    # verify it (e.g. auth mismatch with the old proxy). Kill any stale listener first
+    # so it doesn't compete with the new proxy under Windows SO_REUSEADDR.
+    $existingConn = Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue
+    if ($existingConn) {
+        $stalePid = @($existingConn)[0].OwningProcess
+        Write-LaunchLog "Killing stale listener on port $ListenPort (PID=$stalePid) before starting proxy." 'PROXY'
+        Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 300
+    }
+
     $proxyScript = Join-Path $HOME ".localbox-proxy\no-think-proxy.py"
 
     if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
@@ -339,7 +350,7 @@ function Start-NoThinkProxy {
         throw "Failed to start no-think proxy process."
     }
 
-    $deadline = (Get-Date).AddSeconds(3)
+    $deadline = (Get-Date).AddSeconds(10)
     $ready = $false
 
     while ((Get-Date) -lt $deadline) {
@@ -481,7 +492,7 @@ function Watch-LocalLLMServeGateway {
                         return
                     }
                     'R' {
-                        if ($Session.BaseUrls -and $Session.Password) {
+                        if ($Session.BaseUrls) {
                             Show-LocalLLMServeClientInstructions -BaseUrls $Session.BaseUrls -Password $Session.Password
                         }
                     }
@@ -524,7 +535,7 @@ function Show-LocalLLMServeClientInstructions {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string[]]$BaseUrls,
-        [Parameter(Mandatory = $true)][string]$Password
+        [string]$Password = ''
     )
 
     $baseUrl = $BaseUrls[0]
@@ -542,7 +553,8 @@ function Show-LocalLLMServeClientInstructions {
 
     if (Test-LocalLLMServePublicHttp -BaseUrl $baseUrl) {
         Write-Host ""
-        Write-Host "WARNING: this is password-only HTTP on a public-looking address. Passwords and prompts are not encrypted." -ForegroundColor Yellow
+        $authWarn = if ([string]::IsNullOrWhiteSpace($Password)) { "open (no auth)" } else { "password-only" }
+        Write-Host "WARNING: this is $authWarn HTTP on a public-looking address. Prompts are not encrypted." -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -842,10 +854,6 @@ function Start-LocalLLMServeGateway {
         [switch]$DryRun
     )
 
-    if ([string]::IsNullOrWhiteSpace($Password)) {
-        throw "Serve gateway password is required. Set `$env:LOCAL_LLM_SERVE_PASS or pass -Password."
-    }
-
     if ($ListenPort -le 0) {
         $ListenPort = $script:NoThinkProxyPort
     }
@@ -864,7 +872,8 @@ function Start-LocalLLMServeGateway {
         $commands = Get-LocalLLMServeClientEnvCommands -BaseUrl $primaryBaseUrl -Password $Password
         $notes = @("Example Unshackled command: $($commands.Bash -join '; '); unshackled")
         if (Test-LocalLLMServePublicHttp -BaseUrl $primaryBaseUrl) {
-            $notes += "Password-only HTTP on a public-looking address is not encrypted."
+            $authNote = if ([string]::IsNullOrWhiteSpace($Password)) { "Open (no auth)" } else { "Password-only" }
+            $notes += "$authNote HTTP on a public-looking address is not encrypted."
         }
         if ($backendInfo.AutoBestProfile) {
             $notes += "AutoBest: loaded saved tuner profile=$($backendInfo.AutoBestProfile) (overrides applied to server argv)"
