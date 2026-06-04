@@ -471,6 +471,8 @@ function Find-BestLlamaCppConfig {
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
         [switch]$UseVision,
+        [switch]$NoTrialCache,
+        [switch]$ClearTrialCache,
         [switch]$NoSave
     )
 
@@ -565,6 +567,8 @@ function findbest {
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
         [switch]$UseVision,
+        [switch]$NoTrialCache,
+        [switch]$ClearTrialCache,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
@@ -596,6 +600,8 @@ function tunellm {
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
         [switch]$UseVision,
+        [switch]$NoTrialCache,
+        [switch]$ClearTrialCache,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {

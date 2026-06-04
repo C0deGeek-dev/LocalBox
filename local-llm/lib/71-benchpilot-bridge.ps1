@@ -197,6 +197,8 @@ function Invoke-BenchPilotLauncherFindBest {
         [int]$BeamWidth = 1,
         [int[]]$NCpuMoeCandidates,
         [switch]$UseVision,
+        [switch]$NoTrialCache,
+        [switch]$ClearTrialCache,
         [switch]$NoSave
     )
 
@@ -240,6 +242,8 @@ function Invoke-BenchPilotLauncherFindBest {
     if ($PSBoundParameters.ContainsKey('NCpuMoeCandidates') -and $NCpuMoeCandidates -and $NCpuMoeCandidates.Count -gt 0) {
         $params.NCpuMoeCandidates = $NCpuMoeCandidates
     }
+    if ($NoTrialCache) { $params.NoTrialCache = $true }
+    if ($ClearTrialCache) { $params.ClearTrialCache = $true }
 
     Find-BenchPilotBestConfig @params
 }

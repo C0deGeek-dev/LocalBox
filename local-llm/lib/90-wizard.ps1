@@ -766,6 +766,12 @@ function Invoke-LlamaCppTunerWizardFlow {
         }
     }
 
+    $clearCache = if ($UseSpectrePrompts) {
+        Read-LLMYesNoSpectre -Message "Clear cached measurements before tuning? Use after changing measurement or scoring code."
+    } else {
+        Read-LLMYesNo -Prompt "Clear cached measurements first? (use after changing measurement/scoring code)" -DefaultYes:$false
+    }
+
     $findParams = @{
         Key            = $ModelKey
         ContextKey     = $ContextKey
@@ -779,6 +785,7 @@ function Invoke-LlamaCppTunerWizardFlow {
         Profile        = $selectionProfile
         NoSave         = $true
     }
+    if ($clearCache) { $findParams.ClearTrialCache = $true }
     if (-not [string]::IsNullOrWhiteSpace([string]$runControls.SearchStrategy) -and [string]$runControls.SearchStrategy -ne 'auto') {
         $findParams.SearchStrategy = [string]$runControls.SearchStrategy
     }

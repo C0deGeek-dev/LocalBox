@@ -608,6 +608,15 @@ findbest q36plus -ContextKey 256k -AllowedKvTypes q8_0,q4_0 -AggressiveKv
 # Power-user: tune separate short- and long-prefill profiles
 findbest q36plus -ContextKey 256k -PromptLengths short,long
 
+# Cache control. BenchPilot reuses prior measurements across runs (keyed by a
+# fingerprint of the build, prompt, and tuner version). After changing
+# measurement/scoring code that doesn't move that fingerprint, force fresh
+# numbers: -ClearTrialCache deletes the cache then repopulates it; -NoTrialCache
+# ignores it for this run (no read, no write). The wizard ('findbest' menu item)
+# also asks whether to clear the cache before tuning.
+findbest q36plus -ContextKey 256k -ClearTrialCache
+findbest q36plus -ContextKey 256k -NoTrialCache
+
 # Inspect every trial run for a model
 Show-LlamaCppTunerHistory -Key q36plus -Last 50
 ```
