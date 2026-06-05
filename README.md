@@ -10,6 +10,14 @@
 
 # LocalBox
 
+[![install](https://img.shields.io/badge/install-one--liner-555?style=flat-square)](#install)
+[![stars](https://img.shields.io/github/stars/David-c0degeek/LocalBox?style=flat-square&label=stars&color=007ec6)](https://github.com/David-c0degeek/LocalBox/stargazers)
+[![issues](https://img.shields.io/github/issues/David-c0degeek/LocalBox?style=flat-square&label=issues&color=4c1)](https://github.com/David-c0degeek/LocalBox/issues)
+[![runtime](https://img.shields.io/badge/runtime-llama.cpp-555?style=flat-square)](#llamacpp-modes)
+[![models](https://img.shields.io/badge/models-GGUF%20catalog-orange?style=flat-square)](#adding-a-model)
+[![harnesses](https://img.shields.io/badge/harnesses-3%20targets-4c1?style=flat-square)](#harness-mode)
+[![platform](https://img.shields.io/badge/platform-Windows%20PowerShell-007ec6?style=flat-square)](#install)
+
 A PowerShell-driven launcher that runs [Claude Code](https://claude.com/claude-code)
 or [Unshackled](https://github.com/David-c0degeek/Unshackled) against a
 **local model** served by [llama.cpp](https://github.com/ggerganov/llama.cpp)'s
