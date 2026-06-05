@@ -82,3 +82,18 @@ Describe 'Local Claude environment' {
         $prompt | Should -Match 'Out-String -Width 4096'
     }
 }
+
+Describe 'Local response smoke classification' {
+    It 'rejects repeated punctuation floods and empty-output markers' {
+        Test-LocalDegenerateResponseText -Text ('/' * 32) | Should -BeTrue
+        Test-LocalDegenerateResponseText -Text '[no output]' | Should -BeTrue
+    }
+
+    It 'rejects repeated token loops' {
+        Test-LocalDegenerateResponseText -Text (('again ' * 12).Trim()) | Should -BeTrue
+    }
+
+    It 'accepts a normal visible response' {
+        Test-LocalDegenerateResponseText -Text 'pong' | Should -BeFalse
+    }
+}

@@ -89,8 +89,8 @@ function Resolve-UnshackledRoot {
         $expanded = Expand-LocalLLMPath $candidate
         if ([string]::IsNullOrWhiteSpace($expanded)) { continue }
 
-        $cliPath = Join-Path $expanded 'src\entrypoints\cli.tsx'
-        if (Test-Path -LiteralPath $cliPath -PathType Leaf -ErrorAction SilentlyContinue) {
+        $markerPath = Join-Path $expanded 'Cargo.toml'
+        if (Test-Path -LiteralPath $markerPath -PathType Leaf -ErrorAction SilentlyContinue) {
             try { return (Resolve-Path -LiteralPath $expanded -ErrorAction Stop).Path }
             catch { return $expanded }
         }

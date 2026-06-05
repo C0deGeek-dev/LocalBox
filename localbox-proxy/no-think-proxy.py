@@ -52,7 +52,7 @@ LOG = logging.getLogger("no-think-proxy")
 # handling). LocalBox compares this against NoThinkProxyRequiredVersion in
 # defaults.json and warns when the deployed proxy is older than the launcher
 # expects. Format: SemVer "MAJOR.MINOR.PATCH".
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 
 TARGET_HOST = "127.0.0.1"
@@ -568,7 +568,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
                 event_bytes = buffer[:sep_idx]
                 buffer = buffer[sep_idx + 2:]
-                emit = self._rewrite_event(event_bytes, get_stripper)
+                emit = self._rewrite_event(event_bytes, get_stripper, strippers)
 
                 try:
                     self.wfile.write(emit)
@@ -585,7 +585,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
-    def _rewrite_event(self, event_bytes, get_stripper):
+    def _rewrite_event(self, event_bytes, get_stripper, strippers):
         """
         Rewrite a single SSE event. Returns the bytes to emit, terminated
         with a `\\n\\n` event separator. May emit multiple events (e.g. an

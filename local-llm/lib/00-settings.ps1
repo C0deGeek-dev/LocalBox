@@ -157,17 +157,17 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("BenchPilotRepoUrl"))             { $cfg.BenchPilotRepoUrl = "https://github.com/David-c0degeek/benchpilot" }
     if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
-    if (-not $cfg.ContainsKey("UnshackledRoot"))                { $cfg.UnshackledRoot = "%USERPROFILE%\\.local-llm\\tools\\unshackled" }
+    if (-not $cfg.ContainsKey("UnshackledRoot"))                { $cfg.UnshackledRoot = "D:\repos\rust\unshackled" }
     if (-not $cfg.ContainsKey("CodexEnableSearch"))             { $cfg.CodexEnableSearch = $false }
     if (-not $cfg.ContainsKey("CodexBypassApprovalsAndSandbox")) { $cfg.CodexBypassApprovalsAndSandbox = $true }
     if (-not $cfg.ContainsKey("CodexStreamIdleTimeoutMs"))       { $cfg.CodexStreamIdleTimeoutMs = 10000000 }
-    if (-not $cfg.ContainsKey("UnshackledRustRoot"))             { $cfg.UnshackledRustRoot = "%USERPROFILE%\RustroverProjects\Unshackled-Rust" }
 
-    # Drop obsolete settings (docker, old benchpilot toggles, Ollama-era keys).
+    # Drop obsolete settings (docker, old benchpilot toggles, Ollama-era keys,
+    # the separate Rust checkout root now folded into UnshackledRoot).
     if ($cfg.ContainsKey("LlamaCppDockerImage")) { $cfg.Remove("LlamaCppDockerImage") | Out-Null }
     if ($cfg.ContainsKey("BenchPilotPreferExternal")) { $cfg.Remove("BenchPilotPreferExternal") | Out-Null }
     if ($cfg.ContainsKey("BenchPilotAllowLegacyFallback")) { $cfg.Remove("BenchPilotAllowLegacyFallback") | Out-Null }
-    foreach ($legacyKey in @('MinOllamaVersion', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot', 'RequireAdvertisedTools', 'LlamaCppCoexistOllama')) {
+    foreach ($legacyKey in @('MinOllamaVersion', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot', 'RequireAdvertisedTools', 'LlamaCppCoexistOllama', 'UnshackledRustRoot')) {
         if ($cfg.ContainsKey($legacyKey)) { $cfg.Remove($legacyKey) | Out-Null }
     }
 
@@ -179,13 +179,19 @@ function Import-LocalLLMConfig {
     $cfg.LocalBoxRoot           = Expand-LocalLLMPath $cfg.LocalBoxRoot
 
     $cfg.UnshackledRoot = Expand-LocalLLMPath $cfg.UnshackledRoot
+    $legacyUnshackledLeaf = Split-Path -Path ([string]$cfg.UnshackledRoot) -Leaf
+    $legacyUnshackledParent = Split-Path -Path ([string]$cfg.UnshackledRoot) -Parent
+    $legacyRustLeaf = 'Unshackled' + '-Rust'
+    if ($legacyUnshackledParent -eq 'D:\repos' -and $legacyUnshackledLeaf -in @('Unshackled', $legacyRustLeaf)) {
+        $cfg.UnshackledRoot = 'D:\repos\rust\unshackled'
+    }
 
     if (-not $cfg.ContainsKey("NoThinkProxyPort")) {
         $cfg.NoThinkProxyPort = 11435
     }
 
     if (-not $cfg.ContainsKey("UnshackledRepoUrl")) {
-        $cfg.UnshackledRepoUrl = "https://github.com/David-c0degeek/unshackled"
+        $cfg.UnshackledRepoUrl = "https://github.com/David-c0degeek/Unshackled"
     }
 
     # Validate the merged config. Throws a single consolidated error message

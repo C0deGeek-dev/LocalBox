@@ -245,7 +245,6 @@ function Get-LocalBoxTuiLaunchOptions {
             [pscustomobject]@{ key = 'claude'; label = 'Claude Code' }
             [pscustomobject]@{ key = 'codex'; label = 'Codex' }
             [pscustomobject]@{ key = 'unshackled'; label = 'Unshackled' }
-            [pscustomobject]@{ key = 'unshackled-rust'; label = 'Unshackled Rust' }
             [pscustomobject]@{ key = 'serve'; label = 'Serve' }
             [pscustomobject]@{ key = 'chat'; label = 'Ollama chat' }
             [pscustomobject]@{ key = 'setup'; label = 'Setup/download only' }
@@ -301,7 +300,7 @@ function New-LocalBoxTuiSelectionCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','unshackled-rust','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,
@@ -531,7 +530,7 @@ function Invoke-LocalBoxTuiLaunch {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','unshackled-rust','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,
@@ -568,7 +567,7 @@ function New-LocalBoxTuiLaunchPlan {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','unshackled-rust','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,
@@ -627,7 +626,7 @@ function Invoke-LocalBoxTuiLaunchPreview {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','unshackled-rust','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,

@@ -929,6 +929,38 @@ function Stop-LocalLLMServeGateway {
     $script:ServeGatewaySession = $null
 }
 
+function Test-LocalDegenerateResponseText {
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Text)
+
+    $trimmed = $Text.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        return $false
+    }
+    if ($trimmed -eq '[no output]') {
+        return $true
+    }
+    if ([regex]::IsMatch($trimmed, '(?m)([/\\#*=.~\-])\1{7,}')) {
+        return $true
+    }
+
+    $previous = $null
+    $run = 0
+    foreach ($token in ($trimmed -split '\s+')) {
+        if ($token -eq $previous) {
+            $run += 1
+        }
+        else {
+            $previous = $token
+            $run = 1
+        }
+        if ($run -ge 10) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Test-ClaudeLocalVisibleResponse {
     [CmdletBinding()]
     param(
@@ -992,12 +1024,14 @@ function Test-ClaudeLocalVisibleResponse {
     $text = (($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join '').Trim()
     $withoutThink = [regex]::Replace($text, '(?is)<think>.*?</think>', '')
     $withoutThink = [regex]::Replace($withoutThink, '(?is)<think>.*$', '').Trim()
-    $looksAnswered = -not [string]::IsNullOrWhiteSpace($withoutThink)
+    $looksDegenerate = Test-LocalDegenerateResponseText -Text $withoutThink
+    $looksAnswered = -not [string]::IsNullOrWhiteSpace($withoutThink) -and -not $looksDegenerate
     return [pscustomobject]@{
         Ok = $looksAnswered
         Text = $text
         VisibleText = $withoutThink
-        Error = $(if ($looksAnswered) { '' } elseif ([string]::IsNullOrWhiteSpace($text)) { 'no response text' } else { 'no visible response text after stripping thinking output' })
+        Degenerate = $looksDegenerate
+        Error = $(if ($looksAnswered) { '' } elseif ($looksDegenerate) { 'degenerate response text' } elseif ([string]::IsNullOrWhiteSpace($text)) { 'no response text' } else { 'no visible response text after stripping thinking output' })
     }
 }
 
@@ -1026,68 +1060,6 @@ function Format-ClaudeLocalSmokeFailure {
     return 'no visible response text'
 }
 
-function Ensure-UnshackledInstalled {
-    # Confirms an Unshackled checkout exists at $script:Cfg.UnshackledRoot.
-    # If not, asks before cloning from $script:Cfg.UnshackledRepoUrl.
-    $root = $script:Cfg.UnshackledRoot
-
-    if ([string]::IsNullOrWhiteSpace($root)) {
-        throw "UnshackledRoot is not set. Run: Set-LocalLLMSetting UnshackledRoot '<path>'"
-    }
-
-    $cliPath = try {
-        Join-Path $root "src\entrypoints\cli.tsx"
-    }
-    catch {
-        throw "UnshackledRoot is not accessible: $root. Run: Set-LocalLLMSetting UnshackledRoot '<path>'"
-    }
-
-    if (Test-Path -LiteralPath $cliPath -PathType Leaf -ErrorAction SilentlyContinue) {
-        return
-    }
-
-    $qualifier = Split-Path -Qualifier $root
-    if (-not [string]::IsNullOrWhiteSpace($qualifier) -and -not (Test-Path -LiteralPath $qualifier -ErrorAction SilentlyContinue)) {
-        throw "UnshackledRoot points at an unavailable drive or path: $root. Run: Set-LocalLLMSetting UnshackledRoot '<path>'"
-    }
-
-    $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.UnshackledRepoUrl)) {
-        $script:Cfg.UnshackledRepoUrl
-    } else {
-        "https://github.com/David-c0degeek/unshackled"
-    }
-
-    Write-Host ""
-    Write-Host "Unshackled not found at $root" -ForegroundColor Yellow
-    Write-Host "  Source: $repoUrl" -ForegroundColor DarkGray
-    $answer = (Read-Host "Clone it now? [y/N]").Trim().ToLowerInvariant()
-
-    if ($answer -notin @("y", "yes")) {
-        throw "Unshackled is not installed at $root. Aborting. Override with: Set-LocalLLMSetting UnshackledRoot '<path>'"
-    }
-
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw "git is not on PATH; cannot clone Unshackled."
-    }
-
-    $parent = Split-Path -Parent $root
-
-    if (-not [string]::IsNullOrWhiteSpace($parent)) {
-        Ensure-Directory $parent
-    }
-
-    Write-Host "Cloning $repoUrl -> $root" -ForegroundColor Cyan
-    & git clone $repoUrl $root
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "git clone failed for $repoUrl"
-    }
-
-    if (-not (Test-Path $cliPath)) {
-        throw "Cloned but $cliPath is missing — wrong repo URL? Check Set-LocalLLMSetting UnshackledRepoUrl."
-    }
-}
-
 function Install-Unshackled {
     [CmdletBinding()]
     param(
@@ -1095,7 +1067,7 @@ function Install-Unshackled {
         [switch]$Force
     )
 
-    if ((Test-Path -LiteralPath (Join-Path $Destination 'src\entrypoints\cli.tsx')) -and -not $Force) {
+    if ((Test-Path -LiteralPath (Join-Path $Destination 'Cargo.toml')) -and -not $Force) {
         Write-Host "Unshackled already exists: $Destination" -ForegroundColor Green
         Set-LocalLLMSetting UnshackledRoot $Destination
         return $Destination
@@ -1108,7 +1080,7 @@ function Install-Unshackled {
     $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.UnshackledRepoUrl)) {
         [string]$script:Cfg.UnshackledRepoUrl
     } else {
-        'https://github.com/David-c0degeek/unshackled'
+        'https://github.com/David-c0degeek/Unshackled'
     }
 
     Ensure-Directory (Split-Path -Parent $Destination)
@@ -1156,36 +1128,6 @@ function Get-UnshackledExtraArgs {
     }
     if ($Param) { $extras += $Param }
     return ,$extras
-}
-
-function Invoke-UnshackledCli {
-    [CmdletBinding()]
-    param(
-        [Parameter(ValueFromRemainingArguments)]
-        [string[]]$CliArgs
-    )
-
-    Ensure-UnshackledInstalled
-
-    $root = $script:Cfg.UnshackledRoot
-
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        throw "bun is not on PATH."
-    }
-
-    $nodeModules = Join-Path $root "node_modules"
-
-    if (-not (Test-Path $nodeModules)) {
-        Write-Host "Installing Unshackled dependencies..." -ForegroundColor Cyan
-
-        & bun install --cwd $root
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "bun install failed for Unshackled"
-        }
-    }
-
-    & bun (Join-Path $root "src\entrypoints\cli.tsx") @CliArgs
 }
 
 function ConvertTo-CodexTomlString {
@@ -1271,7 +1213,7 @@ function Get-ClaudeTargetSummary {
     return "Default (Anthropic API)"
 }
 
-function Start-UnshackledRust {
+function Start-Unshackled {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -1283,10 +1225,12 @@ function Start-UnshackledRust {
         [switch]$UseVision,
         [switch]$UseAutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
+        [string[]]$ExtraUnshackledArgs,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
+    $extras = @(Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs)
 
     # Stop any prior llama-server we own.
     if (-not $DryRun) {
@@ -1312,6 +1256,9 @@ function Start-UnshackledRust {
 
     $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
     $useNoThinkProxy = ($thinkingPolicy -ne 'keep')
+    $agentParallel = if ($script:Cfg.Contains('LlamaCppAgentParallel')) {
+        try { [int]$script:Cfg.LlamaCppAgentParallel } catch { 1 }
+    } else { 1 }
     # Default wiring talks straight to llama-server's OpenAI endpoint. For
     # reasoning models the no-think proxy is started after the server is up and
     # the client is switched to the Anthropic /v1/messages path through it (see
@@ -1332,6 +1279,7 @@ function Start-UnshackledRust {
         ThinkingPolicy   = $thinkingPolicy
         VisionModulePath = ''
     }
+    if ($agentParallel -gt 0) { $buildParams.Parallel = $agentParallel }
     if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
     if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
     if ($Strict) { $buildParams.Strict = $true }
@@ -1392,7 +1340,7 @@ function Start-UnshackledRust {
     }
 
     if ($DryRun) {
-        $title = "unshackled-rust via llama.cpp ($LlamaCppMode)"
+        $title = "unshackled via llama.cpp ($LlamaCppMode)"
         $plan = @{
             Title         = $title
             Backend       = 'llamacpp'
@@ -1405,7 +1353,7 @@ function Start-UnshackledRust {
             Port          = $port
             BaseUrl       = $effectiveBaseUrl
             LaunchExe     = 'unshackled'
-            LaunchArgs    = @('chat', '--model', $def.Root, '--bypass')
+            LaunchArgs    = @('chat', '--model', $def.Root, '--bypass') + $extras
             Notes         = @()
         }
         Show-LocalLLMLaunchPlan -Plan $plan
@@ -1451,6 +1399,26 @@ function Start-UnshackledRust {
         }
     }
 
+    $smoke = Test-ClaudeLocalVisibleResponse -BaseUrl $effectiveBaseUrl -Model $def.Root
+    if (-not $smoke.Ok) {
+        $detail = Format-ClaudeLocalSmokeFailure -Smoke $smoke
+        if ($LlamaCppMode -ne 'native') {
+            Write-Warning "llama.cpp $LlamaCppMode failed the response smoke test ($detail); retrying the Rust launch with native llama.cpp."
+            if ($useNoThinkProxy) { Stop-NoThinkProxy }
+            Stop-LlamaServer -Quiet
+
+            $fallbackParams = @{}
+            foreach ($name in $PSBoundParameters.Keys) {
+                $fallbackParams[$name] = $PSBoundParameters[$name]
+            }
+            $fallbackParams.LlamaCppMode = 'native'
+            $fallbackParams.UseAutoBest = $false
+            Start-Unshackled @fallbackParams
+            return
+        }
+        throw "Native llama.cpp failed the response smoke test ($detail). Check the model, quant, and server logs."
+    }
+
     # Generate .unshackled.toml in the current working directory. The Anthropic
     # adapter normalizes a base_url ending in /v1 to /v1/messages; the
     # OpenAI-compatible one to /v1/chat/completions.
@@ -1466,7 +1434,7 @@ api_key_env = "$apiKeyEnv"
 "@
 
     Write-Host ""
-    Write-Host "Launching unshackled-rust with $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
+    Write-Host "Launching unshackled with $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
     Write-Host "  Base URL : $effectiveBaseUrl" -ForegroundColor DarkGray
     Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
 
@@ -1532,7 +1500,7 @@ api_key_env = "$apiKeyEnv"
             throw "unshackled is not on PATH. Install with: cargo install unshackled-cli"
         }
 
-        $launchArgs = @('chat', '--model', $def.Root, '--bypass')
+        $launchArgs = @('chat', '--model', $def.Root, '--bypass') + $extras
         & unshackled @launchArgs
     }
     finally {
@@ -1568,6 +1536,21 @@ function Start-ClaudeWithLlamaCppModel {
     )
 
     $def = Get-ModelDef -Key $Key
+    if ($Unshackled) {
+        Start-Unshackled `
+            -Key $Key `
+            -ContextKey $ContextKey `
+            -LlamaCppMode $Mode `
+            -KvCacheK $KvCacheK `
+            -KvCacheV $KvCacheV `
+            -Strict:$Strict `
+            -UseVision:$UseVision `
+            -UseAutoBest:$AutoBest `
+            -AutoBestProfile $AutoBestProfile `
+            -ExtraUnshackledArgs $ExtraUnshackledArgs `
+            -DryRun:$DryRun
+        return
+    }
 
     # Resolve MTP params: per-call > per-model def > caller-provided default
     if ([string]::IsNullOrWhiteSpace($SpecType)) {
@@ -2083,13 +2066,7 @@ function Start-ClaudeWithLlamaCppModel {
 
         Write-LaunchLog "Launching ${backendLabel}: model=$($def.Root) base=$effectiveBaseUrl unshackled=$Unshackled" 'LAUNCH'
 
-        if ($Unshackled) {
-            $extras = Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs
-            Invoke-UnshackledCli @launchArgs @extras
-        }
-        else {
-            & claude --model $def.Root @launchArgs
-        }
+        & claude --model $def.Root @launchArgs
     }
     finally {
         Restore-ClaudeEnvBackup

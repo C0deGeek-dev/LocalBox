@@ -5,7 +5,7 @@
 #   .\install.ps1 -Symlink         symlink files (requires admin / developer mode)
 #   .\install.ps1 -SetupProfile    only ensure $PROFILE dot-sources the deployed entry point
 #   .\install.ps1 -InstallBenchPilot   clone BenchPilot into ~/.local-llm/tools/benchpilot if missing
-#   .\install.ps1 -InstallUnshackled   clone Unshackled into ~/.local-llm/tools/unshackled if missing
+#   .\install.ps1 -InstallUnshackled   clone Unshackled into D:\repos\rust\unshackled if missing
 #   .\install.ps1 -InstallTui      publish LocalBox.Tui and BenchPilot.Tui when available
 #   .\install.ps1 -SkipToolPrompts     do not prompt for optional companion checkouts
 #   .\install.ps1 -DryRun          preview the actions without changing anything
@@ -34,7 +34,7 @@ $DeployedLocalLLM = Join-Path $HOME ".local-llm"
 $DeployedProxy = Join-Path $HOME ".localbox-proxy"
 $ManagedToolsRoot = Join-Path $DeployedLocalLLM "tools"
 $ManagedBenchPilotRoot = Join-Path $ManagedToolsRoot "benchpilot"
-$ManagedUnshackledRoot = Join-Path $ManagedToolsRoot "unshackled"
+$ManagedUnshackledRoot = "D:\repos\rust\unshackled"
 $ProfileDotSourceLine = ". `"$DeployedLocalLLM\LocalLLMProfile.ps1`""
 
 # -SetupProfile alone (no -Symlink, no -DryRun) means "just wire up $PROFILE, don't touch files".
@@ -232,7 +232,7 @@ function Test-UnshackledCheckout {
 
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
     if (-not (Test-InstallPathRootExists -Path $Root)) { return $false }
-    return (Test-Path (Join-Path $Root "src\entrypoints\cli.tsx"))
+    return (Test-Path (Join-Path $Root "Cargo.toml"))
 }
 
 function Test-InstallPathRootExists {
@@ -365,7 +365,7 @@ function Find-UnshackledInstall {
         }
     }
 
-    $discovered = Find-CheckoutByMarker -MarkerRelativePath "src\entrypoints\cli.tsx" -Validator { param($root) Test-UnshackledCheckout -Root $root }
+    $discovered = Find-CheckoutByMarker -MarkerRelativePath "Cargo.toml" -Validator { param($root) Test-UnshackledCheckout -Root $root }
     if ($discovered) {
         return [pscustomobject]@{ Source = "discovered"; Root = $discovered }
     }
@@ -492,7 +492,7 @@ function Ensure-TuiBinaries {
 function Ensure-CompanionTools {
     $catalog = Get-InstallCatalog
     $benchPilotRepo = if ($catalog.Contains("BenchPilotRepoUrl")) { [string]$catalog.BenchPilotRepoUrl } else { "https://github.com/David-c0degeek/benchpilot" }
-    $unshackledRepo = if ($catalog.Contains("UnshackledRepoUrl")) { [string]$catalog.UnshackledRepoUrl } else { "https://github.com/David-c0degeek/unshackled" }
+    $unshackledRepo = if ($catalog.Contains("UnshackledRepoUrl")) { [string]$catalog.UnshackledRepoUrl } else { "https://github.com/David-c0degeek/Unshackled" }
 
     $bp = Find-BenchPilotInstall
     if ($bp) {
@@ -526,13 +526,12 @@ function Show-Diagnostics {
         Write-Host "python   : MISSING — required for the no-think proxy" -ForegroundColor Yellow
     }
 
-    $bun = Get-Command bun -ErrorAction SilentlyContinue
-    if ($bun) {
-        $ver = & bun --version 2>&1
-        Write-Host "bun      : ok  ($ver)  (only needed for Unshackled launches)" -ForegroundColor Green
+    $unshackledCli = Get-Command unshackled -ErrorAction SilentlyContinue
+    if ($unshackledCli) {
+        Write-Host "unshackled-cli: ok  ($($unshackledCli.Source))" -ForegroundColor Green
     }
     else {
-        Write-Host "bun      : missing (only needed for Unshackled launches)" -ForegroundColor DarkGray
+        Write-Host "unshackled-cli: missing (install with: cargo install unshackled-cli)" -ForegroundColor Yellow
     }
 
     $spectre = Get-Module -ListAvailable -Name PwshSpectreConsole -ErrorAction SilentlyContinue
@@ -574,7 +573,7 @@ function Show-Diagnostics {
         Write-Host "unshackled: ok  ($($unshackled.Root))" -ForegroundColor Green
     }
     else {
-        Write-Host "unshackled: missing — installer can clone https://github.com/David-c0degeek/unshackled into ~/.local-llm/tools/unshackled" -ForegroundColor Yellow
+        Write-Host "unshackled: missing — installer can clone https://github.com/David-c0degeek/Unshackled into D:\repos\rust\unshackled" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -630,7 +629,7 @@ if (-not $DryRun) {
     Write-Host ""
     Write-Host "Per-machine settings (paths, defaults) belong in ~/.local-llm/settings.json." -ForegroundColor DarkGray
     Write-Host "Use the helper instead of editing JSON:" -ForegroundColor DarkGray
-    Write-Host "  Set-LocalLLMSetting UnshackledRoot '<path-to-unshackled>'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting UnshackledRoot 'D:\repos\rust\unshackled'" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting BenchPilotRoot '<path-to-benchpilot>'" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting Default q36plus" -ForegroundColor DarkGray
 }

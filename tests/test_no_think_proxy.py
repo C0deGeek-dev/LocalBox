@@ -12,6 +12,7 @@ Run:
     python tests/test_no_think_proxy.py
 """
 import importlib.util
+import json
 import os
 import unittest
 
@@ -108,6 +109,47 @@ class StripThinkingFieldsTests(unittest.TestCase):
         nested = cleaned["messages"][0]["content"][0]["content"]
         self.assertEqual(nested["reasoning"], "keep me")
         self.assertEqual(nested["budget_tokens"], 7)
+
+
+class StreamingRewriteTests(unittest.TestCase):
+    def setUp(self):
+        self.strippers = {}
+
+    def get_stripper(self, idx):
+        if idx not in self.strippers:
+            self.strippers[idx] = proxy.ThinkStripper()
+        return self.strippers[idx]
+
+    def rewrite(self, event):
+        encoded = json.dumps(event, separators=(",", ":")).encode("utf-8")
+        handler = object.__new__(proxy.ProxyHandler)
+        return handler._rewrite_event(
+            b"data: " + encoded,
+            self.get_stripper,
+            self.strippers,
+        )
+
+    def test_content_block_stop_flushes_held_text(self):
+        delta = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "pong"},
+        }
+        stop = {"type": "content_block_stop", "index": 0}
+
+        first = self.rewrite(delta)
+        final = self.rewrite(stop)
+
+        self.assertNotIn(b"pong", first)
+        self.assertIn(b"pong", final)
+        self.assertIn(b"content_block_stop", final)
+
+    def test_non_text_block_stop_does_not_inject_fallback(self):
+        stop = {"type": "content_block_stop", "index": 1}
+
+        rewritten = self.rewrite(stop)
+
+        self.assertNotIn(proxy.EMPTY_AFTER_THINK_FALLBACK.encode("utf-8"), rewritten)
 
 
 class AuthTests(unittest.TestCase):

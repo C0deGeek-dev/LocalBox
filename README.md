@@ -11,7 +11,7 @@
 # LocalBox
 
 A PowerShell-driven launcher that runs [Claude Code](https://claude.com/claude-code)
-(or the [Unshackled](https://github.com/David-c0degeek/unshackled) fork) against a
+or [Unshackled](https://github.com/David-c0degeek/Unshackled) against a
 **local model** served by [llama.cpp](https://github.com/ggerganov/llama.cpp)'s
 `llama-server`, with the right chat template, KV-cache type, sampling, system
 prompt, and tool allowlist for each model family.
@@ -35,8 +35,8 @@ prompt, and tool allowlist for each model family.
 - [BenchPilot](https://github.com/David-c0degeek/benchpilot) is the companion
   optimizer: it benchmarks local models and exports recommended launcher
   profiles.
-- [Unshackled](https://github.com/David-c0degeek/unshackled) is the free Claude
-  Code fork that the launcher can target with `-Unshackled`.
+- [Unshackled](https://github.com/David-c0degeek/Unshackled) is the local
+  agent that the launcher can target with `-Unshackled`.
 
 ---
 
@@ -131,11 +131,11 @@ The proxy quietly strips Anthropic-only fields the local backend can't parse.
 
 ### Unshackled harness
 
-Same flow, except the launch shells into `bun src/entrypoints/cli.tsx` against
-an [Unshackled](https://github.com/David-c0degeek/unshackled) checkout instead
-of `claude`. If the configured `UnshackledRoot` doesn't exist, the first launch
-offers to `git clone` from `UnshackledRepoUrl` (default
-`https://github.com/David-c0degeek/unshackled`).
+Same flow, except the launch shells into `unshackled chat --model <model>`
+instead of `claude`. `UnshackledRoot` points at the Rust checkout used by
+LocalBox update/install flows; the default is `D:\repos\rust\unshackled`, and
+`UnshackledRepoUrl` defaults to
+`https://github.com/David-c0degeek/Unshackled`.
 
 ```powershell
 qcoder -Ctx 32k -Unshackled
@@ -345,10 +345,10 @@ llmtui                           # Terminal.Gui TUI, explicit preview path
 info                             # verify: VRAM, default model, configured quants
 ```
 
-The install step offers to clone missing BenchPilot and Unshackled checkouts
-into `~/.local-llm/tools/`. Use `-SkipToolPrompts` for unattended installs.
-`Show-Diagnostics` also reports on `python`, `bun` (only needed for
-Unshackled), `PwshSpectreConsole`, BenchPilot, and Unshackled.
+The install step offers to clone missing BenchPilot into `~/.local-llm/tools/`
+and Unshackled into `D:\repos\rust\unshackled`. Use `-SkipToolPrompts` for
+unattended installs. `Show-Diagnostics` also reports on `python`, the
+`unshackled` CLI, `PwshSpectreConsole`, BenchPilot, and Unshackled.
 Installs also record `LocalBoxRoot` in `settings.json`, which lets `llm-update`
 pull this repo and redeploy the profile files later.
 
@@ -484,7 +484,7 @@ to fix paths on a fresh machine.
 Use the helper instead of editing JSON:
 
 ```powershell
-Set-LocalLLMSetting UnshackledRoot '<path-to-unshackled>'   # usually auto-set by install.ps1
+Set-LocalLLMSetting UnshackledRoot 'D:\repos\rust\unshackled'   # usually auto-set by install.ps1
 Set-LocalLLMSetting BenchPilotRoot '<path-to-benchpilot>'   # usually auto-set by install.ps1
 Set-LocalLLMSetting LocalBoxRoot '<path-to-LocalBox>'        # auto-set by install.ps1
 Set-LocalLLMSetting Default q36plus
@@ -766,8 +766,8 @@ setups, so they stay.
   `llmc` for the native picker or set `$env:LOCAL_LLM_NO_SPECTRE=1` to disable
   Spectre everywhere.
 - **Spectre wizard stalls** → raise `$env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS`.
-- **`bun` not on PATH** → only required for Unshackled launches.
-  Install via `winget install Oven-sh.Bun`.
+- **`unshackled` not on PATH** -> install the CLI with
+  `cargo install unshackled-cli`.
 - **Need to roll back to the Ollama era** → `git checkout ollama-classic` in
   the repo and re-run `install.ps1`.
 
