@@ -33,6 +33,8 @@ Env-var fallbacks (used when arg not given):
 import hmac
 import http.client
 import json
+import logging
+import logging.handlers
 import os
 import socket
 import sys
@@ -40,6 +42,11 @@ import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Module logger. Handlers are attached in _setup_logging() (called from main);
+# until then logging falls back to its lastResort handler, which is fine for
+# the few code paths that import this module directly (tests).
+LOG = logging.getLogger("no-think-proxy")
 
 # Bump on every wire-format change (request rewriting, response stripping, SSE
 # handling). LocalBox compares this against NoThinkProxyRequiredVersion in
@@ -52,10 +59,23 @@ TARGET_HOST = "127.0.0.1"
 TARGET_PORT = 8080
 AUTH_TOKEN = ""
 
+# When True, collapse multiple/misplaced system messages in a request into a
+# single leading system message before forwarding. Off by default (no wire
+# change); enable for models whose chat template requires exactly one system
+# message at the front. Toggled via NO_THINK_PROXY_MERGE_SYSTEM=1.
+MERGE_SYSTEM_MESSAGES = False
+
 # Maximum request body we will buffer. A /v1/messages request is a few MB at
 # most; anything larger is either a bug or a memory-exhaustion attempt. We read
 # Content-Length-bounded bodies fully into memory, so this is the hard ceiling.
 MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024  # 64 MB
+
+# When upstream answers with an HTTP error (status >= 400) we capture up to this
+# many bytes of the response body and log it, so a 500 from llama-server shows
+# *why* in the proxy log instead of only as a bare access-line "... 500 -".
+# Capped so a large error payload can't blow up the log or memory.
+UPSTREAM_ERROR_CAPTURE_BYTES = 8 * 1024
+UPSTREAM_ERROR_LOG_BYTES = 2 * 1024
 
 # Online-guessing throttle for the auth gate. Keyed by client IP. After
 # AUTH_FAIL_FREE failures, each subsequent failure sleeps for a growing delay
@@ -172,6 +192,59 @@ def strip_thinking_fields(value):
     if isinstance(value, dict):
         return {k: v for k, v in value.items() if k.lower() not in THINKING_ROOT_KEYS}
     return value
+
+
+def _system_message_text(msg):
+    """Coerce a system message's content to plain text for merging."""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        # OpenAI "parts" form: [{"type": "text", "text": "..."}, ...]
+        parts = [p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str)]
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return json.dumps(content)
+
+
+def merge_system_messages(data):
+    """Collapse every system message into a single leading one.
+
+    Some chat templates allow exactly one system message at index 0 and raise
+    "System message must be at the beginning." otherwise. Agentic OpenAI
+    clients sometimes emit two (base prompt + injected tool/context block) or a
+    system message mid-conversation. We merge all system messages into one,
+    placed first, joining their text with blank lines, and keep the order of
+    the remaining (non-system) messages.
+
+    Returns (data, changed). `data` is only rewritten when a change is needed.
+    """
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return data, False
+
+    sys_indices = [
+        i for i, m in enumerate(messages)
+        if isinstance(m, dict) and m.get("role") == "system"
+    ]
+
+    # Already compliant: zero system messages, or exactly one at the front.
+    if not sys_indices or sys_indices == [0]:
+        return data, False
+
+    sys_msgs = [messages[i] for i in sys_indices]
+    others = [
+        m for i, m in enumerate(messages)
+        if not (isinstance(m, dict) and m.get("role") == "system")
+    ]
+
+    merged_text = "\n\n".join(t for t in (_system_message_text(m) for m in sys_msgs) if t)
+    merged_system = {"role": "system", "content": merged_text}
+
+    new_data = dict(data)
+    new_data["messages"] = [merged_system] + others
+    return new_data, True
 
 
 class ThinkStripper:
@@ -295,8 +368,70 @@ class ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        sys.stdout.write("proxy: " + (fmt % args) + "\n")
-        sys.stdout.flush()
+        # Standard access log line (BaseHTTPRequestHandler calls this from
+        # send_response). Routed through LOG so it also lands in the log file.
+        LOG.info(fmt, *args)
+
+    def _summarize_request_messages(self, body):
+        """Return a short description of the request's message roles, or None.
+
+        Diagnostic only: when llama-server rejects a request because the model's
+        chat template requires the system message to be first (or forbids extra
+        system messages), seeing the role sequence pinpoints the offending
+        message. Bounded so a long agent session doesn't flood the log.
+        """
+        if not body:
+            return None
+
+        if "application/json" not in self.headers.get("Content-Type", "").lower():
+            return None
+
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except Exception:
+            return None
+
+        if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+            return None
+
+        roles = [m.get("role") if isinstance(m, dict) else "?" for m in data["messages"]]
+        sys_idx = [i for i, r in enumerate(roles) if r == "system"]
+
+        parts = [
+            f"messages={len(roles)}",
+            "system_at=" + (",".join(map(str, sys_idx)) if sys_idx else "none"),
+        ]
+        if any(i != 0 for i in sys_idx):
+            parts.append("WARNING:system-not-first")
+        if len(roles) > 1 and len(sys_idx) > 1:
+            parts.append(f"WARNING:{len(sys_idx)}-system-messages")
+        if len(roles) <= 50:
+            parts.append("roles=[" + ",".join(str(r) for r in roles) + "]")
+
+        return " ".join(parts)
+
+    def _log_upstream_error(self, status, reason, body_bytes):
+        """Log an upstream HTTP error (>= 400) together with its body snippet.
+
+        This is the bit that answers "why did I get a 500": llama-server's error
+        body (usually JSON like {"error":{"message":...}}) is forwarded to the
+        client but was previously never recorded. We log a bounded snippet, plus
+        a summary of the request's message roles when available.
+        """
+        snippet = bytes(body_bytes).decode("utf-8", "replace").strip()
+        if len(snippet) > UPSTREAM_ERROR_LOG_BYTES:
+            snippet = snippet[:UPSTREAM_ERROR_LOG_BYTES] + " ...(truncated)"
+
+        summary = getattr(self, "_req_summary", None)
+        LOG.warning(
+            "upstream error %s %s on %s %s%s -> body: %s",
+            status,
+            reason or "",
+            self.command,
+            self.path,
+            f" [{summary}]" if summary else "",
+            snippet or "(empty body)",
+        )
 
     def _send_plain(self, status, text):
         body = text.encode("utf-8", errors="replace")
@@ -383,6 +518,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
         data.pop("reasoning", None)
         data.pop("reasoning_effort", None)
 
+        if MERGE_SYSTEM_MESSAGES:
+            data, merged = merge_system_messages(data)
+            if merged:
+                LOG.info("merged multiple/misplaced system messages into one on %s", self.path)
+
         return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
     def _is_messages_path(self):
@@ -412,7 +552,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             try:
                 chunk = resp.read(8192)
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-                print("proxy: upstream connection reset while reading SSE")
+                LOG.warning("upstream connection reset while reading SSE")
                 return
 
             if not chunk:
@@ -434,7 +574,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     self.wfile.write(emit)
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    print("proxy: client disconnected during SSE")
+                    LOG.info("client disconnected during SSE")
                     return
 
         # Trailing partial event (no terminating blank line). Forward as-is.
@@ -530,6 +670,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return  # oversized body; 413 already sent
         body = self._clean_request_body(body)
 
+        # Captured for diagnostics; only emitted if upstream returns an error.
+        self._req_summary = self._summarize_request_messages(body)
+
         headers = {}
 
         for key, value in self.headers.items():
@@ -604,6 +747,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
                     raw += chunk
 
+                if resp.status >= 400:
+                    self._log_upstream_error(resp.status, resp.reason, raw[:UPSTREAM_ERROR_CAPTURE_BYTES])
+
                 rewritten = raw
 
                 try:
@@ -621,31 +767,42 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
                 return
 
-            # Plain pass-through for everything else.
+            # Plain pass-through for everything else. On an upstream error we
+            # also capture a bounded copy of the body so the proxy log records
+            # *why* (e.g. an llama-server 500), without buffering normal 2xx
+            # streams which may be large or long-lived.
+            err_capture = bytearray() if resp.status >= 400 else None
             while True:
                 try:
                     chunk = resp.read(8192)
                 except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-                    print("proxy: upstream/downstream connection reset while reading response")
+                    LOG.warning("upstream/downstream connection reset while reading response")
                     break
 
                 if not chunk:
                     break
 
+                if err_capture is not None and len(err_capture) < UPSTREAM_ERROR_CAPTURE_BYTES:
+                    err_capture.extend(chunk[: UPSTREAM_ERROR_CAPTURE_BYTES - len(err_capture)])
+
                 try:
                     self.wfile.write(chunk)
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    print("proxy: client disconnected while writing response")
+                    LOG.info("client disconnected while writing response")
                     break
 
+            if err_capture is not None:
+                self._log_upstream_error(resp.status, resp.reason, err_capture)
+
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-            print("proxy: connection reset/aborted")
+            LOG.info("connection reset/aborted")
         except socket.timeout:
+            LOG.warning("proxy timeout waiting for upstream %s:%s on %s", TARGET_HOST, TARGET_PORT, self.path)
             self._send_plain(504, f"Proxy timeout while waiting for upstream {TARGET_HOST}:{TARGET_PORT}.")
         except Exception as ex:
-            print("proxy error:", repr(ex))
-            traceback.print_exc()
+            LOG.error("proxy error on %s: %r", self.path, ex)
+            LOG.error("%s", traceback.format_exc())
             self._send_plain(502, f"Proxy error: {ex}")
         finally:
             try:
@@ -692,6 +849,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def _env_flag(name):
+    """Interpret an env var as a boolean. Empty/0/false/no/off -> False."""
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
 def _parse_target(spec):
     """Accept 'host:port' or bare 'port' (uses 127.0.0.1)."""
     if ":" in spec:
@@ -701,8 +863,61 @@ def _parse_target(spec):
     return "127.0.0.1", int(spec)
 
 
+def _setup_logging():
+    """Attach stdout + rotating-file handlers to LOG and return the log path.
+
+    The proxy is launched in several ways: the interactive Claude launch
+    inherits a (hidden) console, while the serve-gateway redirects stdout to a
+    file. A rotating file handler gives a durable, self-contained record no
+    matter how it was started, which is what you want when chasing an upstream
+    500 after the fact.
+
+    Env vars:
+      NO_THINK_PROXY_LOG_FILE   Path to the log file. Defaults to
+                                ~/.localbox-proxy/logs/no-think-proxy.log.
+                                Set to "" to disable file logging (stdout only).
+      NO_THINK_PROXY_DEBUG      Any non-empty value raises the level to DEBUG.
+    """
+    level = logging.DEBUG if os.environ.get("NO_THINK_PROXY_DEBUG") else logging.INFO
+    LOG.setLevel(level)
+    LOG.propagate = False
+
+    # Avoid stacking duplicate handlers if called more than once.
+    for handler in list(LOG.handlers):
+        LOG.removeHandler(handler)
+
+    fmt = logging.Formatter(
+        "%(asctime)s no-think-proxy %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(fmt)
+    LOG.addHandler(stream)
+
+    log_file = os.environ.get("NO_THINK_PROXY_LOG_FILE")
+    if log_file is None:
+        log_file = os.path.join(
+            os.path.expanduser("~"), ".localbox-proxy", "logs", "no-think-proxy.log"
+        )
+
+    if log_file:  # explicit empty string disables file logging
+        try:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            file_handler.setFormatter(fmt)
+            LOG.addHandler(file_handler)
+        except OSError as ex:
+            LOG.warning("could not open log file %s: %s", log_file, ex)
+            log_file = ""
+
+    return log_file
+
+
 def main():
-    global TARGET_HOST, TARGET_PORT, AUTH_TOKEN
+    global TARGET_HOST, TARGET_PORT, AUTH_TOKEN, MERGE_SYSTEM_MESSAGES
 
     # --version is parsed before any other arg so the launcher can detect a
     # stale deployment without launching the server.
@@ -736,19 +951,30 @@ def main():
 
     TARGET_HOST, TARGET_PORT = _parse_target(target_spec)
 
+    MERGE_SYSTEM_MESSAGES = _env_flag("NO_THINK_PROXY_MERGE_SYSTEM")
+
+    log_file = _setup_logging()
+
     server = ThreadingHTTPServer((listen_host, listen_port), ProxyHandler)
     server.daemon_threads = True
 
     auth_label = "auth=on" if AUTH_TOKEN else "auth=off"
-    print(
-        f"no-think-proxy: {listen_host}:{listen_port} -> {TARGET_HOST}:{TARGET_PORT} ({auth_label})",
-        flush=True,
+    merge_label = "merge-system=on" if MERGE_SYSTEM_MESSAGES else "merge-system=off"
+    LOG.info(
+        "listening %s:%s -> %s:%s (%s %s)%s",
+        listen_host,
+        listen_port,
+        TARGET_HOST,
+        TARGET_PORT,
+        auth_label,
+        merge_label,
+        f" log={log_file}" if log_file else " log=stdout-only",
     )
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nno-think-proxy: stopped", flush=True)
+        LOG.info("stopped")
 
 
 if __name__ == "__main__":
