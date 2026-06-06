@@ -1,7 +1,7 @@
-# BenchPilot bridge and AutoBest profile contract.
+﻿# LocalBench bridge and AutoBest profile contract.
 #
 # LocalBox no longer owns llama.cpp benchmark/search logic. Tuning is delegated
-# to BenchPilot; this file only keeps the launcher-facing profile I/O and
+# to LocalBench; this file only keeps the launcher-facing profile I/O and
 # compatibility commands (`findbest`, `tunellm`, history display).
 
 $script:LlamaCppTunerVersion = 4
@@ -49,7 +49,7 @@ function Get-LlamaCppGpuNames {
 }
 
 function Format-LlamaCppOverrides {
-    # One-line stable display form for AutoBest overrides returned by BenchPilot
+    # One-line stable display form for AutoBest overrides returned by LocalBench
     # or loaded from the local profile cache.
     param([Parameter(Mandatory = $true)]$Overrides)
 
@@ -324,7 +324,7 @@ function Remove-LlamaCppBestConfig {
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
     if (-not (Test-Path $path)) {
-        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false; RemovedBenchPilotProfiles = @() }
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false; RemovedLocalBenchProfiles = @() }
     }
 
     $data = $null
@@ -334,12 +334,12 @@ function Remove-LlamaCppBestConfig {
     }
 
     if (-not $data -or -not $data.Contains('entries')) {
-        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false; RemovedBenchPilotProfiles = @() }
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false; RemovedLocalBenchProfiles = @() }
     }
 
     $kept = @()
     $removed = 0
-    $removedBenchPilotProfiles = @()
+    $removedLocalBenchProfiles = @()
     foreach ($entry in @($data.entries)) {
         $entryPromptLength = if ($entry.prompt_length) { [string]$entry.prompt_length } else { 'short' }
         $vramMatches = $entry.vramGB -and ([Math]::Abs([int]$entry.vramGB - [int]$VramGB) -le 1)
@@ -360,8 +360,8 @@ function Remove-LlamaCppBestConfig {
 
         if ($matches) {
             $removed++
-            if ($entry.benchpilot_profile_path) {
-                $removedBenchPilotProfiles += [string]$entry.benchpilot_profile_path
+            if ($entry.localbench_profile_path) {
+                $removedLocalBenchProfiles += [string]$entry.localbench_profile_path
             }
         } else {
             $kept += $entry
@@ -369,18 +369,18 @@ function Remove-LlamaCppBestConfig {
     }
 
     if ($removed -le 0) {
-        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = @($data.entries).Count; DeletedFile = $false; RemovedBenchPilotProfiles = @() }
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = @($data.entries).Count; DeletedFile = $false; RemovedLocalBenchProfiles = @() }
     }
 
     if ($kept.Count -eq 0) {
         Remove-Item -LiteralPath $path -Force
-        foreach ($profilePath in @($removedBenchPilotProfiles | Where-Object { $_ } | Select-Object -Unique)) {
+        foreach ($profilePath in @($removedLocalBenchProfiles | Where-Object { $_ } | Select-Object -Unique)) {
             $expanded = Expand-LocalLLMPath $profilePath
             if (Test-Path -LiteralPath $expanded) {
                 Remove-Item -LiteralPath $expanded -Force -ErrorAction SilentlyContinue
             }
         }
-        return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = 0; DeletedFile = $true; RemovedBenchPilotProfiles = @($removedBenchPilotProfiles) }
+        return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = 0; DeletedFile = $true; RemovedLocalBenchProfiles = @($removedLocalBenchProfiles) }
     }
 
     $data.entries = $kept
@@ -388,14 +388,14 @@ function Remove-LlamaCppBestConfig {
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
 
-    foreach ($profilePath in @($removedBenchPilotProfiles | Where-Object { $_ } | Select-Object -Unique)) {
+    foreach ($profilePath in @($removedLocalBenchProfiles | Where-Object { $_ } | Select-Object -Unique)) {
         $expanded = Expand-LocalLLMPath $profilePath
         if (Test-Path -LiteralPath $expanded) {
             Remove-Item -LiteralPath $expanded -Force -ErrorAction SilentlyContinue
         }
     }
 
-    return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = $kept.Count; DeletedFile = $false; RemovedBenchPilotProfiles = @($removedBenchPilotProfiles) }
+    return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = $kept.Count; DeletedFile = $false; RemovedLocalBenchProfiles = @($removedLocalBenchProfiles) }
 }
 
 function Test-LlamaCppBestConfigStale {
@@ -481,12 +481,12 @@ function Find-BestLlamaCppConfig {
         $PSBoundParameters['PromptLengths'] = $PromptLengths
     }
 
-    $bpStatus = Test-BenchPilotIntegrationAvailable -Quiet
+    $bpStatus = Test-LocalBenchIntegrationAvailable -Quiet
     if (-not $bpStatus.Available) {
-        throw "BenchPilot is required for tuning. Reason: $($bpStatus.Reason). Run Install-BenchPilot or setllm BenchPilotRoot <path-to-benchpilot>."
+        throw "LocalBench is required for tuning. Reason: $($bpStatus.Reason). Run Install-LocalBench or setllm LocalBenchRoot <path-to-localbench>."
     }
 
-    Write-Host "findbest: using BenchPilot ($($bpStatus.Version), $($bpStatus.Source))." -ForegroundColor Cyan
+    Write-Host "findbest: using LocalBench ($($bpStatus.Version), $($bpStatus.Source))." -ForegroundColor Cyan
     # Pre-flight: ensure the llama.cpp build for this mode is current before we
     # benchmark against it. Cheap release downloads (native/turboquant) auto-update;
     # the mtpturbo source build is only checked + warned (rebuild via update-llama
@@ -494,7 +494,7 @@ function Find-BestLlamaCppConfig {
     if (Get-Command Invoke-LlamaCppUpdatePreflight -ErrorAction SilentlyContinue) {
         Invoke-LlamaCppUpdatePreflight -Mode $Mode
     }
-    return Invoke-BenchPilotLauncherFindBest @PSBoundParameters
+    return Invoke-LocalBenchLauncherFindBest @PSBoundParameters
 }
 
 function Read-LlamaCppTunerHistoryEntries {
@@ -518,8 +518,8 @@ function Show-LlamaCppTunerHistory {
         [int]$Last = 50
     )
 
-    if (Get-Command Show-BenchPilotLauncherHistory -ErrorAction SilentlyContinue) {
-        Show-BenchPilotLauncherHistory -Key $Key -Last $Last
+    if (Get-Command Show-LocalBenchLauncherHistory -ErrorAction SilentlyContinue) {
+        Show-LocalBenchLauncherHistory -Key $Key -Last $Last
         return
     }
 

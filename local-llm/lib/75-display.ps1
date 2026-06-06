@@ -1,4 +1,4 @@
-# Status / dashboard / per-model detail. Prefers PwshSpectreConsole when
+﻿# Status / dashboard / per-model detail. Prefers PwshSpectreConsole when
 # installed; falls back to plain Write-Host. The fallback path stays usable on
 # fresh machines without any module installs.
 
@@ -198,7 +198,7 @@ function Get-LocalLLMClaudeEnvSnapshot {
     $env.ENABLE_TOOL_SEARCH = 'false'
 
     # Mirror Set-ClaudeLocalEnv: emit the image cap only when a model raises it
-    # above Unshackled's default of 1.
+    # above LocalPilot's default of 1.
     if ($MaxImagesPerRequest -gt 0) {
         $env.CLAUDE_LOCAL_MAX_IMAGES = [string]$MaxImagesPerRequest
     }
@@ -505,7 +505,7 @@ function Show-ModelDetailSpectre {
         if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
     })
     $ctxFlag = if ($contextLabels.Count -gt 1) { "[-Ctx $($contextLabels -join '|')]" } else { '' }
-    $usage = "$cmdName $ctxFlag [-Unshackled] [-Codex] [-Strict] [-Mode native|turboquant|mtpturbo]".Trim()
+    $usage = "$cmdName $ctxFlag [-LocalPilot] [-Codex] [-Strict] [-Mode native|turboquant|mtpturbo]".Trim()
     if ($def.ContainsKey('Quants')) {
         $usage += " [-Quant $((@($def.Quants.Keys)) -join '|')]"
     }
@@ -562,7 +562,7 @@ function Show-ModelCatalog {
             Write-Host "  $description" -ForegroundColor Gray
         }
 
-        $usage = "$cmdName $ctxFlag [-Unshackled] [-Codex] [-Strict] [-Mode native|turboquant|mtpturbo]".Trim()
+        $usage = "$cmdName $ctxFlag [-LocalPilot] [-Codex] [-Strict] [-Mode native|turboquant|mtpturbo]".Trim()
 
         if ($def.ContainsKey("Quants")) {
             $quantNames = @($def.Quants.Keys) -join '|'
@@ -724,7 +724,7 @@ function Show-LLMProfileInfo {
     Show-ClaudeTarget
     Show-LocalBackendStatus
     Show-ConfiguredGgufQuants -All:$All
-    Show-BenchPilotLauncherStatus -Quiet | Out-Null
+    Show-LocalBenchLauncherStatus -Quiet | Out-Null
     Show-ModelCatalog -All:$All
 
     if (-not (Test-LocalLLMSpectreAvailable)) {
@@ -747,7 +747,7 @@ function Show-LocalBoxCommandReference {
     }
 
     Write-Host "LocalBox model commands" -ForegroundColor Green
-    Write-Host "  One function is generated for each configured model. Use -Ctx, -Codex, -Strict, -Unshackled, -Mode, -KvK/-KvV, -AutoBest, and -Quant where supported." -ForegroundColor DarkGray
+    Write-Host "  One function is generated for each configured model. Use -Ctx, -Codex, -Strict, -LocalPilot, -Mode, -KvK/-KvV, -AutoBest, and -Quant where supported." -ForegroundColor DarkGray
     foreach ($key in (@(Get-ModelKeys) | Sort-Object)) {
         $def = Get-ModelDef -Key $key
         $name = Get-ModelShortcutName -Def $def
@@ -768,12 +768,12 @@ function Show-LocalBoxCommandReference {
     Write-CommandRow -Command "llms" -Description "Open the Spectre launcher wizard explicitly."
     Write-CommandRow -Command "llmserve -Key <key> [-Ctx <context>] [-NoMonitor]" -Description "Serve a local model to any agentic client."
     Write-CommandRow -Command "info [-All] [<model>]" -Description "Show the dashboard or model details."
-    Write-CommandRow -Command "info -Commands" -Description "Show this LocalBox and BenchPilot command list."
+    Write-CommandRow -Command "info -Commands" -Description "Show this LocalBox and LocalBench command list."
     Write-CommandRow -Command "llminfo" -Description "Alias for info."
     Write-CommandRow -Command "llmdocs, docs, llmhelp" -Description "Show the quick reference."
     Write-CommandRow -Command "reloadllm" -Description "Reload llm-models.json and regenerate model commands."
     Write-CommandRow -Command "llmdefault" -Description "Launch the configured default recipe, or the default model when no recipe is saved."
-    Write-CommandRow -Command "llmdefaultunshackled" -Description "Launch the default model through Unshackled."
+    Write-CommandRow -Command "llmdefaultlocalpilot" -Description "Launch the default model through LocalPilot."
     Write-CommandRow -Command "llmdefaultcodex" -Description "Launch the default model through Codex."
     Write-CommandRow -Command "llmlogerr, llmlogerrclear" -Description "Show or clear wizard error logs."
     Write-CommandRow -Command "llmlog" -Description "Show launch debug log (~/.local-llm/launch.log)."
@@ -794,25 +794,25 @@ function Show-LocalBoxCommandReference {
 
     Write-Host ""
     Write-Host "LocalBox companion tools" -ForegroundColor Green
-    Write-CommandRow -Command "findbest, tunellm" -Description "Run BenchPilot-backed llama.cpp AutoBest tuning."
-    Write-CommandRow -Command "bptui" -Description "Open the Terminal.Gui BenchPilot TUI when available."
-    Write-CommandRow -Command "bp, bpstatus" -Description "Show BenchPilot discovery and version status."
-    Write-CommandRow -Command "Install-BenchPilot" -Description "Clone/configure the managed BenchPilot checkout."
-    Write-CommandRow -Command "Update-BenchPilot" -Description "Fast-forward the configured BenchPilot checkout."
-    Write-CommandRow -Command "Install-Unshackled" -Description "Clone/configure the managed Unshackled checkout."
-    Write-CommandRow -Command "Update-Unshackled" -Description "Fast-forward the configured Unshackled checkout."
+    Write-CommandRow -Command "findbest, tunellm" -Description "Run LocalBench-backed llama.cpp AutoBest tuning."
+    Write-CommandRow -Command "lbtui" -Description "Open the Terminal.Gui LocalBench TUI when available."
+    Write-CommandRow -Command "lb, lbstatus" -Description "Show LocalBench discovery and version status."
+    Write-CommandRow -Command "Install-LocalBench" -Description "Clone/configure the managed LocalBench checkout."
+    Write-CommandRow -Command "Update-LocalBench" -Description "Fast-forward the configured LocalBench checkout."
+    Write-CommandRow -Command "Install-LocalPilot" -Description "Clone/configure the managed LocalPilot checkout."
+    Write-CommandRow -Command "Update-LocalPilot" -Description "Fast-forward the configured LocalPilot checkout."
     Write-CommandRow -Command "llm-update [-InstallTui], llmupdate" -Description "Update LocalBox plus installed companion checkouts; optionally refresh TUI binaries."
 
     Write-Host ""
-    Write-Host "BenchPilot commands" -ForegroundColor Green
-    Write-CommandRow -Command "benchpilot info commands" -Description "Show BenchPilot's command reference."
-    Write-CommandRow -Command "benchpilot detect" -Description "Detect hardware and save a hardware profile."
-    Write-CommandRow -Command "benchpilot list-models" -Description "List discoverable local model candidates."
-    Write-CommandRow -Command "benchpilot help" -Description "Show BenchPilot help."
-    Write-CommandRow -Command "Find-BenchPilotBestConfig" -Description "Module API used by LocalBox findbest."
-    Write-CommandRow -Command "Get-BenchPilotBestConfig" -Description "Read the best exported launcher profile."
-    Write-CommandRow -Command "Get-BenchPilotBestConfigCandidates" -Description "Read matching exported launcher profiles."
-    Write-CommandRow -Command "Show-BenchPilotHistory" -Description "Show BenchPilot/LocalBox tuner history for a model."
+    Write-Host "LocalBench commands" -ForegroundColor Green
+    Write-CommandRow -Command "localbench info commands" -Description "Show LocalBench's command reference."
+    Write-CommandRow -Command "localbench detect" -Description "Detect hardware and save a hardware profile."
+    Write-CommandRow -Command "localbench list-models" -Description "List discoverable local model candidates."
+    Write-CommandRow -Command "localbench help" -Description "Show LocalBench help."
+    Write-CommandRow -Command "Find-LocalBenchBestConfig" -Description "Module API used by LocalBox findbest."
+    Write-CommandRow -Command "Get-LocalBenchBestConfig" -Description "Read the best exported launcher profile."
+    Write-CommandRow -Command "Get-LocalBenchBestConfigCandidates" -Description "Read matching exported launcher profiles."
+    Write-CommandRow -Command "Show-LocalBenchHistory" -Description "Show LocalBench/LocalBox tuner history for a model."
 }
 
 function info {
@@ -935,10 +935,10 @@ function Show-LLMQuickReference {
 
     Write-Host @"
 One function per model — flags select what to do.
-  qcoder -Ctx 32k -Unshackled    Code agent (Qwen3-Coder, 32k, Unshackled)
-  q36p -Ctx 32k -Unshackled      General Qwen 3.6 agent (32k, Unshackled)
+  qcoder -Ctx 32k -LocalPilot    Code agent (Qwen3-Coder, 32k, LocalPilot)
+  q36p -Ctx 32k -LocalPilot      General Qwen 3.6 agent (32k, LocalPilot)
   dev -Ctx 32k                   Smaller / faster (Devstral 24B, 32k)
-  q36p -Ctx 128k -Unshackled     Big context (Qwen 3.6 Plus, 128k)
+  q36p -Ctx 128k -LocalPilot     Big context (Qwen 3.6 Plus, 128k)
   qcoder -Ctx 256 -Quant iq4xs   256k coder context (4090 ceiling)
   q36p -Quant q6kp               Switch the GGUF quant
   q36p -Mode turboquant -KvK turbo4 -KvV turbo4   turbo KV via fork binary
@@ -951,7 +951,7 @@ One function per model — flags select what to do.
 
 Flags
   -Ctx <name>     One of the model's contexts (e.g. 32k, 64k, 128k, 256k). Omit for default.
-  -Unshackled     Use Unshackled instead of Claude Code.
+  -LocalPilot     Use LocalPilot instead of Claude Code.
   -Codex          Use OpenAI Codex instead of Claude Code.
   -Strict         Apply the strict engineering overlay (tighter sampler + system prompt).
   -Mode <name>    Pick the llama.cpp binary flavor: native | turboquant | mtpturbo.
@@ -968,21 +968,21 @@ Manage
   info                  Dashboard, recommended models only (rich UI if PwshSpectreConsole is installed)
   info -All             Dashboard with experimental + legacy
   info <key>            Per-model detail: description, quants table (with fit + size), contexts table
-  info -Commands        Full LocalBox and BenchPilot command list
+  info -Commands        Full LocalBox and LocalBench command list
   reloadllm             Reload llm-models.json and regenerate commands
   llm-update [-InstallTui]
-                        Update LocalBox, Unshackled, and BenchPilot; refresh TUI binaries when requested
-  bptui                 Open BenchPilot.Tui when available
+                        Update LocalBox, LocalPilot, and LocalBench; refresh TUI binaries when requested
+  lbtui                 Open LocalBench.Tui when available
   lps, lstop            llama-server: status / stop
   purge                 Stop running llama-server and delete cached GGUF files
-  bpstatus              Show BenchPilot discovery/version status
-  Install-BenchPilot    Clone/configure the managed BenchPilot checkout
-  Update-BenchPilot     Pull the configured BenchPilot checkout
-  Install-Unshackled    Clone/configure the managed Unshackled checkout
-  Update-Unshackled     Pull the configured Unshackled checkout
+  lbstatus              Show LocalBench discovery/version status
+  Install-LocalBench    Clone/configure the managed LocalBench checkout
+  Update-LocalBench     Pull the configured LocalBench checkout
+  Install-LocalPilot    Clone/configure the managed LocalPilot checkout
+  Update-LocalPilot     Pull the configured LocalPilot checkout
   obench [-Model name]  Show legacy bench history (~/.local-llm/bench-history.jsonl)
   findbest <key> -ContextKey <ctx> [-Mode native|turboquant|mtpturbo] [-Quick|-Deep] [-Budget 100]
-                        Auto-tune llama.cpp launch flags for this box via BenchPilot.
+                        Auto-tune llama.cpp launch flags for this box via LocalBench.
                         Saved profiles are picked up by -AutoBest at launch time.
                         The wizard also exposes Find best settings and
                         Delete best settings for llama.cpp models.

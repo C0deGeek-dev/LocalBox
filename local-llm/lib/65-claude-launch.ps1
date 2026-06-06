@@ -1,4 +1,4 @@
-# Claude Code / Unshackled launcher path. Backs up Claude env vars, points
+﻿# Claude Code / LocalPilot launcher path. Backs up Claude env vars, points
 # them at the no-think strip proxy in front of llama-server, launches the
 # agent, restores the env on exit.
 
@@ -204,16 +204,16 @@ function Set-ClaudeLocalEnv {
 
     # llama.cpp's Anthropic-compatible endpoint does not implement Anthropic
     # beta tool shapes like defer_loading/tool_reference. Without this,
-    # Unshackled may withhold real tools behind ToolSearch or send schema
+    # LocalPilot may withhold real tools behind ToolSearch or send schema
     # fields that local proxies tolerate inconsistently.
     $env:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1"
     $env:ENABLE_TOOL_SEARCH = "false"
 
     # Per-model image-per-request ceiling for the local vision backend.
-    # Unshackled's capImagesForLocalBackend defaults to 1 (llama.cpp + mmproj
+    # LocalPilot's capImagesForLocalBackend defaults to 1 (llama.cpp + mmproj
     # typically collapses into degenerate "/////" output beyond one image). A
     # model known to handle more sets MaxImagesPerRequest in its catalog def to
-    # raise the cap; unset leaves Unshackled's default of 1. For the esoteric
+    # raise the cap; unset leaves LocalPilot's default of 1. For the esoteric
     # 0 (drop all) / -1 (disable cap) values, set CLAUDE_LOCAL_MAX_IMAGES by hand.
     if ($MaxImagesPerRequest -gt 0) {
         $env:CLAUDE_LOCAL_MAX_IMAGES = [string]$MaxImagesPerRequest
@@ -308,7 +308,7 @@ function Start-NoThinkProxy {
     Write-LaunchLog "Starting no-think proxy: python $proxyScript $ListenPort $target $ListenHost" 'PROXY'
 
     if (-not (Test-Path $proxyScript)) {
-        throw "No-think proxy not found: $proxyScript. Re-run install.ps1 so Claude/Unshackled launches do not point at a dead proxy URL."
+        throw "No-think proxy not found: $proxyScript. Re-run install.ps1 so Claude/LocalPilot launches do not point at a dead proxy URL."
     }
 
     $argList = @($proxyScript, [string]$ListenPort, $target, $ListenHost)
@@ -558,17 +558,17 @@ function Show-LocalLLMServeClientInstructions {
     }
 
     Write-Host ""
-    Write-Host "On the client, run normal Unshackled with:" -ForegroundColor Cyan
+    Write-Host "On the client, run normal LocalPilot with:" -ForegroundColor Cyan
     foreach ($line in $commands.Bash) {
         Write-Host "  $line" -ForegroundColor Gray
     }
-    Write-Host "  unshackled" -ForegroundColor Gray
+    Write-Host "  localpilot" -ForegroundColor Gray
     Write-Host ""
     Write-Host "PowerShell client equivalent:" -ForegroundColor Cyan
     foreach ($line in $commands.PowerShell) {
         Write-Host "  $line" -ForegroundColor Gray
     }
-    Write-Host "  unshackled" -ForegroundColor Gray
+    Write-Host "  localpilot" -ForegroundColor Gray
     Write-Host ""
 }
 
@@ -870,7 +870,7 @@ function Start-LocalLLMServeGateway {
 
     if ($DryRun) {
         $commands = Get-LocalLLMServeClientEnvCommands -BaseUrl $primaryBaseUrl -Password $Password
-        $notes = @("Example Unshackled command: $($commands.Bash -join '; '); unshackled")
+        $notes = @("Example LocalPilot command: $($commands.Bash -join '; '); localpilot")
         if (Test-LocalLLMServePublicHttp -BaseUrl $primaryBaseUrl) {
             $authNote = if ([string]::IsNullOrWhiteSpace($Password)) { "Open (no auth)" } else { "Password-only" }
             $notes += "$authNote HTTP on a public-looking address is not encrypted."
@@ -1060,71 +1060,71 @@ function Format-ClaudeLocalSmokeFailure {
     return 'no visible response text'
 }
 
-function Install-Unshackled {
+function Install-LocalPilot {
     [CmdletBinding()]
     param(
-        [string]$Destination = (Join-Path $HOME '.local-llm\tools\unshackled'),
+        [string]$Destination = (Join-Path $HOME '.local-llm\tools\localpilot'),
         [switch]$Force
     )
 
     if ((Test-Path -LiteralPath (Join-Path $Destination 'Cargo.toml')) -and -not $Force) {
-        Write-Host "Unshackled already exists: $Destination" -ForegroundColor Green
-        Set-LocalLLMSetting UnshackledRoot $Destination
+        Write-Host "LocalPilot already exists: $Destination" -ForegroundColor Green
+        Set-LocalLLMSetting LocalPilotRoot $Destination
         return $Destination
     }
 
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw "git is not on PATH; cannot clone Unshackled."
+        throw "git is not on PATH; cannot clone LocalPilot."
     }
 
-    $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.UnshackledRepoUrl)) {
-        [string]$script:Cfg.UnshackledRepoUrl
+    $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.LocalPilotRepoUrl)) {
+        [string]$script:Cfg.LocalPilotRepoUrl
     } else {
-        'https://github.com/David-c0degeek/Unshackled'
+        'https://github.com/David-c0degeek/LocalPilot'
     }
 
     Ensure-Directory (Split-Path -Parent $Destination)
     if (Test-Path -LiteralPath $Destination) {
-        throw "Destination already exists: $Destination. Use Update-Unshackled, or remove it and retry."
+        throw "Destination already exists: $Destination. Use Update-LocalPilot, or remove it and retry."
     }
 
     & git clone $repoUrl $Destination
     if ($LASTEXITCODE -ne 0) { throw "git clone failed for $repoUrl" }
 
-    Set-LocalLLMSetting UnshackledRoot $Destination
+    Set-LocalLLMSetting LocalPilotRoot $Destination
     return $Destination
 }
 
-function Update-Unshackled {
+function Update-LocalPilot {
     [CmdletBinding()]
     param()
 
-    $root = if (Get-Command Resolve-UnshackledRoot -ErrorAction SilentlyContinue) {
-        Resolve-UnshackledRoot
+    $root = if (Get-Command Resolve-LocalPilotRoot -ErrorAction SilentlyContinue) {
+        Resolve-LocalPilotRoot
     } else {
-        $script:Cfg.UnshackledRoot
+        $script:Cfg.LocalPilotRoot
     }
 
     if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
-        throw "Unshackled is not installed. Run Install-Unshackled first."
+        throw "LocalPilot is not installed. Run Install-LocalPilot first."
     }
 
-    $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'Unshackled' -Root $root
+    $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'LocalPilot' -Root $root
     if ($result.Status -in @('failed', 'not-git', 'no-upstream', 'diverged')) {
         throw $result.Reason
     }
     return $result
 }
 
-function Get-UnshackledExtraArgs {
-    # Merges the -ExtraUnshackledArgs param with $env:UNSHACKLED_EXTRA_ARGS.
+function Get-LocalPilotExtraArgs {
+    # Merges the -ExtraLocalPilotArgs param with $env:LOCALPILOT_EXTRA_ARGS.
     # Env-var splitting is whitespace-only — sufficient for flags like `-D` or
     # `-D --debug-file=path`. For values containing spaces, pass via param.
     param([string[]]$Param)
 
     $extras = @()
-    if ($env:UNSHACKLED_EXTRA_ARGS) {
-        $extras += ($env:UNSHACKLED_EXTRA_ARGS -split '\s+' | Where-Object { $_ })
+    if ($env:LOCALPILOT_EXTRA_ARGS) {
+        $extras += ($env:LOCALPILOT_EXTRA_ARGS -split '\s+' | Where-Object { $_ })
     }
     if ($Param) { $extras += $Param }
     return ,$extras
@@ -1213,7 +1213,7 @@ function Get-ClaudeTargetSummary {
     return "Default (Anthropic API)"
 }
 
-function Start-Unshackled {
+function Start-LocalPilot {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -1225,12 +1225,12 @@ function Start-Unshackled {
         [switch]$UseVision,
         [switch]$UseAutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
-        [string[]]$ExtraUnshackledArgs,
+        [string[]]$ExtraLocalPilotArgs,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
-    $extras = @(Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs)
+    $extras = @(Get-LocalPilotExtraArgs -Param $ExtraLocalPilotArgs)
 
     # Stop any prior llama-server we own.
     if (-not $DryRun) {
@@ -1340,7 +1340,7 @@ function Start-Unshackled {
     }
 
     if ($DryRun) {
-        $title = "unshackled via llama.cpp ($LlamaCppMode)"
+        $title = "localpilot via llama.cpp ($LlamaCppMode)"
         $plan = @{
             Title         = $title
             Backend       = 'llamacpp'
@@ -1352,7 +1352,7 @@ function Start-Unshackled {
             ServerArgs    = $serverArgs
             Port          = $port
             BaseUrl       = $effectiveBaseUrl
-            LaunchExe     = 'unshackled'
+            LaunchExe     = 'localpilot'
             LaunchArgs    = @('chat', '--model', $def.Root, '--bypass') + $extras
             Notes         = @()
         }
@@ -1384,7 +1384,7 @@ function Start-Unshackled {
 
     # Reasoning models: put the no-think proxy in front of llama-server and route
     # the client through the Anthropic /v1/messages path, so <think> output is
-    # stripped before it reaches Unshackled (mirrors the working Claude Code
+    # stripped before it reaches LocalPilot (mirrors the working Claude Code
     # wiring). The proxy binds local loopback only, so it runs without auth.
     if ($useNoThinkProxy) {
         try {
@@ -1413,16 +1413,16 @@ function Start-Unshackled {
             }
             $fallbackParams.LlamaCppMode = 'native'
             $fallbackParams.UseAutoBest = $false
-            Start-Unshackled @fallbackParams
+            Start-LocalPilot @fallbackParams
             return
         }
         throw "Native llama.cpp failed the response smoke test ($detail). Check the model, quant, and server logs."
     }
 
-    # Generate .unshackled.toml in the current working directory. The Anthropic
+    # Generate .localpilot.toml in the current working directory. The Anthropic
     # adapter normalizes a base_url ending in /v1 to /v1/messages; the
     # OpenAI-compatible one to /v1/chat/completions.
-    $apiKeyEnv = if ($providerKind -eq 'anthropic') { 'ANTHROPIC_AUTH_TOKEN' } else { 'UNSHACKLED_LOCAL_API_KEY' }
+    $apiKeyEnv = if ($providerKind -eq 'anthropic') { 'ANTHROPIC_AUTH_TOKEN' } else { 'LOCALPILOT_LOCAL_API_KEY' }
     $tomlContent = @"
 [provider]
 default = "local"
@@ -1434,7 +1434,7 @@ api_key_env = "$apiKeyEnv"
 "@
 
     Write-Host ""
-    Write-Host "Launching unshackled with $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
+    Write-Host "Launching localpilot with $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
     Write-Host "  Base URL : $effectiveBaseUrl" -ForegroundColor DarkGray
     Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
 
@@ -1482,26 +1482,26 @@ api_key_env = "$apiKeyEnv"
         }
 
         # Rust-specific: API key env var (empty for local).
-        $env:UNSHACKLED_LOCAL_API_KEY = ""
+        $env:LOCALPILOT_LOCAL_API_KEY = ""
 
-        # Pass the model's usable context window to Unshackled (Rust) so it uses
+        # Pass the model's usable context window to LocalPilot (Rust) so it uses
         # the full context instead of its conservative default.
         if ($contextTokens -gt 0) {
             $tomlContent += "`n[harness]`ncontext_token_limit = $contextTokens`n"
         }
 
-        # Write .unshackled.toml to cwd.
-        $tomlPath = Join-Path (Get-Location) '.unshackled.toml'
+        # Write .localpilot.toml to cwd.
+        $tomlPath = Join-Path (Get-Location) '.localpilot.toml'
         Set-Content -Path $tomlPath -Value $tomlContent -Encoding UTF8
         Write-Host "  Config   : $tomlPath" -ForegroundColor DarkGray
 
-        # Launch unshackled chat.
-        if (-not (Get-Command unshackled -ErrorAction SilentlyContinue)) {
-            throw "unshackled is not on PATH. Install with: cargo install unshackled-cli"
+        # Launch localpilot chat.
+        if (-not (Get-Command localpilot -ErrorAction SilentlyContinue)) {
+            throw "localpilot is not on PATH. Install with: cargo install localpilot-cli"
         }
 
         $launchArgs = @('chat', '--model', $def.Root, '--bypass') + $extras
-        & unshackled @launchArgs
+        & localpilot @launchArgs
     }
     finally {
         Restore-ClaudeEnvBackup
@@ -1521,7 +1521,7 @@ function Start-ClaudeWithLlamaCppModel {
         [string]$Tools,
         [Nullable[bool]]$IncludeInlineToolSchemas,
         [switch]$LimitTools,
-        [switch]$Unshackled,
+        [switch]$LocalPilot,
         [switch]$Codex,
         [switch]$Strict,
         [switch]$UseVision,
@@ -1529,15 +1529,15 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$AutoBestStrict,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
-        [string[]]$ExtraUnshackledArgs,
+        [string[]]$ExtraLocalPilotArgs,
         [AllowEmptyString()][string]$SpecType,
         [int]$SpecDraftNMax,
         [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
-    if ($Unshackled) {
-        Start-Unshackled `
+    if ($LocalPilot) {
+        Start-LocalPilot `
             -Key $Key `
             -ContextKey $ContextKey `
             -LlamaCppMode $Mode `
@@ -1547,7 +1547,7 @@ function Start-ClaudeWithLlamaCppModel {
             -UseVision:$UseVision `
             -UseAutoBest:$AutoBest `
             -AutoBestProfile $AutoBestProfile `
-            -ExtraUnshackledArgs $ExtraUnshackledArgs `
+            -ExtraLocalPilotArgs $ExtraLocalPilotArgs `
             -DryRun:$DryRun
         return
     }
@@ -1786,8 +1786,8 @@ function Start-ClaudeWithLlamaCppModel {
 
         $title = if ($Codex) {
             "codex via llama.cpp ($Mode)"
-        } elseif ($Unshackled) {
-            "unshackled via llama.cpp ($Mode)"
+        } elseif ($LocalPilot) {
+            "localpilot via llama.cpp ($Mode)"
         } else {
             "claude via llama.cpp ($Mode)"
         }
@@ -1802,10 +1802,10 @@ function Start-ClaudeWithLlamaCppModel {
             Get-LocalLLMClaudeEnvSnapshot -BaseUrl $baseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep') -MaxImagesPerRequest $snapshotMaxImages
         }
 
-        $launchExe = if ($Unshackled) { 'unshackled' } elseif ($Codex) { 'codex' } else { 'claude' }
+        $launchExe = if ($LocalPilot) { 'localpilot' } elseif ($Codex) { 'codex' } else { 'claude' }
         $launchExeArgs = if ($Codex) {
             @()
-        } elseif ($Unshackled) {
+        } elseif ($LocalPilot) {
             @($launchArgs)
         } else {
             @('--model', $def.Root) + $launchArgs
@@ -1980,7 +1980,7 @@ function Start-ClaudeWithLlamaCppModel {
     # Front llama-server with no-think-proxy unless the model opts to keep
     # thinking. The proxy strips <think>...</think> from /v1/messages
     # responses, which both reasoning-Qwen variants and Heretic merges leak
-    # into the assistant text and break Unshackled's session-title parser.
+    # into the assistant text and break LocalPilot's session-title parser.
     $useNoThinkProxy = ($thinkingPolicy -ne 'keep')
 
     if ($useNoThinkProxy) {
@@ -2012,7 +2012,7 @@ function Start-ClaudeWithLlamaCppModel {
     }
 
         # Lift the local-backend image cap only when the model def declares it can
-        # handle more than one image per request; otherwise leave Unshackled's
+        # handle more than one image per request; otherwise leave LocalPilot's
         # safe default of 1. Only meaningful for a vision (-UseVision) launch.
         $maxImagesPerRequest = 0
         if ($def.ContainsKey('MaxImagesPerRequest')) {
@@ -2021,7 +2021,7 @@ function Start-ClaudeWithLlamaCppModel {
         Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep') -ContextTokens $contextTokens -MaxImagesPerRequest $maxImagesPerRequest
         Set-LocalBackendTelemetryEnv -ProcessId $proc.Id -Port $port -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err -GgufPath $ggufPath -Model $def.Root -ContextKey $ContextKey -ContextTokens $contextTokens
 
-        $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
+        $backendLabel = if ($LocalPilot) { "localpilot" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
         $thinkingLabel = if ($thinkingPolicy -eq 'keep') {
             "kept (direct to llama-server)"
@@ -2064,7 +2064,7 @@ function Start-ClaudeWithLlamaCppModel {
             )
         }
 
-        Write-LaunchLog "Launching ${backendLabel}: model=$($def.Root) base=$effectiveBaseUrl unshackled=$Unshackled" 'LAUNCH'
+        Write-LaunchLog "Launching ${backendLabel}: model=$($def.Root) base=$effectiveBaseUrl localpilot=$LocalPilot" 'LAUNCH'
 
         & claude --model $def.Root @launchArgs
     }

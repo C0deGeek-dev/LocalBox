@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $env:LOCALBOX_SKIP_PROXY_CHECK = '1'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -49,9 +49,9 @@ $launchOptions = Get-LocalBoxTuiLaunchOptions -Key $model.key
 if (-not (@($launchOptions.actions) | Where-Object { $_.key -eq 'serve' -and $_.label -eq 'Serve' })) {
     throw 'Get-LocalBoxTuiLaunchOptions did not expose the serve action contract.'
 }
-$legacyUnshackledAction = 'unshackled' + '-rust'
-if (@($launchOptions.actions) | Where-Object { $_.key -eq $legacyUnshackledAction }) {
-    throw 'Get-LocalBoxTuiLaunchOptions still exposes the old split Unshackled action.'
+$legacyLocalPilotAction = 'localpilot' + '-rust'
+if (@($launchOptions.actions) | Where-Object { $_.key -eq $legacyLocalPilotAction }) {
+    throw 'Get-LocalBoxTuiLaunchOptions still exposes the old split LocalPilot action.'
 }
 
 $servePlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action serve -Mode native
@@ -59,9 +59,9 @@ if ($servePlan.action -ne 'serve' -or $servePlan.launchCommand -notmatch "-Actio
     throw 'New-LocalBoxTuiLaunchPlan did not preserve the serve action.'
 }
 
-$unshackledPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action unshackled -Mode native
-if ($unshackledPlan.action -ne 'unshackled' -or $unshackledPlan.launchCommand -notmatch "-Action 'unshackled'") {
-    throw 'New-LocalBoxTuiLaunchPlan did not preserve the Unshackled action.'
+$localpilotPlan = New-LocalBoxTuiLaunchPlan -Key $model.key -ContextKey $contextKey -Action localpilot -Mode native
+if ($localpilotPlan.action -ne 'localpilot' -or $localpilotPlan.launchCommand -notmatch "-Action 'localpilot'") {
+    throw 'New-LocalBoxTuiLaunchPlan did not preserve the LocalPilot action.'
 }
 
 if (-not [string]::IsNullOrWhiteSpace($quantKey)) {
@@ -81,10 +81,10 @@ if (-not $settings.path) {
     throw 'Get-LocalBoxTuiSettings did not return a settings path.'
 }
 
-$benchPilot = Get-LocalBoxTuiBenchPilotStatus
-if ($null -eq $benchPilot.available) {
-    throw 'Get-LocalBoxTuiBenchPilotStatus did not return structured availability.'
+$localBench = Get-LocalBoxTuiLocalBenchStatus
+if ($null -eq $localBench.available) {
+    throw 'Get-LocalBoxTuiLocalBenchStatus did not return structured availability.'
 }
 
-@($status, $models[0], $detail, $plan, $defaultPlan, $findBestPlan, $resetBestPlan, $launchOptions, $servePlan, $unshackledPlan, $settings, $benchPilot) | ConvertTo-Json -Depth 16 -Compress | Out-Null
+@($status, $models[0], $detail, $plan, $defaultPlan, $findBestPlan, $resetBestPlan, $launchOptions, $servePlan, $localpilotPlan, $settings, $localBench) | ConvertTo-Json -Depth 16 -Compress | Out-Null
 Write-Host "LocalBox TUI API smoke test passed."

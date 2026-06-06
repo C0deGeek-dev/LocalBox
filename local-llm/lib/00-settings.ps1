@@ -1,4 +1,4 @@
-# Settings + config loading. Three files participate, layered in this order:
+﻿# Settings + config loading. Three files participate, layered in this order:
 #   1. defaults.json (committed) — shipped launcher defaults (top-level scalars).
 #   2. llm-models.json (committed) — pure catalog: Models + CommandAliases only.
 #      Legacy installs may still carry the old scalars at the top level; those
@@ -153,21 +153,21 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppAgentParallel"))         { $cfg.LlamaCppAgentParallel = 1 }
     if (-not $cfg.ContainsKey("LlamaCppAgentCacheReuse"))       { $cfg.LlamaCppAgentCacheReuse = 256 }
     if (-not $cfg.ContainsKey("LocalModelMaxOutputTokens"))     { $cfg.LocalModelMaxOutputTokens = 4096 }
-    if (-not $cfg.ContainsKey("BenchPilotRoot"))                { $cfg.BenchPilotRoot = "" }
-    if (-not $cfg.ContainsKey("BenchPilotRepoUrl"))             { $cfg.BenchPilotRepoUrl = "https://github.com/David-c0degeek/benchpilot" }
-    if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
+    if (-not $cfg.ContainsKey("LocalBenchRoot"))                { $cfg.LocalBenchRoot = "" }
+    if (-not $cfg.ContainsKey("LocalBenchRepoUrl"))             { $cfg.LocalBenchRepoUrl = "https://github.com/David-c0degeek/LocalBench" }
+    if (-not $cfg.ContainsKey("LocalBenchMinimumVersion"))      { $cfg.LocalBenchMinimumVersion = "0.1.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
-    if (-not $cfg.ContainsKey("UnshackledRoot"))                { $cfg.UnshackledRoot = "D:\repos\rust\unshackled" }
+    if (-not $cfg.ContainsKey("LocalPilotRoot"))                { $cfg.LocalPilotRoot = "D:\repos\rust\localpilot" }
     if (-not $cfg.ContainsKey("CodexEnableSearch"))             { $cfg.CodexEnableSearch = $false }
     if (-not $cfg.ContainsKey("CodexBypassApprovalsAndSandbox")) { $cfg.CodexBypassApprovalsAndSandbox = $true }
     if (-not $cfg.ContainsKey("CodexStreamIdleTimeoutMs"))       { $cfg.CodexStreamIdleTimeoutMs = 10000000 }
 
-    # Drop obsolete settings (docker, old benchpilot toggles, Ollama-era keys,
-    # the separate Rust checkout root now folded into UnshackledRoot).
+    # Drop obsolete settings (docker, old localbench toggles, Ollama-era keys,
+    # the separate Rust checkout root now folded into LocalPilotRoot).
     if ($cfg.ContainsKey("LlamaCppDockerImage")) { $cfg.Remove("LlamaCppDockerImage") | Out-Null }
-    if ($cfg.ContainsKey("BenchPilotPreferExternal")) { $cfg.Remove("BenchPilotPreferExternal") | Out-Null }
-    if ($cfg.ContainsKey("BenchPilotAllowLegacyFallback")) { $cfg.Remove("BenchPilotAllowLegacyFallback") | Out-Null }
-    foreach ($legacyKey in @('MinOllamaVersion', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot', 'RequireAdvertisedTools', 'LlamaCppCoexistOllama', 'UnshackledRustRoot')) {
+    if ($cfg.ContainsKey("LocalBenchPreferExternal")) { $cfg.Remove("LocalBenchPreferExternal") | Out-Null }
+    if ($cfg.ContainsKey("LocalBenchAllowLegacyFallback")) { $cfg.Remove("LocalBenchAllowLegacyFallback") | Out-Null }
+    foreach ($legacyKey in @('MinOllamaVersion', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot', 'RequireAdvertisedTools', 'LlamaCppCoexistOllama', 'LocalPilotRustRoot')) {
         if ($cfg.ContainsKey($legacyKey)) { $cfg.Remove($legacyKey) | Out-Null }
     }
 
@@ -175,23 +175,23 @@ function Import-LocalLLMConfig {
     $cfg.LlamaCppTurboquantRoot = Expand-LocalLLMPath $cfg.LlamaCppTurboquantRoot
     $cfg.LlamaCppMtpTurboRoot   = Expand-LocalLLMPath $cfg.LlamaCppMtpTurboRoot
     $cfg.LlamaCppGgufRoot       = Expand-LocalLLMPath $cfg.LlamaCppGgufRoot
-    $cfg.BenchPilotRoot         = Expand-LocalLLMPath $cfg.BenchPilotRoot
+    $cfg.LocalBenchRoot         = Expand-LocalLLMPath $cfg.LocalBenchRoot
     $cfg.LocalBoxRoot           = Expand-LocalLLMPath $cfg.LocalBoxRoot
 
-    $cfg.UnshackledRoot = Expand-LocalLLMPath $cfg.UnshackledRoot
-    $legacyUnshackledLeaf = Split-Path -Path ([string]$cfg.UnshackledRoot) -Leaf
-    $legacyUnshackledParent = Split-Path -Path ([string]$cfg.UnshackledRoot) -Parent
-    $legacyRustLeaf = 'Unshackled' + '-Rust'
-    if ($legacyUnshackledParent -eq 'D:\repos' -and $legacyUnshackledLeaf -in @('Unshackled', $legacyRustLeaf)) {
-        $cfg.UnshackledRoot = 'D:\repos\rust\unshackled'
+    $cfg.LocalPilotRoot = Expand-LocalLLMPath $cfg.LocalPilotRoot
+    $legacyLocalPilotLeaf = Split-Path -Path ([string]$cfg.LocalPilotRoot) -Leaf
+    $legacyLocalPilotParent = Split-Path -Path ([string]$cfg.LocalPilotRoot) -Parent
+    $legacyRustLeaf = 'LocalPilot' + '-Rust'
+    if ($legacyLocalPilotParent -eq 'D:\repos' -and $legacyLocalPilotLeaf -in @('LocalPilot', $legacyRustLeaf)) {
+        $cfg.LocalPilotRoot = 'D:\repos\rust\localpilot'
     }
 
     if (-not $cfg.ContainsKey("NoThinkProxyPort")) {
         $cfg.NoThinkProxyPort = 11435
     }
 
-    if (-not $cfg.ContainsKey("UnshackledRepoUrl")) {
-        $cfg.UnshackledRepoUrl = "https://github.com/David-c0degeek/Unshackled"
+    if (-not $cfg.ContainsKey("LocalPilotRepoUrl")) {
+        $cfg.LocalPilotRepoUrl = "https://github.com/David-c0degeek/LocalPilot"
     }
 
     # Validate the merged config. Throws a single consolidated error message

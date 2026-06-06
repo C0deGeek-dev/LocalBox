@@ -1,19 +1,19 @@
-# Changelog
+﻿# Changelog
 
 Past-tense record of shipped changes.
 
 ## 2026-06-03 - Serve gateway rename
 
-- **Remote launch target renamed to Serve.** The TUI action contract now uses `serve`, the command is `llmserve`, the password environment variable is `LOCAL_LLM_SERVE_PASS`, and the docs describe the gateway as serving any Anthropic-compatible agentic client, with Unshackled as one example.
+- **Remote launch target renamed to Serve.** The TUI action contract now uses `serve`, the command is `llmserve`, the password environment variable is `LOCAL_LLM_SERVE_PASS`, and the docs describe the gateway as serving any Anthropic-compatible agentic client, with LocalPilot as one example.
 
 ## 2026-05-24 — Terminal.Gui TUI and catalog polish
 
-- **`llmtui` documented as the explicit Terminal.Gui preview path.** README now covers publish/install, profile resolution, core navigation keys, and the BenchPilot handoff key.
+- **`llmtui` documented as the explicit Terminal.Gui preview path.** README now covers publish/install, profile resolution, core navigation keys, and the LocalBench handoff key.
 - **Spectre model catalog layout fixed.** The dashboard now uses explicit column widths and a compact quant list so the context column stays readable instead of wrapping to one or two characters.
 - **MTP catalog contexts expanded.** `q3535ba3bmtp` and `genesisv2` now expose an explicit `256k` context key while keeping default context at `128k`.
 - **Quant naming clarified.** README notes that labels like `mtp`, `mtp-apex`, and `mtp-q8kp` are model-local quant keys that map to concrete GGUF filenames.
-- **TUI packaging added.** `install.ps1 -InstallTui` publishes LocalBox.Tui and BenchPilot.Tui when available; `llm-update -InstallTui` refreshes installed TUI binaries.
-- **`bptui` wrapper added.** LocalBox now exposes a BenchPilot.Tui entrypoint alongside `llmtui`, and inline help documents both.
+- **TUI packaging added.** `install.ps1 -InstallTui` publishes LocalBox.Tui and LocalBench.Tui when available; `llm-update -InstallTui` refreshes installed TUI binaries.
+- **`lbtui` wrapper added.** LocalBox now exposes a LocalBench.Tui entrypoint alongside `llmtui`, and inline help documents both.
 
 ## 2026-05-24 — Dropped Ollama backend (breaking)
 
@@ -36,18 +36,18 @@ Past-tense record of shipped changes.
 
 - **`ostop` now leaves Ollama stopped.** It no longer restarts the Ollama app after teardown.
 - **`llm-stop`.** Added a hyphenated all-backend stop command alongside `llmstop` / `unloadall`.
-- **Codex launch target.** Model shortcuts and the wizard now support `-Codex` / `Codex` as a peer to Claude Code and Unshackled. Ollama launches use Codex's local Ollama provider; llama.cpp launches pass a custom OpenAI-compatible provider pointed at the selected `llama-server` `/v1` endpoint.
+- **Codex launch target.** Model shortcuts and the wizard now support `-Codex` / `Codex` as a peer to Claude Code and LocalPilot. Ollama launches use Codex's local Ollama provider; llama.cpp launches pass a custom OpenAI-compatible provider pointed at the selected `llama-server` `/v1` endpoint.
 - **Default launch recipes.** The wizard can save the selected model, target, backend, context, quant, strict/Q8 flags, llama.cpp mode, KV cache, and AutoBest profile into `DefaultLaunch` so `llmdefault` can replay the full recipe.
 - **Wizard default is native selectable.** `llm`/`llmmenu` now use an in-repo arrow-key picker by default. `llms` opens the Spectre wizard explicitly, and `$env:LOCAL_LLM_USE_SPECTRE=1` opts `llm` back into Spectre.
 - **Context menu noise reduced.** Removed visible `fast`, `deep`, and bare `128` context aliases from the catalog and new-model defaults. Use `32k`, `64k`, `128k`, and `256k`; legacy aliases still resolve for old commands and saved AutoBest profiles.
 
-## 2026-05-07 - Suite updater, Unshackled cleanup
+## 2026-05-07 - Suite updater, LocalPilot cleanup
 
 ### Added
 
-- **`llm-update` / `Update-LocalLLMSuite`.** Checks LocalBox, Unshackled, and BenchPilot when they are installed as git checkouts, fetches upstream state, and fast-forwards only when an update is available. Missing companions are skipped, current checkouts are reported as current, and diverged/no-upstream checkouts are left untouched with a reason.
+- **`llm-update` / `Update-LocalLLMSuite`.** Checks LocalBox, LocalPilot, and LocalBench when they are installed as git checkouts, fetches upstream state, and fast-forwards only when an update is available. Missing companions are skipped, current checkouts are reported as current, and diverged/no-upstream checkouts are left untouched with a reason.
 - **`LocalBoxRoot` setting.** `install.ps1` now records the source checkout used for installation so deployed copy-mode profiles can find the LocalBox repo for future self-updates.
-- **Unshackled-only command surface.** Removed the old shorthand and pre-rename aliases. Model launches now use the explicit `-Unshackled` switch, and the default shortcut is `llmdefaultunshackled`.
+- **LocalPilot-only command surface.** Removed the old shorthand and pre-rename aliases. Model launches now use the explicit `-LocalPilot` switch, and the default shortcut is `llmdefaultlocalpilot`.
 
 ## 2026-05-03 — Wizard back-step nav, full-quant backfill, install fix
 
@@ -97,30 +97,30 @@ VRAM auto-detection was the next cliff: every recommendation in the catalog impl
 
 The catalog gained one realistic 256k coder option (`qcoder30 -Ctx 256 -Quant iq4xs`) and one aspirational one (`qcodernext`) so the "uncensored 256k on a 4090" question has a documented answer instead of trial-and-error.
 
-## 2026-04-30 — Per-machine settings + auto-install Unshackled
+## 2026-04-30 — Per-machine settings + auto-install LocalPilot
 
 ### Added
 
-- **`~/.local-llm/settings.json`** — per-machine overlay for the catalog. Top-level scalars (`UnshackledRoot`, `OllamaAppPath`, `Default`, `KeepAlive`, `RequireAdvertisedTools`, `NoThinkProxyPort`, `LocalModelTools`, `UnshackledRepoUrl`, etc.) load from `llm-models.json` first, then any matching keys in `settings.json` override. `Models` and `CommandAliases` are catalog-only and protected from override.
+- **`~/.local-llm/settings.json`** — per-machine overlay for the catalog. Top-level scalars (`LocalPilotRoot`, `OllamaAppPath`, `Default`, `KeepAlive`, `RequireAdvertisedTools`, `NoThinkProxyPort`, `LocalModelTools`, `LocalPilotRepoUrl`, etc.) load from `llm-models.json` first, then any matching keys in `settings.json` override. `Models` and `CommandAliases` are catalog-only and protected from override.
 - **`Set-LocalLLMSetting <Key> <Value>`** — writes to `settings.json` and reloads. Pass `$null`/`""` to remove a key. Refuses `Models`/`CommandAliases`.
-- **`UnshackledRepoUrl`** config field, defaulting to `https://github.com/David-c0degeek/unshackled`.
-- **`Ensure-UnshackledInstalled`** — called by `Invoke-UnshackledCli` before doing anything. If the configured `UnshackledRoot` doesn't contain `src/entrypoints/cli.tsx`, it prompts `Clone <url>? [y/N]` and runs `git clone` on confirmation. Aborts with a clear instruction otherwise.
+- **`LocalPilotRepoUrl`** config field, defaulting to `https://github.com/David-c0degeek/LocalPilot`.
+- **`Ensure-LocalPilotInstalled`** — called by `Invoke-LocalPilotCli` before doing anything. If the configured `LocalPilotRoot` doesn't contain `src/entrypoints/cli.tsx`, it prompts `Clone <url>? [y/N]` and runs `git clone` on confirmation. Aborts with a clear instruction otherwise.
 - `settings.json` added to `.gitignore` so per-machine config never lands in the repo.
 - `install.ps1` prints a tip pointing at `Set-LocalLLMSetting` for fresh-machine setup.
 
 ### Why
 
-Cloning the public repo onto a different machine should not require editing `llm-models.json` to fix `UnshackledRoot` (and risking merge conflicts with future pulls). Unshackled launches should do the obvious thing on a fresh machine instead of failing because no checkout is around.
+Cloning the public repo onto a different machine should not require editing `llm-models.json` to fix `LocalPilotRoot` (and risking merge conflicts with future pulls). LocalPilot launches should do the obvious thing on a fresh machine instead of failing because no checkout is around.
 
-## 2026-04-30 — Unshackled rename
+## 2026-04-30 — LocalPilot rename
 
-The external harness fork was renamed to [Unshackled](https://github.com/David-c0degeek/unshackled). Propagated through this project:
+The external harness fork was renamed to [LocalPilot](https://github.com/David-c0degeek/LocalPilot). Propagated through this project:
 
-- JSON config field renamed to `UnshackledRoot`.
-- Internal CLI wrapper renamed to `Invoke-UnshackledCli`.
-- Switch parameter renamed to `-Unshackled` on `Start-ClaudeWithOllamaModel`, `Invoke-ModelShortcut`, and the per-model shortcut functions.
+- JSON config field renamed to `LocalPilotRoot`.
+- Internal CLI wrapper renamed to `Invoke-LocalPilotCli`.
+- Switch parameter renamed to `-LocalPilot` on `Start-ClaudeWithOllamaModel`, `Invoke-ModelShortcut`, and the per-model shortcut functions.
 - User-visible labels updated: launcher banner, wizard action label, install diagnostics, README, quick reference (`llmdocs`).
-- Existing local folder paths were not renamed and still work as the configured `UnshackledRoot`.
+- Existing local folder paths were not renamed and still work as the configured `LocalPilotRoot`.
 
 ## 2026-04-29 — second-pass refactor
 
@@ -130,7 +130,7 @@ Reviewed the project, then ran a single-day refactor pass guided by an explicit 
 
 - **Persona pollution.** `LocalLLMProfile.ps1` had a hardcoded "You are Qwen, created by Alibaba Cloud" prepended to every model launch — wrong for Devstral and even somewhat wrong for the Qwen variants whose GGUF templates already self-identify. Removed the persona layer entirely; the system prompt now contains only universal tool-use rules, plus an opt-in deferred-tool-schema block (gated on `LimitTools`).
 - **`enforcer-claude.ps1` rewritten.** The wrapper used to hardcode `qcoder30` and bypass the no-think proxy by pointing at `localhost:11434`. Now it reads `Default` from `llm-models.json` (or `$env:ENFORCER_MODEL`), routes through the proxy on `11435`, self-starts the proxy if needed, and sets the same thinking/caching/attribution env stack as the main launcher.
-- **Legacy harness stub deleted.** It was a one-liner that called the old harness wrapper with no args and ignored everything. The flag-based Unshackled launch path covers it now.
+- **Legacy harness stub deleted.** It was a one-liner that called the old harness wrapper with no args and ignored everything. The flag-based LocalPilot launch path covers it now.
 - **Tool-support detection rewritten.** `Test-OllamaModelSupportsTools` used to grep `ollama show` text for the literal word "tools" — which could match unrelated lines. Now POSTs to `/api/show` and checks the structured `capabilities` array. Falls back to the regex if the API is unreachable.
 - **Devstral parser confirmed correct.** `Parser: "none"` was the right call (its GGUF self-templates with persona, `[SYSTEM_PROMPT]`/`[TOOL_CALLS]` tags, and `capabilities=[completion,vision,tools]`). Documented inline via a `ParserNote` field.
 - **`init -Stale` parameter shadow bug.** `Initialize-LocalLLM` declared `[switch]$Stale`; the body did `$stale = @(Get-StaleModelAliases)`. PowerShell variables are case-insensitive, so the assignment tried to coerce an array into a `SwitchParameter` and failed silently, leaving `$stale` as the boolean `$true`. Renamed the local to `$staleEntries`.
@@ -140,7 +140,7 @@ Reviewed the project, then ran a single-day refactor pass guided by an explicit 
 - **Per-model `Tools` allowlist.** `Start-ClaudeWithOllamaModel` now takes `-Tools`; `Invoke-ModelShortcut` reads the optional `Tools` field from the model def, falling back to the global `LocalModelTools`. No models populated yet — capability only.
 - **Auto-generated alias prefixes.** Added `ShortName` field per model. `Register-ModelShortcuts` walked `ShortName × Contexts × actions` and registered PowerShell aliases. Pruned the 30 hand-maintained `CommandAliases` entries to `{}`.
 - **Parser-version stamping.** `New-OllamaModelFromSource` now writes a sha256-hash sidecar at `<profile-root>\parser-versions\<aliasname>.txt`. `Test-ModelAliasFresh`, `Get-StaleModelAliases`, `init -Stale`, and the `info` dashboard surface stale aliases (parser config drifted since build).
-- **Default model.** Added `"Default"` field at the top of `llm-models.json`. `Get-DefaultModelKey` reads it (with a recommended-tier fallback). New shortcuts: `llmdefault`, an Unshackled default shortcut, and `llmdefaultchat`. Used by the enforcer.
+- **Default model.** Added `"Default"` field at the top of `llm-models.json`. `Get-DefaultModelKey` reads it (with a recommended-tier fallback). New shortcuts: `llmdefault`, an LocalPilot default shortcut, and `llmdefaultchat`. Used by the enforcer.
 - **`ThinkingPolicy` per model.** Either `strip` (default) or `keep`. `keep` mode bypasses the no-think proxy, points `ANTHROPIC_BASE_URL` at Ollama directly, and skips the thinking-disable env vars. Set on `q36opus47abl`. Launcher banner shows the active mode.
 - **Configurable `OLLAMA_KEEP_ALIVE`.** Top-level `KeepAlive` field; `Set-OllamaRuntimeEnv` reads it (defaults to `"-1"`).
 - **`Wait-Ollama` resilience.** Deadline bumped 20s → 60s. After 5s of waiting, prints `Waiting for Ollama` and adds a `.` every 2s.
@@ -149,7 +149,7 @@ Reviewed the project, then ran a single-day refactor pass guided by an explicit 
 
 ### Architectural changes
 
-- **Flag-based shortcut scheme (Option C).** Replaced ~135 multi-suffix functions with 9 model functions: `dev`, `qcoder`, `q36`, `q36hau`, `q36p`, `q36h`, `q27`, `q27hau`, `qop`. Each takes `-Ctx`, `-Unshackled`, `-Chat`, `-Q8`, and (where applicable) `-Quant`. Introduced `Get-ModelShortcutName` and `Unregister-AllModelShortcuts`; `Register-ModelShortcuts` is now idempotent.
+- **Flag-based shortcut scheme (Option C).** Replaced ~135 multi-suffix functions with 9 model functions: `dev`, `qcoder`, `q36`, `q36hau`, `q36p`, `q36h`, `q27`, `q27hau`, `qop`. Each takes `-Ctx`, `-LocalPilot`, `-Chat`, `-Q8`, and (where applicable) `-Quant`. Introduced `Get-ModelShortcutName` and `Unregister-AllModelShortcuts`; `Register-ModelShortcuts` is now idempotent.
 
 ### Deferred
 

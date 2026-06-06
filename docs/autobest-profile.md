@@ -1,4 +1,4 @@
-# LocalBox AutoBest Profile Contract
+﻿# LocalBox AutoBest Profile Contract
 
 `Start-ClaudeWithLlamaCppModel -AutoBest` loads saved launcher profiles from:
 
@@ -40,7 +40,7 @@ Entries must include an `overrides` object whose keys can be splatted into
 Tuner version 4 is the current launch-time profile generation. It invalidates
 older saved profiles and uses `coding_agent_e2e_tps` by default, so AutoBest
 prefers long-prefill, end-to-end latency over decode-only generation TPS.
-Expanded BenchPilot entries can be saved as `pure` or `balanced`; entries
+Expanded LocalBench entries can be saved as `pure` or `balanced`; entries
 without a `profile` field are treated as `pure` for backwards compatibility.
 
 `Start-ClaudeWithLlamaCppModel -AutoBest` defaults to
@@ -52,7 +52,7 @@ profiles only.
 
 After a saved profile is applied and llama-server is healthy, LocalBox performs
 a small Anthropic-compatible `/v1/messages` launch smoke request before handing
-the session to Claude or Unshackled. The smoke includes the real launch system
+the session to Claude or LocalPilot. The smoke includes the real launch system
 prompt and must produce visible response text; output inside `<think>...</think>`
 is ignored for this check. For strip-mode models this first
 uses the no-think proxy, matching the normal launch route. llama.cpp strip-mode
@@ -64,7 +64,7 @@ AutoBest launch aborts so a high-throughput profile cannot silently become an
 unusable interactive session. The smoke request timeout defaults to 300 seconds
 and can be overridden with `LlamaCppSmokeTestTimeoutSec` in `settings.json`.
 
-Claude/Unshackled llama.cpp launches are single-session agent workloads, so the
+Claude/LocalPilot llama.cpp launches are single-session agent workloads, so the
 launcher also applies `--parallel 1` and `--cache-reuse 256` by default outside
 the saved tuner override set. This keeps title/smoke/sidebar requests from
 competing with the main agent turn across multiple slots and gives repeated
@@ -73,7 +73,7 @@ large prompts a stable cache path. Override these with
 `Set-LocalLLMSetting LlamaCppAgentCacheReuse <n>`; set either value to `0` to
 fall back to llama.cpp defaults for that flag.
 
-Local Claude/Unshackled launches also set
+Local Claude/LocalPilot launches also set
 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `LocalModelMaxOutputTokens` (default
 `4096`) before starting the client. This prevents local models from accepting
 the hosted Claude default of 32k output tokens for ordinary turns. Use
@@ -85,17 +85,17 @@ The wizard exposes saved selection profiles directly. When both `balanced` and
 addition to the `auto` preference (`balanced`, then `pure`). Immediate launch
 after a `-Profile both` tuning run asks which saved profile should be replayed.
 
-BenchPilot-compatible exports add provenance without changing the launch-time
+LocalBench-compatible exports add provenance without changing the launch-time
 reader:
 
-- `source = "benchpilot"`
-- `benchpilot_version`
-- `benchpilot_profile_path`
+- `source = "localbench"`
+- `localbench_version`
+- `localbench_profile_path`
 - `report_path`
 - `launcher_export_version`
 - `contextTokens`
 
-Expanded BenchPilot exports also store selection metadata and optional
+Expanded LocalBench exports also store selection metadata and optional
 diagnostics:
 
 - `profile`

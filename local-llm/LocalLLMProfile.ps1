@@ -1,6 +1,6 @@
-# =========================
+﻿# =========================
 # LocalBox profile entry point
-# llama.cpp + Claude Code + Unshackled
+# llama.cpp + Claude Code + LocalPilot
 # Windows / PowerShell only — does not work in WSL/bash.
 # =========================
 #

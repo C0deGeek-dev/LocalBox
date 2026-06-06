@@ -1,4 +1,4 @@
-# Pure argv builder for llama-server. No I/O, no process spawning — accept a
+﻿# Pure argv builder for llama-server. No I/O, no process spawning — accept a
 # resolved model def + GGUF path and emit a [string[]] ready to splat.
 # Validation lives here too: turbo3/turbo4 KV cache types only work with the
 # turboquant Docker image, so we fail early if a native run requests them.
@@ -153,7 +153,7 @@ function Build-LlamaServerArgs {
     # Agent launches are usually one interactive session, not a shared server.
     # Keeping a single slot improves cache locality and avoids side requests
     # competing with the main turn. Cache reuse lets llama-server shift cached
-    # prefixes across repeated Claude/Unshackled prompts.
+    # prefixes across repeated Claude/LocalPilot prompts.
     if ($PSBoundParameters.ContainsKey('Parallel') -and $Parallel -gt 0) {
         $argList.Add('--parallel')     | Out-Null
         $argList.Add([string]$Parallel) | Out-Null

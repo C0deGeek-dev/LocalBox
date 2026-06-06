@@ -1,4 +1,4 @@
-# Legacy benchmark history viewer. BenchPilot owns benchmarking now; this
+﻿# Legacy benchmark history viewer. LocalBench owns benchmarking now; this
 # module reads pre-existing bench-history.jsonl entries written by the
 # retired `ospeed` helper.
 
@@ -33,7 +33,7 @@ function Show-LLMBenchHistory {
     $entries = @(Read-LLMBenchHistoryEntries)
 
     if ($entries.Count -eq 0) {
-        Write-Host "No benchmark history. Run 'findbest' to record new entries via BenchPilot." -ForegroundColor DarkGray
+        Write-Host "No benchmark history. Run 'findbest' to record new entries via LocalBench." -ForegroundColor DarkGray
         return
     }
 

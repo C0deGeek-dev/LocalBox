@@ -1,4 +1,4 @@
-# Backend dispatcher. Single entry point for the wizard, per-model shortcuts,
+﻿# Backend dispatcher. Single entry point for the wizard, per-model shortcuts,
 # and entry-point commands so they all reach llama-server through one path.
 
 function Resolve-LlamaCppMode {
@@ -28,14 +28,14 @@ function Invoke-Backend {
         [string]$KvCacheK,
         [string]$KvCacheV,
         [switch]$LimitTools,
-        [switch]$Unshackled,
+        [switch]$LocalPilot,
         [switch]$Codex,
         [switch]$Strict,
         [switch]$UseVision,
         [switch]$AutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
-        [string[]]$ExtraUnshackledArgs,
+        [string[]]$ExtraLocalPilotArgs,
         [AllowEmptyString()][string]$SpecType,
         [int]$SpecDraftNMax,
         [switch]$DryRun
@@ -63,14 +63,14 @@ function Invoke-Backend {
         -KvCacheK $KvCacheK `
         -KvCacheV $KvCacheV `
         -LimitTools:$LimitTools `
-        -Unshackled:$Unshackled `
+        -LocalPilot:$LocalPilot `
         -Codex:$Codex `
         -Strict:$Strict `
         -UseVision:$UseVision `
         -AutoBest:$AutoBest `
         -AutoBestProfile $AutoBestProfile `
         -ExtraArgs $ExtraArgs `
-        -ExtraUnshackledArgs $ExtraUnshackledArgs `
+        -ExtraLocalPilotArgs $ExtraLocalPilotArgs `
         -SpecType $SpecType `
         -SpecDraftNMax $SpecDraftNMax `
         -DryRun:$DryRun

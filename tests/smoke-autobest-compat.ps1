@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Stop'
@@ -28,8 +28,8 @@ try {
     . $profilePath
 
     $entry = Get-BestLlamaCppConfig -Key 'q3635ba3b' -ContextKey '32k' -Mode 'native' -PromptLength 'short' -Quant 'iq2m' -VramGB 24
-    if (-not $entry) { throw 'Get-BestLlamaCppConfig did not load the BenchPilot fixture entry.' }
-    if ($entry.source -ne 'benchpilot') { throw "Expected source benchpilot; got '$($entry.source)'." }
+    if (-not $entry) { throw 'Get-BestLlamaCppConfig did not load the LocalBench fixture entry.' }
+    if ($entry.source -ne 'localbench') { throw "Expected source localbench; got '$($entry.source)'." }
 
     $def = Get-ModelDef -Key 'q3635ba3b'
     $argsParams = @{

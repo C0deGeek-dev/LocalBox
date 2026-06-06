@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Text;
@@ -21,13 +21,13 @@ var showAllModels = false;
 var models = await LoadModelsAsync(client, showAllModels);
 var visibleModels = new List<LocalBoxModel>(models);
 var status = await client.InvokeAsync<LocalBoxStatus>("Get-LocalBoxTuiStatus");
-var benchPilot = await client.InvokeAsync<BenchPilotStatus>("Get-LocalBoxTuiBenchPilotStatus");
+var localBench = await client.InvokeAsync<LocalBenchStatus>("Get-LocalBoxTuiLocalBenchStatus");
 string? pendingLaunchCommand = null;
 string? pendingShellCommand = null;
 
 if (options.Check)
 {
-    Console.WriteLine($"LocalBox.Tui backend OK: {models.Count} models, {status?.VramGB ?? 0} GB VRAM ({status?.VramSource ?? "unknown"}), BenchPilot: {(benchPilot?.Available == true ? "available" : "unavailable")}");
+    Console.WriteLine($"LocalBox.Tui backend OK: {models.Count} models, {status?.VramGB ?? 0} GB VRAM ({status?.VramSource ?? "unknown"}), LocalBench: {(localBench?.Available == true ? "available" : "unavailable")}");
     return 0;
 }
 
@@ -36,7 +36,7 @@ app.Init();
 
 using var window = new Window
 {
-    Title = WindowTitle(models.Count, visibleModels.Count, status, benchPilot, showAllModels),
+    Title = WindowTitle(models.Count, visibleModels.Count, status, localBench, showAllModels),
     X = 0,
     Y = 0,
     Width = Dim.Fill(),
@@ -58,7 +58,7 @@ var pickerStep = WizardStep.Context;
 var pickerIndex = 0;
 var pickerChoices = new List<PickerChoice>();
 var renderVersion = 0;
-var actions = new[] { "claude", "codex", "unshackled", "serve", "chat", "setup", "findbest", "resetbest" };
+var actions = new[] { "claude", "codex", "localpilot", "serve", "chat", "setup", "findbest", "resetbest" };
 var modes = new[] { "native", "turboquant", "mtpturbo" };
 var autoBestChoices = new[] { "off", "auto", "balanced", "pure" };
 var autoBestCache = new Dictionary<string, List<AutoBestProfile>>(StringComparer.OrdinalIgnoreCase);
@@ -134,7 +134,7 @@ void ApplyFilter()
         list.SelectedItem = Math.Clamp(list.SelectedItem ?? 0, 0, visibleModels.Count - 1);
     }
 
-    window.Title = WindowTitle(models.Count, visibleModels.Count, status, benchPilot, showAllModels);
+    window.Title = WindowTitle(models.Count, visibleModels.Count, status, localBench, showAllModels);
 }
 
 void SelectInitialModel()
@@ -218,7 +218,7 @@ string ActionLabel(string action) => action switch
 {
     "claude" => "Claude Code",
     "codex" => "Codex",
-    "unshackled" => "Unshackled",
+    "localpilot" => "LocalPilot",
     "serve" => "Serve",
     "chat" => "Ollama chat",
     "setup" => "Setup/download only",
@@ -321,7 +321,7 @@ void RenderModel(int? index)
     detail.Text = FormatModel(
         model,
         profiles,
-        benchPilot,
+        localBench,
         step,
         SelectedContextKey(),
         SelectedContextLabel(),
@@ -775,7 +775,7 @@ void HandleKey(dynamic key)
         {
             models = LoadModelsAsync(client, showAllModels).GetAwaiter().GetResult();
             status = client.InvokeAsync<LocalBoxStatus>("Get-LocalBoxTuiStatus").GetAwaiter().GetResult();
-            benchPilot = client.InvokeAsync<BenchPilotStatus>("Get-LocalBoxTuiBenchPilotStatus").GetAwaiter().GetResult();
+            localBench = client.InvokeAsync<LocalBenchStatus>("Get-LocalBoxTuiLocalBenchStatus").GetAwaiter().GetResult();
             ApplyFilter();
             RenderModel(list.SelectedItem);
         }
@@ -858,14 +858,14 @@ void HandleKey(dynamic key)
             return;
         }
 
-        if (benchPilot?.Available != true || string.IsNullOrWhiteSpace(benchPilot.Root))
+        if (localBench?.Available != true || string.IsNullOrWhiteSpace(localBench.Root))
         {
-            detail.Text = $"BenchPilot is unavailable: {benchPilot?.Reason ?? "not found"}";
+            detail.Text = $"LocalBench is unavailable: {localBench?.Reason ?? "not found"}";
             detail.ScrollTo(new Point(0, 0));
             return;
         }
 
-        var project = Path.Combine(benchPilot.Root, "tui", "BenchPilot.Tui", "BenchPilot.Tui.csproj");
+        var project = Path.Combine(localBench.Root, "tui", "LocalBench.Tui", "LocalBench.Tui.csproj");
         pendingShellCommand = $"dotnet run --project {Ps(project)} -- --key {Ps(model.Key)} --context {Ps(SelectedContextKey())} --mode {Ps(modes[selectedModeIndex])}";
         app.RequestStop();
         key.Handled = true;
@@ -925,7 +925,7 @@ if (!string.IsNullOrWhiteSpace(pendingLaunchCommand))
 }
 if (!string.IsNullOrWhiteSpace(pendingShellCommand))
 {
-    Console.WriteLine($"Opening BenchPilot: {pendingShellCommand}");
+    Console.WriteLine($"Opening LocalBench: {pendingShellCommand}");
     return await RunShellCommandAsync(pendingShellCommand);
 }
 return 0;
@@ -945,7 +945,7 @@ static async Task<List<LocalBoxModel>> LoadModelsAsync(PowerShellJsonClient clie
 static string FormatModel(
     LocalBoxModel model,
     List<AutoBestProfile> profiles,
-    BenchPilotStatus? benchPilot,
+    LocalBenchStatus? localBench,
     WizardStep step,
     string selectedContextKey,
     string selectedContextLabel,
@@ -970,7 +970,7 @@ static string FormatModel(
     sb.AppendLine($"Model strict: {model.Strict}");
     sb.AppendLine($"Limit tools : {model.LimitTools}");
     sb.AppendLine($"Vision      : {model.HasVision}");
-    sb.AppendLine($"BenchPilot  : {(benchPilot?.Available == true ? $"available {benchPilot.Version}" : benchPilot?.Reason ?? "unknown")}");
+    sb.AppendLine($"LocalBench  : {(localBench?.Available == true ? $"available {localBench.Version}" : localBench?.Reason ?? "unknown")}");
     sb.AppendLine();
 
     if (!string.IsNullOrWhiteSpace(model.Description))
@@ -1052,11 +1052,11 @@ static string FormatPicker(WizardStep step, List<PickerChoice> choices, int sele
     return sb.ToString();
 }
 
-static string WindowTitle(int totalCount, int visibleCount, LocalBoxStatus? status, BenchPilotStatus? benchPilot, bool all)
+static string WindowTitle(int totalCount, int visibleCount, LocalBoxStatus? status, LocalBenchStatus? localBench, bool all)
 {
     var modelScope = all ? "all" : "recommended";
-    var bp = benchPilot?.Available == true ? $"BenchPilot {benchPilot.Version}" : "BenchPilot unavailable";
-    return $"LocalBox.Tui - {visibleCount}/{totalCount} {modelScope} - {status?.VramGB ?? 0} GB VRAM ({status?.VramSource ?? "unknown"}) - {bp}";
+    var lb = localBench?.Available == true ? $"LocalBench {localBench.Version}" : "LocalBench unavailable";
+    return $"LocalBox.Tui - {visibleCount}/{totalCount} {modelScope} - {status?.VramGB ?? 0} GB VRAM ({status?.VramSource ?? "unknown"}) - {lb}";
 }
 
 static int InitialAutoBestIndex(string value)
@@ -1388,7 +1388,7 @@ sealed record LocalBoxStatus
     public string VramSource { get; init; } = "";
 }
 
-sealed record BenchPilotStatus
+sealed record LocalBenchStatus
 {
     public bool Available { get; init; }
     public string Reason { get; init; } = "";

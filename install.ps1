@@ -1,12 +1,12 @@
-# Install LocalBox to %USERPROFILE%\.local-llm and %USERPROFILE%\.localbox-proxy.
+﻿# Install LocalBox to %USERPROFILE%\.local-llm and %USERPROFILE%\.localbox-proxy.
 #
 # Modes:
 #   .\install.ps1                  copy files (default)
 #   .\install.ps1 -Symlink         symlink files (requires admin / developer mode)
 #   .\install.ps1 -SetupProfile    only ensure $PROFILE dot-sources the deployed entry point
-#   .\install.ps1 -InstallBenchPilot   clone BenchPilot into ~/.local-llm/tools/benchpilot if missing
-#   .\install.ps1 -InstallUnshackled   clone Unshackled into D:\repos\rust\unshackled if missing
-#   .\install.ps1 -InstallTui      publish LocalBox.Tui and BenchPilot.Tui when available
+#   .\install.ps1 -InstallLocalBench   clone LocalBench into ~/.local-llm/tools/localbench if missing
+#   .\install.ps1 -InstallLocalPilot   clone LocalPilot into D:\repos\rust\localpilot if missing
+#   .\install.ps1 -InstallTui      publish LocalBox.Tui and LocalBench.Tui when available
 #   .\install.ps1 -SkipToolPrompts     do not prompt for optional companion checkouts
 #   .\install.ps1 -DryRun          preview the actions without changing anything
 #
@@ -15,8 +15,8 @@
 param(
     [switch]$Symlink,
     [Alias("Profile")][switch]$SetupProfile,
-    [switch]$InstallBenchPilot,
-    [switch]$InstallUnshackled,
+    [switch]$InstallLocalBench,
+    [switch]$InstallLocalPilot,
     [switch]$InstallTui,
     [switch]$SkipToolPrompts,
     [switch]$DryRun
@@ -33,8 +33,8 @@ if (-not $RepoRoot) {
 $DeployedLocalLLM = Join-Path $HOME ".local-llm"
 $DeployedProxy = Join-Path $HOME ".localbox-proxy"
 $ManagedToolsRoot = Join-Path $DeployedLocalLLM "tools"
-$ManagedBenchPilotRoot = Join-Path $ManagedToolsRoot "benchpilot"
-$ManagedUnshackledRoot = "D:\repos\rust\unshackled"
+$ManagedLocalBenchRoot = Join-Path $ManagedToolsRoot "localbench"
+$ManagedLocalPilotRoot = "D:\repos\rust\localpilot"
 $ProfileDotSourceLine = ". `"$DeployedLocalLLM\LocalLLMProfile.ps1`""
 
 # -SetupProfile alone (no -Symlink, no -DryRun) means "just wire up $PROFILE, don't touch files".
@@ -219,15 +219,15 @@ function Get-InstallCatalog {
     return Read-JsonHashtable -Path $path
 }
 
-function Test-BenchPilotCheckout {
+function Test-LocalBenchCheckout {
     param([string]$Root)
 
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
     if (-not (Test-InstallPathRootExists -Path $Root)) { return $false }
-    return (Test-Path (Join-Path $Root "src\BenchPilot.psm1"))
+    return (Test-Path (Join-Path $Root "src\LocalBench.psm1"))
 }
 
-function Test-UnshackledCheckout {
+function Test-LocalPilotCheckout {
     param([string]$Root)
 
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
@@ -324,25 +324,25 @@ function Find-CheckoutByMarker {
     return $null
 }
 
-function Find-BenchPilotInstall {
+function Find-LocalBenchInstall {
     $candidates = @()
-    if ($env:BENCHPILOT_ROOT) { $candidates += $env:BENCHPILOT_ROOT }
+    if ($env:LOCALBENCH_ROOT) { $candidates += $env:LOCALBENCH_ROOT }
 
     $settings = Read-JsonHashtable -Path (Join-Path $DeployedLocalLLM "settings.json")
-    if ($settings.Contains("BenchPilotRoot")) { $candidates += [string]$settings.BenchPilotRoot }
+    if ($settings.Contains("LocalBenchRoot")) { $candidates += [string]$settings.LocalBenchRoot }
 
-    $module = Get-Module -ListAvailable -Name BenchPilot -ErrorAction SilentlyContinue | Select-Object -First 1
+    $module = Get-Module -ListAvailable -Name LocalBench -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($module) { return [pscustomobject]@{ Source = "module"; Root = $module.ModuleBase } }
 
-    $candidates += $ManagedBenchPilotRoot
+    $candidates += $ManagedLocalBenchRoot
 
     foreach ($candidate in $candidates) {
-        if (Test-BenchPilotCheckout -Root $candidate) {
+        if (Test-LocalBenchCheckout -Root $candidate) {
             return [pscustomobject]@{ Source = "checkout"; Root = $candidate }
         }
     }
 
-    $discovered = Find-CheckoutByMarker -MarkerRelativePath "src\BenchPilot.psm1" -Validator { param($root) Test-BenchPilotCheckout -Root $root }
+    $discovered = Find-CheckoutByMarker -MarkerRelativePath "src\LocalBench.psm1" -Validator { param($root) Test-LocalBenchCheckout -Root $root }
     if ($discovered) {
         return [pscustomobject]@{ Source = "discovered"; Root = $discovered }
     }
@@ -350,22 +350,22 @@ function Find-BenchPilotInstall {
     return $null
 }
 
-function Find-UnshackledInstall {
+function Find-LocalPilotInstall {
     $settings = Read-JsonHashtable -Path (Join-Path $DeployedLocalLLM "settings.json")
     $catalog = Get-InstallCatalog
     $candidates = @()
 
-    if ($settings.Contains("UnshackledRoot")) { $candidates += [string]$settings.UnshackledRoot }
-    if ($catalog.Contains("UnshackledRoot")) { $candidates += [string]$catalog.UnshackledRoot }
-    $candidates += $ManagedUnshackledRoot
+    if ($settings.Contains("LocalPilotRoot")) { $candidates += [string]$settings.LocalPilotRoot }
+    if ($catalog.Contains("LocalPilotRoot")) { $candidates += [string]$catalog.LocalPilotRoot }
+    $candidates += $ManagedLocalPilotRoot
 
     foreach ($candidate in $candidates) {
-        if (Test-UnshackledCheckout -Root $candidate) {
+        if (Test-LocalPilotCheckout -Root $candidate) {
             return [pscustomobject]@{ Source = "checkout"; Root = $candidate }
         }
     }
 
-    $discovered = Find-CheckoutByMarker -MarkerRelativePath "Cargo.toml" -Validator { param($root) Test-UnshackledCheckout -Root $root }
+    $discovered = Find-CheckoutByMarker -MarkerRelativePath "Cargo.toml" -Validator { param($root) Test-LocalPilotCheckout -Root $root }
     if ($discovered) {
         return [pscustomobject]@{ Source = "discovered"; Root = $discovered }
     }
@@ -481,35 +481,35 @@ function Ensure-TuiBinaries {
     $localBoxTarget = Join-Path $DeployedLocalLLM "bin"
     Publish-TuiBinary -Name "LocalBox.Tui" -PublisherScript $localBoxPublisher -Target $localBoxTarget
 
-    $benchPilot = Find-BenchPilotInstall
-    if ($benchPilot) {
-        $benchPilotPublisher = Join-Path $benchPilot.Root "tui\publish-tui.ps1"
-        $benchPilotTarget = Join-Path $ManagedBenchPilotRoot "bin"
-        Publish-TuiBinary -Name "BenchPilot.Tui" -PublisherScript $benchPilotPublisher -Target $benchPilotTarget
+    $localBench = Find-LocalBenchInstall
+    if ($localBench) {
+        $localBenchPublisher = Join-Path $localBench.Root "tui\publish-tui.ps1"
+        $localBenchTarget = Join-Path $ManagedLocalBenchRoot "bin"
+        Publish-TuiBinary -Name "LocalBench.Tui" -PublisherScript $localBenchPublisher -Target $localBenchTarget
     }
 }
 
 function Ensure-CompanionTools {
     $catalog = Get-InstallCatalog
-    $benchPilotRepo = if ($catalog.Contains("BenchPilotRepoUrl")) { [string]$catalog.BenchPilotRepoUrl } else { "https://github.com/David-c0degeek/benchpilot" }
-    $unshackledRepo = if ($catalog.Contains("UnshackledRepoUrl")) { [string]$catalog.UnshackledRepoUrl } else { "https://github.com/David-c0degeek/Unshackled" }
+    $localBenchRepo = if ($catalog.Contains("LocalBenchRepoUrl")) { [string]$catalog.LocalBenchRepoUrl } else { "https://github.com/David-c0degeek/LocalBench" }
+    $localpilotRepo = if ($catalog.Contains("LocalPilotRepoUrl")) { [string]$catalog.LocalPilotRepoUrl } else { "https://github.com/David-c0degeek/LocalPilot" }
 
-    $bp = Find-BenchPilotInstall
-    if ($bp) {
-        Write-Host "  ok       BenchPilot found ($($bp.Source)): $($bp.Root)" -ForegroundColor DarkGreen
+    $lb = Find-LocalBenchInstall
+    if ($lb) {
+        Write-Host "  ok       LocalBench found ($($lb.Source)): $($lb.Root)" -ForegroundColor DarkGreen
     }
-    elseif (Confirm-InstallTool -Name "BenchPilot" -RepoUrl $benchPilotRepo -Destination $ManagedBenchPilotRoot -Force:$InstallBenchPilot) {
-        Clone-Repo -Name "BenchPilot" -RepoUrl $benchPilotRepo -Destination $ManagedBenchPilotRoot
-        Set-InstallSetting -Key "BenchPilotRoot" -Value $ManagedBenchPilotRoot
+    elseif (Confirm-InstallTool -Name "LocalBench" -RepoUrl $localBenchRepo -Destination $ManagedLocalBenchRoot -Force:$InstallLocalBench) {
+        Clone-Repo -Name "LocalBench" -RepoUrl $localBenchRepo -Destination $ManagedLocalBenchRoot
+        Set-InstallSetting -Key "LocalBenchRoot" -Value $ManagedLocalBenchRoot
     }
 
-    $unshackled = Find-UnshackledInstall
-    if ($unshackled) {
-        Write-Host "  ok       Unshackled found ($($unshackled.Source)): $($unshackled.Root)" -ForegroundColor DarkGreen
+    $localpilot = Find-LocalPilotInstall
+    if ($localpilot) {
+        Write-Host "  ok       LocalPilot found ($($localpilot.Source)): $($localpilot.Root)" -ForegroundColor DarkGreen
     }
-    elseif (Confirm-InstallTool -Name "Unshackled" -RepoUrl $unshackledRepo -Destination $ManagedUnshackledRoot -Force:$InstallUnshackled) {
-        Clone-Repo -Name "Unshackled" -RepoUrl $unshackledRepo -Destination $ManagedUnshackledRoot
-        Set-InstallSetting -Key "UnshackledRoot" -Value $ManagedUnshackledRoot
+    elseif (Confirm-InstallTool -Name "LocalPilot" -RepoUrl $localpilotRepo -Destination $ManagedLocalPilotRoot -Force:$InstallLocalPilot) {
+        Clone-Repo -Name "LocalPilot" -RepoUrl $localpilotRepo -Destination $ManagedLocalPilotRoot
+        Set-InstallSetting -Key "LocalPilotRoot" -Value $ManagedLocalPilotRoot
     }
 }
 
@@ -526,12 +526,12 @@ function Show-Diagnostics {
         Write-Host "python   : MISSING — required for the no-think proxy" -ForegroundColor Yellow
     }
 
-    $unshackledCli = Get-Command unshackled -ErrorAction SilentlyContinue
-    if ($unshackledCli) {
-        Write-Host "unshackled-cli: ok  ($($unshackledCli.Source))" -ForegroundColor Green
+    $localpilotCli = Get-Command localpilot -ErrorAction SilentlyContinue
+    if ($localpilotCli) {
+        Write-Host "localpilot-cli: ok  ($($localpilotCli.Source))" -ForegroundColor Green
     }
     else {
-        Write-Host "unshackled-cli: missing (install with: cargo install unshackled-cli)" -ForegroundColor Yellow
+        Write-Host "localpilot-cli: missing (install with: cargo install localpilot-cli)" -ForegroundColor Yellow
     }
 
     $spectre = Get-Module -ListAvailable -Name PwshSpectreConsole -ErrorAction SilentlyContinue
@@ -544,12 +544,12 @@ function Show-Diagnostics {
         Write-Host "             Install-Module PwshSpectreConsole -Scope CurrentUser" -ForegroundColor DarkGray
     }
 
-    $benchPilot = Find-BenchPilotInstall
-    if ($benchPilot) {
-        Write-Host "benchpilot: ok  ($($benchPilot.Root))" -ForegroundColor Green
+    $localBench = Find-LocalBenchInstall
+    if ($localBench) {
+        Write-Host "localbench: ok  ($($localBench.Root))" -ForegroundColor Green
     }
     else {
-        Write-Host "benchpilot: missing — installer can clone https://github.com/David-c0degeek/benchpilot into ~/.local-llm/tools/benchpilot" -ForegroundColor Yellow
+        Write-Host "localbench: missing — installer can clone https://github.com/David-c0degeek/LocalBench into ~/.local-llm/tools/localbench" -ForegroundColor Yellow
     }
 
     $localBoxTui = Join-Path $DeployedLocalLLM "bin\LocalBox.Tui.exe"
@@ -560,20 +560,20 @@ function Show-Diagnostics {
         Write-Host "llmtui   : missing — run .\install.ps1 -InstallTui or pwsh .\tui\publish-tui.ps1 -Install" -ForegroundColor DarkGray
     }
 
-    $benchPilotTui = Join-Path $ManagedBenchPilotRoot "bin\BenchPilot.Tui.exe"
-    if (Test-Path -LiteralPath $benchPilotTui) {
-        Write-Host "bptui    : ok  ($benchPilotTui)" -ForegroundColor Green
+    $localBenchTui = Join-Path $ManagedLocalBenchRoot "bin\LocalBench.Tui.exe"
+    if (Test-Path -LiteralPath $localBenchTui) {
+        Write-Host "lbtui    : ok  ($localBenchTui)" -ForegroundColor Green
     }
     else {
-        Write-Host "bptui    : missing — publish BenchPilot.Tui from the BenchPilot checkout or run install with -InstallTui" -ForegroundColor DarkGray
+        Write-Host "lbtui    : missing — publish LocalBench.Tui from the LocalBench checkout or run install with -InstallTui" -ForegroundColor DarkGray
     }
 
-    $unshackled = Find-UnshackledInstall
-    if ($unshackled) {
-        Write-Host "unshackled: ok  ($($unshackled.Root))" -ForegroundColor Green
+    $localpilot = Find-LocalPilotInstall
+    if ($localpilot) {
+        Write-Host "localpilot: ok  ($($localpilot.Root))" -ForegroundColor Green
     }
     else {
-        Write-Host "unshackled: missing — installer can clone https://github.com/David-c0degeek/Unshackled into D:\repos\rust\unshackled" -ForegroundColor Yellow
+        Write-Host "localpilot: missing — installer can clone https://github.com/David-c0degeek/LocalPilot into D:\repos\rust\localpilot" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -629,7 +629,7 @@ if (-not $DryRun) {
     Write-Host ""
     Write-Host "Per-machine settings (paths, defaults) belong in ~/.local-llm/settings.json." -ForegroundColor DarkGray
     Write-Host "Use the helper instead of editing JSON:" -ForegroundColor DarkGray
-    Write-Host "  Set-LocalLLMSetting UnshackledRoot 'D:\repos\rust\unshackled'" -ForegroundColor DarkGray
-    Write-Host "  Set-LocalLLMSetting BenchPilotRoot '<path-to-benchpilot>'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting LocalPilotRoot 'D:\repos\rust\localpilot'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting LocalBenchRoot '<path-to-localbench>'" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting Default q36plus" -ForegroundColor DarkGray
 }

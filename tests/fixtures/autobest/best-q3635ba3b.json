@@ -1,18 +1,18 @@
-{
+﻿{
   "key": "q3635ba3b",
   "schema": 1,
-  "source": "benchpilot",
+  "source": "localbench",
   "schema_version": "localbox-autobest-v1",
-  "benchpilot_version": "0.2.0",
+  "localbench_version": "0.2.0",
   "launcher_export_version": 1,
   "entries": [
     {
-      "source": "benchpilot",
+      "source": "localbench",
       "schema_version": "localbox-autobest-v1",
-      "benchpilot_version": "0.2.0",
+      "localbench_version": "0.2.0",
       "launcher_export_version": 1,
-      "benchpilot_profile_path": "~/.local-llm/benchpilot/profiles/q3635ba3b-native-fast-short.json",
-      "report_path": "~/.local-llm/benchpilot/reports/q3635ba3b-native-fast-short.md",
+      "localbench_profile_path": "~/.local-llm/localbench/profiles/q3635ba3b-native-fast-short.json",
+      "report_path": "~/.local-llm/localbench/reports/q3635ba3b-native-fast-short.md",
       "quant": "iq2m",
       "contextKey": "fast",
       "mode": "native",

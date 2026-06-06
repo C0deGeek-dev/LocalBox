@@ -1,4 +1,4 @@
-# Interactive wizard. Two implementations: a native selectable console one and
+﻿# Interactive wizard. Two implementations: a native selectable console one and
 # a Spectre.Console one. Start-LLMWizard prefers Spectre when available; set
 # LOCAL_LLM_NO_SPECTRE=1 or use llmc to force the native picker.
 
@@ -191,7 +191,7 @@ function Select-LLMAction {
     $actions = @(
         [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
         [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+        [pscustomobject]@{ Key = "localpilot"; Label = "LocalPilot"; Description = "Local agent via LocalPilot" },
         [pscustomobject]@{ Key = "serve"; Label = "Serve"; Description = "Serve this model to any agentic client" },
         [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
         [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
@@ -219,7 +219,7 @@ function Select-LLMDefaultTarget {
     $targets = @(
         [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
         [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-        [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" }
+        [pscustomobject]@{ Key = "localpilot"; Label = "LocalPilot"; Description = "Local agent via LocalPilot" }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -476,7 +476,7 @@ function Read-LLMTuneRuns {
 
 function Read-LLMTuneSearchStrategy {
     $items = @(
-        [pscustomobject]@{ Key = 'auto';   Label = 'Auto';   Description = 'Let BenchPilot choose for the selected depth/profile' },
+        [pscustomobject]@{ Key = 'auto';   Label = 'Auto';   Description = 'Let LocalBench choose for the selected depth/profile' },
         [pscustomobject]@{ Key = 'beam';   Label = 'Beam';   Description = 'Keep multiple surviving candidates per phase' },
         [pscustomobject]@{ Key = 'greedy'; Label = 'Greedy'; Description = 'Follow the current best candidate only' }
     )
@@ -563,7 +563,7 @@ function Read-LLMTuneRunControls {
 
 function Read-LLMTuneOptimize {
     $items = @(
-        [pscustomobject]@{ Key = 'coding-agent'; Label = 'Coding agent'; Description = 'Long-prompt end-to-end latency for Claude Code/Unshackled' },
+        [pscustomobject]@{ Key = 'coding-agent'; Label = 'Coding agent'; Description = 'Long-prompt end-to-end latency for Claude Code/LocalPilot' },
         [pscustomobject]@{ Key = 'both';   Label = 'Balanced';   Description = 'Prompt/prefill and generation throughput' },
         [pscustomobject]@{ Key = 'prompt'; Label = 'Prefill';    Description = 'Prioritize first-token latency on large prompts' },
         [pscustomobject]@{ Key = 'gen';    Label = 'Generation'; Description = 'Prioritize tokens/sec after generation starts' }
@@ -613,8 +613,8 @@ function Read-LLMTuneNCpuMoeRange {
     )
 
     $topValues = @()
-    if (Get-Command Get-BenchPilotTopNCpuMoeValues -ErrorAction SilentlyContinue) {
-        $topValues = @(Get-BenchPilotTopNCpuMoeValues -Key $ModelKey -ContextKey $ContextKey -TopN 5)
+    if (Get-Command Get-LocalBenchTopNCpuMoeValues -ErrorAction SilentlyContinue) {
+        $topValues = @(Get-LocalBenchTopNCpuMoeValues -Key $ModelKey -ContextKey $ContextKey -TopN 5)
     }
 
     $parseRange = {
@@ -808,7 +808,7 @@ function Invoke-LlamaCppTunerWizardFlow {
 
     $reportResults = @($results | Where-Object { $_.report_path })
     if ($reportResults.Count -gt 0) {
-        $reportPrompt = if ($reportResults.Count -eq 1) { "Open BenchPilot report?" } else { "Open BenchPilot reports?" }
+        $reportPrompt = if ($reportResults.Count -eq 1) { "Open LocalBench report?" } else { "Open LocalBench reports?" }
         $openReport = if ($UseSpectrePrompts) {
             Read-LLMYesNoSpectre -Message $reportPrompt -DefaultYes
         } else {
@@ -831,7 +831,7 @@ function Invoke-LlamaCppTunerWizardFlow {
     if ($saveAnswer) {
         foreach ($item in $results) {
             $itemProfile = if ($item.Profile) { [string]$item.Profile } else { 'pure' }
-            if ($item.source -eq 'benchpilot' -and (Get-Command Export-BenchPilotLauncherProfile -ErrorAction SilentlyContinue)) {
+            if ($item.source -eq 'localbench' -and (Get-Command Export-LocalBenchLauncherProfile -ErrorAction SilentlyContinue)) {
                 $saveParams = @{
                     Key               = $ModelKey
                     ContextKey        = $ContextKey
@@ -854,7 +854,7 @@ function Invoke-LlamaCppTunerWizardFlow {
                 if ($null -ne $item.Telemetry) { $saveParams.Telemetry = $item.Telemetry }
                 if ($null -ne $item.ScoreBreakdown) { $saveParams.ScoreBreakdown = $item.ScoreBreakdown }
 
-                $saved = Export-BenchPilotLauncherProfile @saveParams
+                $saved = Export-LocalBenchLauncherProfile @saveParams
             } else {
                 $saveParams = @{
                     Key            = $ModelKey
@@ -917,8 +917,8 @@ function Invoke-LlamaCppTunerWizardFlow {
             AutoBest        = $true
             AutoBestProfile = $launchProfile
         }
-        if ($launchAction -eq 'unshackled') {
-            $launchArgs.Unshackled = $true
+        if ($launchAction -eq 'localpilot') {
+            $launchArgs.LocalPilot = $true
         }
         if ($launchAction -eq 'codex') {
             $launchArgs.Codex = $true
@@ -1126,8 +1126,8 @@ function Invoke-LlamaCppBestResetWizardFlow {
         } else {
             Write-Host "$($result.Remaining) saved setting(s) remain in $($result.Path)" -ForegroundColor DarkGray
         }
-        if ($result.PSObject.Properties['RemovedBenchPilotProfiles'] -and @($result.RemovedBenchPilotProfiles).Count -gt 0) {
-            Write-Host "Removed $(@($result.RemovedBenchPilotProfiles).Count) BenchPilot native profile reference(s)." -ForegroundColor DarkGray
+        if ($result.PSObject.Properties['RemovedLocalBenchProfiles'] -and @($result.RemovedLocalBenchProfiles).Count -gt 0) {
+            Write-Host "Removed $(@($result.RemovedLocalBenchProfiles).Count) LocalBench native profile reference(s)." -ForegroundColor DarkGray
         }
     } else {
         Write-Host "No matching saved best settings found." -ForegroundColor DarkGray
@@ -1223,7 +1223,7 @@ function Select-LlamaCppPostTuneLaunchAction {
     $items = @(
         [pscustomobject]@{ Key = 'claude'; Label = 'Claude Code'; Description = 'Local model behind Claude Code' },
         [pscustomobject]@{ Key = 'codex'; Label = 'Codex'; Description = 'Local model behind OpenAI Codex' },
-        [pscustomobject]@{ Key = 'unshackled'; Label = 'Unshackled';   Description = 'Local agent via Unshackled' }
+        [pscustomobject]@{ Key = 'localpilot'; Label = 'LocalPilot';   Description = 'Local agent via LocalPilot' }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -1305,11 +1305,11 @@ function Invoke-LLMSelection {
                 -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Codex -DryRun:$DryRun
         }
 
-        "unshackled" {
+        "localpilot" {
             Invoke-Backend -Action launch-claude `
                 -Key $ModelKey -ContextKey $ContextKey `
                 -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
+                -LimitTools:([bool]$def.LimitTools) -LocalPilot -Strict:$Strict -UseVision:$UseVision -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
         }
 
         "serve" {
@@ -1467,7 +1467,7 @@ function Start-LLMWizardClassic {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("unshackled", "claude", "codex", "serve")) {
+                if ($action -in @("localpilot", "claude", "codex", "serve")) {
                     $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false
@@ -1642,7 +1642,7 @@ function Select-LLMActionSpectre {
     $labelMap = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "Unshackled    -  Local agent via Unshackled" = 'unshackled'
+        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "Serve       -  Serve this model to any agentic client" = 'serve'
         "Set llmdefault - Save this model/profile/target" = 'setdefault'
         "Find best settings - Auto-tune for this machine" = 'findbest'
@@ -1663,7 +1663,7 @@ function Select-LLMDefaultTargetSpectre {
     $labelMap = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "Unshackled    -  Local agent via Unshackled" = 'unshackled'
+        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "[[Back]]"                                      = '__back__'
     }
 
@@ -1708,7 +1708,7 @@ function Select-LlamaCppPostTuneLaunchActionSpectre {
     $choices = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "Unshackled    -  Local agent via Unshackled" = 'unshackled'
+        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "[[Cancel]]"                                    = '__cancel__'
     }
 
@@ -1911,7 +1911,7 @@ function Read-LLMTuneRunsSpectre {
 
 function Read-LLMTuneSearchStrategySpectre {
     $choices = [ordered]@{
-        'Auto   - let BenchPilot choose'              = 'auto'
+        'Auto   - let LocalBench choose'              = 'auto'
         'Beam   - keep multiple surviving candidates' = 'beam'
         'Greedy - follow the current best only'       = 'greedy'
         '[[Back]]'                                    = '__back__'
@@ -2005,8 +2005,8 @@ function Read-LLMTuneNCpuMoeRangeSpectre {
     }
 
     $topValues = @()
-    if (Get-Command Get-BenchPilotTopNCpuMoeValues -ErrorAction SilentlyContinue) {
-        $topValues = @(Get-BenchPilotTopNCpuMoeValues -Key $ModelKey -ContextKey $ContextKey -TopN 5)
+    if (Get-Command Get-LocalBenchTopNCpuMoeValues -ErrorAction SilentlyContinue) {
+        $topValues = @(Get-LocalBenchTopNCpuMoeValues -Key $ModelKey -ContextKey $ContextKey -TopN 5)
     }
 
     $choices = [ordered]@{}
@@ -2345,7 +2345,7 @@ function Start-LLMWizardSpectre {
                     $saveAsDefault = $false
                 }
 
-                if ($action -in @("unshackled", "claude", "codex", "serve")) {
+                if ($action -in @("localpilot", "claude", "codex", "serve")) {
                     $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false

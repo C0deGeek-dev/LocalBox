@@ -14,7 +14,7 @@ local-llm/parser-versions/
 local-llm/bench-history.jsonl
 local-llm/logs/
 local-llm/tuner/
-local-llm/benchpilot/
+local-llm/localbench/
 local-llm/tools/
 local-llm/llama-cpp/
 local-llm/llama-cpp-turboquant/

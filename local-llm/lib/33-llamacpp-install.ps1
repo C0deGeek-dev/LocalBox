@@ -1,4 +1,4 @@
-# llama.cpp install / detection. Locates llama-server.exe, downloads a release
+﻿# llama.cpp install / detection. Locates llama-server.exe, downloads a release
 # from github.com/ggerganov/llama.cpp when missing, or pulls the turboquant
 # Docker image. All work is lazy — nothing happens at module load.
 
@@ -784,7 +784,7 @@ function Write-MtpTurboPrereqGuidance {
 function Test-LocalBoxAutoBuildEnabled {
     # When $env:LOCALBOX_AUTO_BUILD is 1/true/yes/on, allow mtpturbo prereq
     # install and the build itself to proceed without confirmation, even when
-    # the caller passed -NonInteractive. Useful for BenchPilot sweeps and
+    # the caller passed -NonInteractive. Useful for LocalBench sweeps and
     # other automated invocations that can't answer Read-Host prompts.
     if ([string]::IsNullOrWhiteSpace($env:LOCALBOX_AUTO_BUILD)) { return $false }
     return ($env:LOCALBOX_AUTO_BUILD.Trim().ToLowerInvariant() -in @('1','true','yes','on'))
@@ -1044,7 +1044,7 @@ function Ensure-LlamaServerMtpTurbo {
     # and toolchain present: prompt to auto-build. If toolchain missing: print
     # install guidance and throw. -NonInteractive skips both prompts and the
     # auto-build (returns a throw), UNLESS $env:LOCALBOX_AUTO_BUILD is set,
-    # in which case install + build proceed silently (intended for BenchPilot
+    # in which case install + build proceed silently (intended for LocalBench
     # sweeps and other automated callers).
     param([switch]$NonInteractive)
 

@@ -1,13 +1,13 @@
-# Per-model shortcut function generator. For every catalog entry we bind a
+﻿# Per-model shortcut function generator. For every catalog entry we bind a
 # global function (named after the model's Root or ShortName) that takes
-# -Ctx / -Unshackled / -Codex / -Strict / -Quant / -Mode flags and dispatches
+# -Ctx / -LocalPilot / -Codex / -Strict / -Quant / -Mode flags and dispatches
 # to the llama-server launcher.
 
 function Invoke-ModelShortcut {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [switch]$Unshackled,
+        [switch]$LocalPilot,
         [switch]$Codex,
         [switch]$Strict,
         [switch]$UseVision,
@@ -15,7 +15,7 @@ function Invoke-ModelShortcut {
         [string]$KvCacheK,
         [string]$KvCacheV,
         [switch]$AutoBest,
-        [string[]]$ExtraUnshackledArgs,
+        [string[]]$ExtraLocalPilotArgs,
         [switch]$DryRun
     )
 
@@ -27,7 +27,7 @@ function Invoke-ModelShortcut {
 
     $resolvedMode = Resolve-LlamaCppMode -Mode $Mode
 
-    Write-LaunchLog "Shortcut launch: key=$Key mode=$resolvedMode unshackled=$Unshackled codex=$Codex strict=$Strict" 'LAUNCH'
+    Write-LaunchLog "Shortcut launch: key=$Key mode=$resolvedMode localpilot=$LocalPilot codex=$Codex strict=$Strict" 'LAUNCH'
 
     Start-ClaudeWithLlamaCppModel `
         -Key $Key `
@@ -36,12 +36,12 @@ function Invoke-ModelShortcut {
         -KvCacheK $KvCacheK `
         -KvCacheV $KvCacheV `
         -LimitTools:([bool]$def.LimitTools) `
-        -Unshackled:$Unshackled `
+        -LocalPilot:$LocalPilot `
         -Codex:$Codex `
         -Strict:$Strict `
         -UseVision:$UseVision `
         -AutoBest:$AutoBest `
-        -ExtraUnshackledArgs $ExtraUnshackledArgs `
+        -ExtraLocalPilotArgs $ExtraLocalPilotArgs `
         -DryRun:$DryRun
 }
 
@@ -98,7 +98,7 @@ function Register-ModelShortcuts {
                 param(
                     [string]$Ctx = "",
                     [string]$Quant,
-                    [switch]$Unshackled,
+                    [switch]$LocalPilot,
                     [switch]$Codex,
                     [switch]$Strict,
                     [ValidateSet('native', 'turboquant', 'mtpturbo')][string]$Mode,
@@ -114,7 +114,7 @@ function Register-ModelShortcuts {
                     return
                 }
 
-                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -Unshackled:$Unshackled -Codex:$Codex -Strict:$Strict -Mode $Mode -KvCacheK $KvK -KvCacheV $KvV -AutoBest:$AutoBest -DryRun:$DryRun
+                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -LocalPilot:$LocalPilot -Codex:$Codex -Strict:$Strict -Mode $Mode -KvCacheK $KvK -KvCacheV $KvV -AutoBest:$AutoBest -DryRun:$DryRun
             }.GetNewClosure())
     }
 
@@ -230,7 +230,7 @@ function Save-LLMDefaultLaunch {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('claude','unshackled','codex')][string]$Action,
+        [Parameter(Mandatory = $true)][ValidateSet('claude','localpilot','codex')][string]$Action,
         [string]$LlamaCppMode,
         [string]$KvCacheK,
         [string]$KvCacheV,
@@ -351,13 +351,13 @@ function llmdefault {
     Invoke-LLMDefaultLaunch -Strict:$Strict -DryRun:$DryRun
 }
 
-function llmdefaultunshackled {
+function llmdefaultlocalpilot {
     [CmdletBinding()]
     param(
         [switch]$Strict,
         [Alias('WhatIf')][switch]$DryRun
     )
-    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Unshackled -Strict:$Strict -DryRun:$DryRun
+    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -LocalPilot -Strict:$Strict -DryRun:$DryRun
 }
 
 function llmdefaultcodex {

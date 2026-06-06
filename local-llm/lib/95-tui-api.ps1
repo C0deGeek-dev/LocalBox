@@ -1,4 +1,4 @@
-# Structured API for Terminal.Gui and other machine clients.
+﻿# Structured API for Terminal.Gui and other machine clients.
 # These functions intentionally return objects only; do not write formatted
 # console output here.
 
@@ -94,9 +94,9 @@ function Get-LocalBoxTuiStatus {
     param()
 
     $vram = Get-LocalLLMVRAMInfo
-    $benchPilot = $null
-    if (Get-Command Test-BenchPilotIntegrationAvailable -ErrorAction SilentlyContinue) {
-        $benchPilot = Test-BenchPilotIntegrationAvailable -Quiet
+    $localBench = $null
+    if (Get-Command Test-LocalBenchIntegrationAvailable -ErrorAction SilentlyContinue) {
+        $localBench = Test-LocalBenchIntegrationAvailable -Quiet
     }
 
     [pscustomobject]@{
@@ -107,7 +107,7 @@ function Get-LocalBoxTuiStatus {
         defaultModel = if ($script:Cfg.ContainsKey('Default')) { [string]$script:Cfg.Default } else { '' }
         vramGB = [int]$vram.GB
         vramSource = [string]$vram.Source
-        benchPilot = $benchPilot
+        localBench = $localBench
     }
 }
 
@@ -165,14 +165,14 @@ function Set-LocalBoxTuiSetting {
     }
 }
 
-function Get-LocalBoxTuiBenchPilotStatus {
+function Get-LocalBoxTuiLocalBenchStatus {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command Test-BenchPilotIntegrationAvailable -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command Test-LocalBenchIntegrationAvailable -ErrorAction SilentlyContinue)) {
         return [pscustomobject]@{
             available = $false
-            reason = 'BenchPilot bridge is not loaded.'
+            reason = 'LocalBench bridge is not loaded.'
             version = ''
             root = ''
             modulePath = ''
@@ -180,9 +180,9 @@ function Get-LocalBoxTuiBenchPilotStatus {
         }
     }
 
-    $status = Test-BenchPilotIntegrationAvailable -Quiet
+    $status = Test-LocalBenchIntegrationAvailable -Quiet
     $resolved = $null
-    try { $resolved = Resolve-BenchPilotRoot } catch { $resolved = $null }
+    try { $resolved = Resolve-LocalBenchRoot } catch { $resolved = $null }
 
     [pscustomobject]@{
         available = [bool]$status.Available
@@ -244,7 +244,7 @@ function Get-LocalBoxTuiLaunchOptions {
         actions = @(
             [pscustomobject]@{ key = 'claude'; label = 'Claude Code' }
             [pscustomobject]@{ key = 'codex'; label = 'Codex' }
-            [pscustomobject]@{ key = 'unshackled'; label = 'Unshackled' }
+            [pscustomobject]@{ key = 'localpilot'; label = 'LocalPilot' }
             [pscustomobject]@{ key = 'serve'; label = 'Serve' }
             [pscustomobject]@{ key = 'chat'; label = 'Ollama chat' }
             [pscustomobject]@{ key = 'setup'; label = 'Setup/download only' }
@@ -300,7 +300,7 @@ function New-LocalBoxTuiSelectionCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','localpilot','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,
@@ -434,7 +434,7 @@ function Invoke-LocalBoxTuiFindBest {
         return
     }
 
-    Write-Host "Running BenchPilot AutoBest tuning..." -ForegroundColor Cyan
+    Write-Host "Running LocalBench AutoBest tuning..." -ForegroundColor Cyan
     Write-Host "  model   : $Key" -ForegroundColor DarkGray
     Write-Host "  quant   : $quant" -ForegroundColor DarkGray
     Write-Host "  context : $contextLabel" -ForegroundColor DarkGray
@@ -459,7 +459,7 @@ function Invoke-LocalBoxTuiFindBest {
 
     $results = @(Find-BestLlamaCppConfig @params | Where-Object { $_ })
     if ($results.Count -eq 0) {
-        Write-Warning "BenchPilot did not return a saved tuning result."
+        Write-Warning "LocalBench did not return a saved tuning result."
         return
     }
 
@@ -530,7 +530,7 @@ function Invoke-LocalBoxTuiLaunch {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','localpilot','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,
@@ -567,7 +567,7 @@ function New-LocalBoxTuiLaunchPlan {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','localpilot','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,
@@ -626,7 +626,7 @@ function Invoke-LocalBoxTuiLaunchPreview {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','unshackled','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
+        [ValidateSet('claude','codex','localpilot','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
         [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
         [string]$Quant,
         [switch]$Strict,

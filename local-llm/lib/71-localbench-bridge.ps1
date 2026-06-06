@@ -1,7 +1,7 @@
-# BenchPilot discovery/import bridge. The launcher owns launch-time AutoBest
-# loading; BenchPilot owns benchmark execution and compatible profile export.
+﻿# LocalBench discovery/import bridge. The launcher owns launch-time AutoBest
+# loading; LocalBench owns benchmark execution and compatible profile export.
 
-function Resolve-BenchPilotModulePath {
+function Resolve-LocalBenchModulePath {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Root)
 
@@ -12,15 +12,15 @@ function Resolve-BenchPilotModulePath {
 
     if (Test-Path -LiteralPath $expanded -PathType Leaf -ErrorAction SilentlyContinue) {
         $leaf = Split-Path -Leaf $expanded
-        if ($leaf -in @('BenchPilot.psm1', 'BenchPilot.psd1')) {
+        if ($leaf -in @('LocalBench.psm1', 'LocalBench.psd1')) {
             return (Resolve-Path -LiteralPath $expanded).Path
         }
     }
 
     $candidates = @(
-        (Join-Path $expanded 'src\BenchPilot.psm1'),
-        (Join-Path $expanded 'BenchPilot.psd1'),
-        (Join-Path $expanded 'BenchPilot.psm1')
+        (Join-Path $expanded 'src\LocalBench.psm1'),
+        (Join-Path $expanded 'LocalBench.psd1'),
+        (Join-Path $expanded 'LocalBench.psm1')
     )
 
     foreach ($path in $candidates) {
@@ -32,42 +32,42 @@ function Resolve-BenchPilotModulePath {
     return $null
 }
 
-function Resolve-BenchPilotRoot {
+function Resolve-LocalBenchRoot {
     [CmdletBinding()]
     param()
 
     $candidates = New-Object System.Collections.Generic.List[object]
 
-    if (-not [string]::IsNullOrWhiteSpace($env:BENCHPILOT_ROOT)) {
-        $candidates.Add([pscustomobject]@{ Source = 'env:BENCHPILOT_ROOT'; Root = $env:BENCHPILOT_ROOT; ModulePath = $null }) | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALBENCH_ROOT)) {
+        $candidates.Add([pscustomobject]@{ Source = 'env:LOCALBENCH_ROOT'; Root = $env:LOCALBENCH_ROOT; ModulePath = $null }) | Out-Null
     }
 
-    if ($script:Cfg -and $script:Cfg.ContainsKey('BenchPilotRoot') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.BenchPilotRoot)) {
-        $candidates.Add([pscustomobject]@{ Source = 'setting:BenchPilotRoot'; Root = $script:Cfg.BenchPilotRoot; ModulePath = $null }) | Out-Null
+    if ($script:Cfg -and $script:Cfg.ContainsKey('LocalBenchRoot') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.LocalBenchRoot)) {
+        $candidates.Add([pscustomobject]@{ Source = 'setting:LocalBenchRoot'; Root = $script:Cfg.LocalBenchRoot; ModulePath = $null }) | Out-Null
     }
 
-    $module = Get-Module -ListAvailable -Name BenchPilot -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
+    $module = Get-Module -ListAvailable -Name LocalBench -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
     if ($module) {
-        $candidates.Add([pscustomobject]@{ Source = 'module:BenchPilot'; Root = $module.ModuleBase; ModulePath = $module.Path }) | Out-Null
+        $candidates.Add([pscustomobject]@{ Source = 'module:LocalBench'; Root = $module.ModuleBase; ModulePath = $module.Path }) | Out-Null
     }
 
-    $managed = Join-Path $HOME '.local-llm\tools\benchpilot'
+    $managed = Join-Path $HOME '.local-llm\tools\localbench'
     $candidates.Add([pscustomobject]@{ Source = 'managed'; Root = $managed; ModulePath = $null }) | Out-Null
 
     if (-not [string]::IsNullOrWhiteSpace($script:LLMProfileRoot)) {
         $launcherDir   = Split-Path -Parent $script:LLMProfileRoot
         $workspaceDir  = Split-Path -Parent $launcherDir
         if (-not [string]::IsNullOrWhiteSpace($workspaceDir)) {
-            $candidates.Add([pscustomobject]@{ Source = 'heuristic:workspace-sibling'; Root = (Join-Path $workspaceDir 'benchpilot'); ModulePath = $null }) | Out-Null
+            $candidates.Add([pscustomobject]@{ Source = 'heuristic:workspace-sibling'; Root = (Join-Path $workspaceDir 'localbench'); ModulePath = $null }) | Out-Null
         }
     }
 
     foreach ($folder in @('IdeaProjects', 'repos', 'projects', 'code', 'dev', 'src', 'git')) {
-        $candidates.Add([pscustomobject]@{ Source = "heuristic:$folder"; Root = (Join-Path $HOME "$folder\benchpilot"); ModulePath = $null }) | Out-Null
+        $candidates.Add([pscustomobject]@{ Source = "heuristic:$folder"; Root = (Join-Path $HOME "$folder\localbench"); ModulePath = $null }) | Out-Null
     }
 
     foreach ($candidate in $candidates) {
-        $modulePath = if ($candidate.ModulePath) { $candidate.ModulePath } else { Resolve-BenchPilotModulePath -Root $candidate.Root }
+        $modulePath = if ($candidate.ModulePath) { $candidate.ModulePath } else { Resolve-LocalBenchModulePath -Root $candidate.Root }
         if ($modulePath -and (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
             $root = if ($candidate.Root) { Expand-LocalLLMPath $candidate.Root } else { Split-Path -Parent $modulePath }
             return [pscustomobject]@{
@@ -81,32 +81,32 @@ function Resolve-BenchPilotRoot {
     return $null
 }
 
-function Import-BenchPilotModule {
+function Import-LocalBenchModule {
     [CmdletBinding()]
     param([string]$Root)
 
     $resolved = if ([string]::IsNullOrWhiteSpace($Root)) {
-        Resolve-BenchPilotRoot
+        Resolve-LocalBenchRoot
     } else {
-        $modulePath = Resolve-BenchPilotModulePath -Root $Root
-        if (-not $modulePath) { throw "BenchPilot module not found under $Root" }
+        $modulePath = Resolve-LocalBenchModulePath -Root $Root
+        if (-not $modulePath) { throw "LocalBench module not found under $Root" }
         [pscustomobject]@{ Source = 'explicit'; Root = (Expand-LocalLLMPath $Root); ModulePath = $modulePath }
     }
 
     if (-not $resolved) {
-        throw "BenchPilot was not found. Set BENCHPILOT_ROOT, setllm BenchPilotRoot <path>, install the BenchPilot module, or clone to ~/.local-llm/tools/benchpilot."
+        throw "LocalBench was not found. Set LOCALBENCH_ROOT, setllm LocalBenchRoot <path>, install the LocalBench module, or clone to ~/.local-llm/tools/localbench."
     }
 
     Import-Module $resolved.ModulePath -Force -ErrorAction Stop | Out-Null
     return $resolved
 }
 
-function Test-BenchPilotIntegrationAvailable {
+function Test-LocalBenchIntegrationAvailable {
     [CmdletBinding()]
     param([switch]$Quiet)
 
-    $minimum = if ($script:Cfg -and $script:Cfg.ContainsKey('BenchPilotMinimumVersion')) {
-        [string]$script:Cfg.BenchPilotMinimumVersion
+    $minimum = if ($script:Cfg -and $script:Cfg.ContainsKey('LocalBenchMinimumVersion')) {
+        [string]$script:Cfg.LocalBenchMinimumVersion
     } else {
         '0.1.0'
     }
@@ -125,18 +125,18 @@ function Test-BenchPilotIntegrationAvailable {
     }
 
     try {
-        $resolved = Import-BenchPilotModule
+        $resolved = Import-LocalBenchModule
         $result.Found = $true
         $result.Source = $resolved.Source
         $result.Root = $resolved.Root
         $result.ModulePath = $resolved.ModulePath
 
-        if (-not (Get-Command Get-BenchPilotVersion -ErrorAction SilentlyContinue)) {
-            $result.Reason = 'BenchPilot module imported, but Get-BenchPilotVersion is missing.'
+        if (-not (Get-Command Get-LocalBenchVersion -ErrorAction SilentlyContinue)) {
+            $result.Reason = 'LocalBench module imported, but Get-LocalBenchVersion is missing.'
             return [pscustomobject]$result
         }
 
-        $version = Get-BenchPilotVersion
+        $version = Get-LocalBenchVersion
         $result.Version = [string]$version.version
         $result.ApiVersion = [int]$version.api_version
         $result.LauncherExportVersion = [int]$version.launcher_export_version
@@ -150,15 +150,15 @@ function Test-BenchPilotIntegrationAvailable {
         }
 
         if (-not $versionOk) {
-            $result.Reason = "BenchPilot $($result.Version) is below required $minimum."
+            $result.Reason = "LocalBench $($result.Version) is below required $minimum."
             return [pscustomobject]$result
         }
         if ($result.ApiVersion -lt 1) {
-            $result.Reason = "BenchPilot API version $($result.ApiVersion) is below required 1."
+            $result.Reason = "LocalBench API version $($result.ApiVersion) is below required 1."
             return [pscustomobject]$result
         }
         if ($result.LauncherExportVersion -lt 1) {
-            $result.Reason = "BenchPilot launcher export version $($result.LauncherExportVersion) is below required 1."
+            $result.Reason = "LocalBench launcher export version $($result.LauncherExportVersion) is below required 1."
             return [pscustomobject]$result
         }
 
@@ -169,13 +169,13 @@ function Test-BenchPilotIntegrationAvailable {
     catch {
         $result.Reason = $_.Exception.Message
         if (-not $Quiet) {
-            Write-LaunchLog "BenchPilot check failed: $($result.Reason)" 'WARN'
+            Write-LaunchLog "LocalBench check failed: $($result.Reason)" 'WARN'
         }
         return [pscustomobject]$result
     }
 }
 
-function Invoke-BenchPilotLauncherFindBest {
+function Invoke-LocalBenchLauncherFindBest {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -202,9 +202,9 @@ function Invoke-BenchPilotLauncherFindBest {
         [switch]$NoSave
     )
 
-    Import-BenchPilotModule | Out-Null
-    if (-not (Get-Command Find-BenchPilotBestConfig -ErrorAction SilentlyContinue)) {
-        throw "BenchPilot is available, but Find-BenchPilotBestConfig is not implemented by this version."
+    Import-LocalBenchModule | Out-Null
+    if (-not (Get-Command Find-LocalBenchBestConfig -ErrorAction SilentlyContinue)) {
+        throw "LocalBench is available, but Find-LocalBenchBestConfig is not implemented by this version."
     }
 
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
@@ -245,23 +245,23 @@ function Invoke-BenchPilotLauncherFindBest {
     if ($NoTrialCache) { $params.NoTrialCache = $true }
     if ($ClearTrialCache) { $params.ClearTrialCache = $true }
 
-    Find-BenchPilotBestConfig @params
+    Find-LocalBenchBestConfig @params
 }
 
-function Get-BenchPilotTopNCpuMoeValues {
+function Get-LocalBenchTopNCpuMoeValues {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
         [int]$TopN = 5
     )
-    try { Import-BenchPilotModule | Out-Null } catch { return @() }
+    try { Import-LocalBenchModule | Out-Null } catch { return @() }
     if (Get-Command Get-LlamaCppTopNCpuMoeFromCandidates -ErrorAction SilentlyContinue) {
         return @(Get-LlamaCppTopNCpuMoeFromCandidates -Key $Key -ContextKey $ContextKey -TopN $TopN)
     }
     return @()
 }
 
-function Get-BenchPilotLauncherBestConfig {
+function Get-LocalBenchLauncherBestConfig {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -272,15 +272,15 @@ function Get-BenchPilotLauncherBestConfig {
         [ValidateSet('pure','balanced')][string]$Profile = 'pure'
     )
 
-    Import-BenchPilotModule | Out-Null
-    if (-not (Get-Command Get-BenchPilotBestConfig -ErrorAction SilentlyContinue)) {
-        throw "BenchPilot is available, but Get-BenchPilotBestConfig is not implemented by this version."
+    Import-LocalBenchModule | Out-Null
+    if (-not (Get-Command Get-LocalBenchBestConfig -ErrorAction SilentlyContinue)) {
+        throw "LocalBench is available, but Get-LocalBenchBestConfig is not implemented by this version."
     }
 
-    Get-BenchPilotBestConfig -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
+    Get-LocalBenchBestConfig -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
 }
 
-function Get-BenchPilotLauncherBestConfigCandidates {
+function Get-LocalBenchLauncherBestConfigCandidates {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -291,113 +291,113 @@ function Get-BenchPilotLauncherBestConfigCandidates {
         [ValidateSet('pure','balanced')][string]$Profile = 'pure'
     )
 
-    Import-BenchPilotModule | Out-Null
-    if (-not (Get-Command Get-BenchPilotBestConfigCandidates -ErrorAction SilentlyContinue)) {
-        throw "BenchPilot is available, but Get-BenchPilotBestConfigCandidates is not implemented by this version."
+    Import-LocalBenchModule | Out-Null
+    if (-not (Get-Command Get-LocalBenchBestConfigCandidates -ErrorAction SilentlyContinue)) {
+        throw "LocalBench is available, but Get-LocalBenchBestConfigCandidates is not implemented by this version."
     }
 
-    Get-BenchPilotBestConfigCandidates -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
+    Get-LocalBenchBestConfigCandidates -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
 }
 
-function Show-BenchPilotLauncherHistory {
+function Show-LocalBenchLauncherHistory {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [int]$Last = 50
     )
 
-    Import-BenchPilotModule | Out-Null
-    if (-not (Get-Command Show-BenchPilotHistory -ErrorAction SilentlyContinue)) {
-        throw "BenchPilot is available, but Show-BenchPilotHistory is not implemented by this version."
+    Import-LocalBenchModule | Out-Null
+    if (-not (Get-Command Show-LocalBenchHistory -ErrorAction SilentlyContinue)) {
+        throw "LocalBench is available, but Show-LocalBenchHistory is not implemented by this version."
     }
 
-    Show-BenchPilotHistory -Target LocalBox -Runtime llamacpp -Key $Key -Last $Last
+    Show-LocalBenchHistory -Target LocalBox -Runtime llamacpp -Key $Key -Last $Last
 }
 
-function Show-BenchPilotLauncherStatus {
+function Show-LocalBenchLauncherStatus {
     [CmdletBinding()]
     param([switch]$Quiet)
 
-    $status = Test-BenchPilotIntegrationAvailable -Quiet
+    $status = Test-LocalBenchIntegrationAvailable -Quiet
 
     if (-not $Quiet) {
-        Write-Section "BenchPilot"
+        Write-Section "LocalBench"
     }
 
     if ($status.Available) {
-        Write-Host "BenchPilot : available $($status.Version) ($($status.Source))" -ForegroundColor Green
+        Write-Host "LocalBench : available $($status.Version) ($($status.Source))" -ForegroundColor Green
         Write-Host "Root       : $($status.Root)" -ForegroundColor DarkGray
         Write-Host "API/export : $($status.ApiVersion) / $($status.LauncherExportVersion)" -ForegroundColor DarkGray
         return $status
     }
 
     if ($status.Found) {
-        Write-Host "BenchPilot : found but unavailable" -ForegroundColor Yellow
+        Write-Host "LocalBench : found but unavailable" -ForegroundColor Yellow
         Write-Host "Reason     : $($status.Reason)" -ForegroundColor DarkYellow
         Write-Host "Root       : $($status.Root)" -ForegroundColor DarkGray
     }
     else {
-        Write-Host "BenchPilot : not found" -ForegroundColor DarkGray
-        Write-Host "Tuning     : unavailable until BenchPilot is installed" -ForegroundColor DarkGray
-        Write-Host "Configure  : setllm BenchPilotRoot <path-to-benchpilot>" -ForegroundColor DarkGray
+        Write-Host "LocalBench : not found" -ForegroundColor DarkGray
+        Write-Host "Tuning     : unavailable until LocalBench is installed" -ForegroundColor DarkGray
+        Write-Host "Configure  : setllm LocalBenchRoot <path-to-localbench>" -ForegroundColor DarkGray
     }
 
     return $status
 }
 
-function bpstatus {
+function lbstatus {
     [CmdletBinding()]
     param()
 
-    Show-BenchPilotLauncherStatus | Out-Null
+    Show-LocalBenchLauncherStatus | Out-Null
 }
 
-function Install-BenchPilot {
+function Install-LocalBench {
     [CmdletBinding()]
     param(
-        [string]$Destination = (Join-Path $HOME '.local-llm\tools\benchpilot'),
+        [string]$Destination = (Join-Path $HOME '.local-llm\tools\localbench'),
         [switch]$Force
     )
 
-    if ((Resolve-BenchPilotModulePath -Root $Destination) -and -not $Force) {
-        Write-Host "BenchPilot already exists: $Destination" -ForegroundColor Green
-        Set-LocalLLMSetting BenchPilotRoot $Destination
+    if ((Resolve-LocalBenchModulePath -Root $Destination) -and -not $Force) {
+        Write-Host "LocalBench already exists: $Destination" -ForegroundColor Green
+        Set-LocalLLMSetting LocalBenchRoot $Destination
         return $Destination
     }
 
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw "git is not on PATH; cannot clone BenchPilot."
+        throw "git is not on PATH; cannot clone LocalBench."
     }
 
-    $repoUrl = if ($script:Cfg.ContainsKey('BenchPilotRepoUrl') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.BenchPilotRepoUrl)) {
-        [string]$script:Cfg.BenchPilotRepoUrl
+    $repoUrl = if ($script:Cfg.ContainsKey('LocalBenchRepoUrl') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.LocalBenchRepoUrl)) {
+        [string]$script:Cfg.LocalBenchRepoUrl
     } else {
-        'https://github.com/David-c0degeek/benchpilot'
+        'https://github.com/David-c0degeek/LocalBench'
     }
 
     Ensure-Directory (Split-Path -Parent $Destination)
     if (Test-Path -LiteralPath $Destination) {
-        throw "Destination already exists: $Destination. Use Update-BenchPilot, or remove it and retry."
+        throw "Destination already exists: $Destination. Use Update-LocalBench, or remove it and retry."
     }
 
     & git clone $repoUrl $Destination
     if ($LASTEXITCODE -ne 0) { throw "git clone failed for $repoUrl" }
 
-    Set-LocalLLMSetting BenchPilotRoot $Destination
+    Set-LocalLLMSetting LocalBenchRoot $Destination
     return $Destination
 }
 
-function Update-BenchPilot {
+function Update-LocalBench {
     [CmdletBinding()]
     param()
 
-    $resolved = Resolve-BenchPilotRoot
+    $resolved = Resolve-LocalBenchRoot
     if (-not $resolved) {
-        throw "BenchPilot is not installed. Run Install-BenchPilot first."
+        throw "LocalBench is not installed. Run Install-LocalBench first."
     }
 
     $root = $resolved.Root
-    $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'BenchPilot' -Root $root
+    $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'LocalBench' -Root $root
     if ($result.Status -in @('failed', 'not-git', 'no-upstream', 'diverged')) {
         throw $result.Reason
     }

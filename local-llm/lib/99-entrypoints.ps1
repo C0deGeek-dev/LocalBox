@@ -1,4 +1,4 @@
-# Top-level command surface (one-liners that wrap into the wizard / reload).
+﻿# Top-level command surface (one-liners that wrap into the wizard / reload).
 
 function llm     { Start-LLMWizard @args }
 function llmmenu { Start-LLMWizard @args }
@@ -45,41 +45,41 @@ function llmtui  {
 
     throw "LocalBox.Tui was not found. Run from a repo checkout with dotnet available, or publish/install it with: pwsh .\tui\publish-tui.ps1 -Install"
 }
-function bptui {
+function lbtui {
     $candidateRoots = New-Object System.Collections.Generic.List[string]
-    if ($env:BENCHPILOT_ROOT) {
-        $candidateRoots.Add($env:BENCHPILOT_ROOT) | Out-Null
+    if ($env:LOCALBENCH_ROOT) {
+        $candidateRoots.Add($env:LOCALBENCH_ROOT) | Out-Null
     }
-    if ($script:Cfg -and $script:Cfg.ContainsKey('BenchPilotRoot') -and -not [string]::IsNullOrWhiteSpace([string]$script:Cfg.BenchPilotRoot)) {
-        $candidateRoots.Add([string]$script:Cfg.BenchPilotRoot) | Out-Null
+    if ($script:Cfg -and $script:Cfg.ContainsKey('LocalBenchRoot') -and -not [string]::IsNullOrWhiteSpace([string]$script:Cfg.LocalBenchRoot)) {
+        $candidateRoots.Add([string]$script:Cfg.LocalBenchRoot) | Out-Null
     }
-    if (Get-Command Resolve-BenchPilotRoot -ErrorAction SilentlyContinue) {
-        $resolved = try { Resolve-BenchPilotRoot } catch { $null }
+    if (Get-Command Resolve-LocalBenchRoot -ErrorAction SilentlyContinue) {
+        $resolved = try { Resolve-LocalBenchRoot } catch { $null }
         if ($resolved -and $resolved.Root) {
             $candidateRoots.Add([string]$resolved.Root) | Out-Null
         }
     }
 
     $project = $null
-    $benchPilotRoot = $null
+    $localBenchRoot = $null
     foreach ($root in @($candidateRoots | Where-Object { $_ } | Select-Object -Unique)) {
-        $modulePath = Join-Path $root 'src\BenchPilot.psm1'
-        if (-not $benchPilotRoot -and (Test-Path -LiteralPath $modulePath)) {
-            $benchPilotRoot = $root
+        $modulePath = Join-Path $root 'src\LocalBench.psm1'
+        if (-not $localBenchRoot -and (Test-Path -LiteralPath $modulePath)) {
+            $localBenchRoot = $root
         }
 
-        $candidateProject = Join-Path $root 'tui\BenchPilot.Tui\BenchPilot.Tui.csproj'
+        $candidateProject = Join-Path $root 'tui\LocalBench.Tui\LocalBench.Tui.csproj'
         if (Test-Path -LiteralPath $candidateProject) {
             $project = $candidateProject
-            $benchPilotRoot = $root
+            $localBenchRoot = $root
             break
         }
     }
 
-    $exe = Join-Path $HOME '.local-llm\tools\benchpilot\bin\BenchPilot.Tui.exe'
+    $exe = Join-Path $HOME '.local-llm\tools\localbench\bin\LocalBench.Tui.exe'
     $tuiArgs = @()
-    if (-not [string]::IsNullOrWhiteSpace($benchPilotRoot)) {
-        $tuiArgs += @('--root', $benchPilotRoot)
+    if (-not [string]::IsNullOrWhiteSpace($localBenchRoot)) {
+        $tuiArgs += @('--root', $localBenchRoot)
     }
     $tuiArgs += $args
 
@@ -93,7 +93,7 @@ function bptui {
         return
     }
 
-    throw "BenchPilot.Tui was not found. Run from a BenchPilot repo checkout with dotnet available, or publish/install it with: pwsh .\tui\publish-tui.ps1 -Install"
+    throw "LocalBench.Tui was not found. Run from a LocalBench repo checkout with dotnet available, or publish/install it with: pwsh .\tui\publish-tui.ps1 -Install"
 }
 function llmserve { Start-LocalLLMServeGateway @args }
 function reloadllm { Reload-LocalLLMConfig }
@@ -104,7 +104,7 @@ function reloadllm { Reload-LocalLLMConfig }
 #   lstop = stop every llama-server.exe; no restart
 function lps    { Get-LlamaServerStatus }
 function lstop  { Stop-AllLlamaServers }
-function bp     { bpstatus }
+function lb     { lbstatus }
 
 # Frees all VRAM by stopping every LocalBox-managed llama-server.
 function unloadall { Unload-LocalLLM }

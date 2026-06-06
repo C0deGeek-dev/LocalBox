@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 no-think-proxy
 ==============
 HTTP proxy that sits in front of a local llama.cpp llama-server for use with
-Claude Code / Unshackled.
+Claude Code / LocalPilot.
 
 Two jobs:
 
@@ -13,7 +13,7 @@ Two jobs:
 2. Strip <think>...</think> blocks from incoming /v1/messages response text
    so reasoning models (Qwen3 reasoning variants, DeepSeek R1 merges, etc.)
    don't pollute the conversation or break consumers that JSON.parse the
-   response body (e.g. session-title generation in Unshackled).
+   response body (e.g. session-title generation in LocalPilot).
 
 Streaming (SSE) and non-streaming JSON are both handled. The think-stripper
 is stateful and tolerates <think> tags split across SSE chunks.
@@ -109,7 +109,7 @@ def _clear_auth_failures(ip):
 # Emitted in place of a text block that strips to nothing because the model's
 # entire output was a <think> block (often an unclosed one, when generation
 # stops on EOS/max_tokens mid-reasoning). Without this, the proxy forwards an
-# empty assistant turn, which downstream consumers (Unshackled) record as a
+# empty assistant turn, which downstream consumers (LocalPilot) record as a
 # blank response and can choke on. A short, non-reasoning marker keeps the turn
 # non-empty and parseable without leaking the stripped reasoning.
 EMPTY_AFTER_THINK_FALLBACK = "[no output]"

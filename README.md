@@ -1,11 +1,11 @@
-```
+﻿```
 ██╗      ██████╗  ██████╗ █████╗ ██╗     ██████╗  ██████╗ ██╗  ██╗
 ██║     ██╔═══██╗██╔════╝██╔══██╗██║     ██╔══██╗██╔═══██╗╚██╗██╔╝
 ██║     ██║   ██║██║     ███████║██║     ██████╔╝██║   ██║ ╚███╔╝
 ██║     ██║   ██║██║     ██╔══██║██║     ██╔══██╗██║   ██║ ██╔██╗
 ███████╗╚██████╔╝╚██████╗██║  ██║███████╗██████╔╝╚██████╔╝██╔╝ ██╗
 ╚══════╝ ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-  Put a local LLM behind the Claude Code / Unshackled harness
+  Put a local LLM behind the Claude Code / LocalPilot harness
 ```
 
 # LocalBox
@@ -19,7 +19,7 @@
 [![platform](https://img.shields.io/badge/platform-Windows%20PowerShell-007ec6?style=flat-square)](#install)
 
 A PowerShell-driven launcher that runs [Claude Code](https://claude.com/claude-code)
-or [Unshackled](https://github.com/David-c0degeek/Unshackled) against a
+or [LocalPilot](https://github.com/David-c0degeek/LocalPilot) against a
 **local model** served by [llama.cpp](https://github.com/ggerganov/llama.cpp)'s
 `llama-server`, with the right chat template, KV-cache type, sampling, system
 prompt, and tool allowlist for each model family.
@@ -35,16 +35,19 @@ prompt, and tool allowlist for each model family.
 
 ---
 
-## Related projects
+## LocalX Ecosystem
 
-- [LocalBox](https://github.com/David-c0degeek/LocalBox) is this launcher: it
-  runs local GGUF models through Claude Code, Codex, or Unshackled via
-  llama.cpp.
-- [BenchPilot](https://github.com/David-c0degeek/benchpilot) is the companion
-  optimizer: it benchmarks local models and exports recommended launcher
-  profiles.
-- [Unshackled](https://github.com/David-c0degeek/Unshackled) is the local
-  agent that the launcher can target with `-Unshackled`.
+- [LocalStack](https://github.com/David-c0degeek/LocalStack) is the umbrella
+  ecosystem for the LocalX tools.
+- [LocalBox](https://github.com/David-c0degeek/LocalBox) is this model runtime
+  and launcher: it runs local GGUF models through Claude Code, Codex, or
+  LocalPilot via llama.cpp.
+- [LocalMind](https://github.com/David-c0degeek/LocalMind) is the local-first
+  memory and RAG layer for coding-agent sessions.
+- [LocalBench](https://github.com/David-c0degeek/LocalBench) is the benchmarking
+  and evaluation companion that exports recommended launcher profiles.
+- [LocalPilot](https://github.com/David-c0degeek/LocalPilot) is the local CLI
+  coding agent that LocalBox can target with `-LocalPilot`.
 
 ---
 
@@ -73,20 +76,20 @@ That sounds simple. In practice it isn't:
   every quant with `[fits] / [tight] / [over]` against your actual card and
   *refuses* combinations that will OOM, telling you what to drop.
 - **Agent launches are single-session by default.** `llama-server` can serve
-  multiple slots, but Claude/Unshackled side requests compete with the main
+  multiple slots, but Claude/LocalPilot side requests compete with the main
   turn when auto-parallelism is left on. LocalBox launches agent sessions with
   `--parallel 1` and prompt-cache reuse by default so repeated large prompts
   stay local to one slot. Both values are configurable in `settings.json`.
 - **Three harnesses, one dispatch path.** Whether you launch Claude Code,
-  Unshackled, or Codex, the same env stack and proxy are set up through the
-  `-Unshackled` / `-Codex` switches on every model function.
+  LocalPilot, or Codex, the same env stack and proxy are set up through the
+  `-LocalPilot` / `-Codex` switches on every model function.
 
 The end result: one PowerShell function per model, flag-based, with the
 fiddly bits (process bouncing, env restoration, cache types, KV ceilings,
 tool allowlists, system prompts) hidden behind it.
 
 ```powershell
-qcoder -Ctx 32k -Unshackled                Qwen3-Coder @ 32k → Unshackled
+qcoder -Ctx 32k -LocalPilot                Qwen3-Coder @ 32k → LocalPilot
 q36p -Ctx 128k                              Qwen 3.6 Plus @ 128k → Claude Code
 qcoder -Ctx 256 -Quant iq4xs                256k coder context (4090 ceiling)
 q36p -Mode turboquant -KvK turbo4 -KvV turbo4   Turbo KV via the fork binary
@@ -96,7 +99,7 @@ llm                                         interactive wizard (Spectre when ava
 llmc                                        native selectable wizard
 llms                                        Spectre wizard, explicit
 info                                        dashboard: VRAM fit, parser freshness, defaults
-info -Commands                              full LocalBox + BenchPilot command list
+info -Commands                              full LocalBox + LocalBench command list
 ```
 
 ---
@@ -105,7 +108,7 @@ info -Commands                              full LocalBox + BenchPilot command l
 
 A **harness** is the agent loop wrapping the model — the thing that turns raw
 generation into "read this file, run that command, edit this code, then ask the
-user". Claude Code is one such harness. Unshackled is a fork of it.
+user". Claude Code is one such harness. LocalPilot is a fork of it.
 
 ### Claude Code harness (default)
 
@@ -137,16 +140,16 @@ What happens:
 The model believes it's Claude. Claude Code believes it's talking to Anthropic.
 The proxy quietly strips Anthropic-only fields the local backend can't parse.
 
-### Unshackled harness
+### LocalPilot harness
 
-Same flow, except the launch shells into `unshackled chat --model <model>`
-instead of `claude`. `UnshackledRoot` points at the Rust checkout used by
-LocalBox update/install flows; the default is `D:\repos\rust\unshackled`, and
-`UnshackledRepoUrl` defaults to
-`https://github.com/David-c0degeek/Unshackled`.
+Same flow, except the launch shells into `localpilot chat --model <model>`
+instead of `claude`. `LocalPilotRoot` points at the Rust checkout used by
+LocalBox update/install flows; the default is `D:\repos\rust\localpilot`, and
+`LocalPilotRepoUrl` defaults to
+`https://github.com/David-c0degeek/LocalPilot`.
 
 ```powershell
-qcoder -Ctx 32k -Unshackled
+qcoder -Ctx 32k -LocalPilot
 ```
 
 ### Codex harness
@@ -159,7 +162,7 @@ qcoder -Ctx 32k -Codex
 ```
 
 > **Note.** The `codex` CLI itself, when pointed at OpenAI rather than a local
-> endpoint, drives OpenAI's hosted backend. If you use it against the Unshackled
+> endpoint, drives OpenAI's hosted backend. If you use it against the LocalPilot
 > Codex adapter (a reverse-engineered private endpoint), be aware that path may
 > violate OpenAI's Terms of Use. Against a local `llama-server` `/v1` endpoint
 > as shown here, this concern does not apply.
@@ -182,13 +185,13 @@ or `S` to stop the gateway and backend. Use `llmserve -NoMonitor` for scripted
 or detached starts.
 
 On the client, no LocalBox helper is required. Set the Anthropic-compatible
-environment variables for your agentic client. For Unshackled:
+environment variables for your agentic client. For LocalPilot:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://192.168.178.61:11435"
 export ANTHROPIC_AUTH_TOKEN="chosenpass"
 export ANTHROPIC_API_KEY="chosenpass"
-unshackled
+localpilot
 ```
 
 Password-only HTTP is convenient for LAN testing. Over a public IP it is not
@@ -312,9 +315,9 @@ local-llm/
     42-llamacpp-templates.ps1  parser → llama-server flag mapping, strict file
     55-huggingface.ps1  HF repo discovery, GGUF download, quant code recognition
     60-catalog.ps1      catalog editor (addllm/updatellm/removellm)
-    65-claude-launch.ps1   Claude/Unshackled/Codex launcher; env save/restore, proxy
+    65-claude-launch.ps1   Claude/LocalPilot/Codex launcher; env save/restore, proxy
     70-bench.ps1        legacy bench history viewer
-    71-benchpilot-bridge.ps1   BenchPilot interop
+    71-localbench-bridge.ps1   LocalBench interop
     72-llamacpp-tuner.ps1      AutoBest config persistence
     75-display.ps1      info dashboard (Spectre + plain-text fallbacks)
     80-init.ps1         purge / unloadall
@@ -340,8 +343,8 @@ From the repo root:
 . .\install.ps1                  # copy files to deployed locations + add to $PROFILE
 . .\install.ps1 -Symlink         # symlink instead of copy (admin / dev mode)
 . .\install.ps1 -SetupProfile    # only ensure $PROFILE dot-sources the deployed file
-. .\install.ps1 -InstallBenchPilot   # also clone BenchPilot if missing
-. .\install.ps1 -InstallUnshackled   # also clone Unshackled if missing
+. .\install.ps1 -InstallLocalBench   # also clone LocalBench if missing
+. .\install.ps1 -InstallLocalPilot   # also clone LocalPilot if missing
 . .\install.ps1 -DryRun          # preview without changing anything
 ```
 
@@ -353,10 +356,10 @@ llmtui                           # Terminal.Gui TUI, explicit preview path
 info                             # verify: VRAM, default model, configured quants
 ```
 
-The install step offers to clone missing BenchPilot into `~/.local-llm/tools/`
-and Unshackled into `D:\repos\rust\unshackled`. Use `-SkipToolPrompts` for
+The install step offers to clone missing LocalBench into `~/.local-llm/tools/`
+and LocalPilot into `D:\repos\rust\localpilot`. Use `-SkipToolPrompts` for
 unattended installs. `Show-Diagnostics` also reports on `python`, the
-`unshackled` CLI, `PwshSpectreConsole`, BenchPilot, and Unshackled.
+`localpilot` CLI, `PwshSpectreConsole`, LocalBench, and LocalPilot.
 Installs also record `LocalBoxRoot` in `settings.json`, which lets `llm-update`
 pull this repo and redeploy the profile files later.
 
@@ -367,25 +370,25 @@ pull this repo and redeploy the profile files later.
 One function per model. Flag-based:
 
 ```
-qcoder -Ctx 32k -Unshackled       Code agent (Qwen3-Coder, 32k, Unshackled)
+qcoder -Ctx 32k -LocalPilot       Code agent (Qwen3-Coder, 32k, LocalPilot)
 qcoder -Ctx 32k -Codex            Code agent (Qwen3-Coder, 32k, Codex)
-q36p -Ctx 32k -Unshackled         General Qwen 3.6 agent (32k, Unshackled)
+q36p -Ctx 32k -LocalPilot         General Qwen 3.6 agent (32k, LocalPilot)
 dev -Ctx 32k                      Smaller / faster (Devstral 24B, 32k)
-q36p -Ctx 128k -Unshackled        Big context (Qwen 3.6 Plus, 128k)
+q36p -Ctx 128k -LocalPilot        Big context (Qwen 3.6 Plus, 128k)
 qcoder -Ctx 256 -Quant iq4xs      256k coder context (4090 ceiling)
 q36p -Quant q6kp                  Switch the GGUF quant
 q36p -Mode turboquant -KvK turbo4 -KvV turbo4   Turbo KV via fork binary
 q36p -AutoBest                    Replay the saved tuner config
 llmdefault                        Launch the configured default recipe/model
-llmdefaultunshackled              Same, via Unshackled
+llmdefaultlocalpilot              Same, via LocalPilot
 llmdefaultcodex                   Same, via Codex
 llm                               Guided wizard (Spectre when available)
 llmtui                            Terminal.Gui TUI preview
-bptui                             BenchPilot Terminal.Gui TUI preview
+lbtui                             LocalBench Terminal.Gui TUI preview
 llmc                              Native selectable wizard, explicit alias
 llms                              Spectre wizard, explicit alias
 info                              Dashboard
-info -Commands                    Full LocalBox + BenchPilot command list
+info -Commands                    Full LocalBox + LocalBench command list
 llmdocs                           Quick reference
 llm-update [-InstallTui]           Update LocalBox + companions; optionally refresh TUI binaries
 ```
@@ -393,7 +396,7 @@ llm-update [-InstallTui]           Update LocalBox + companions; optionally refr
 | Flag | Effect |
 |------|--------|
 | `-Ctx <name>` | One of the model's context keys (`32k`, `64k`, `128k`, `256k`). Omit for default. |
-| `-Unshackled` | Use Unshackled instead of Claude Code. |
+| `-LocalPilot` | Use LocalPilot instead of Claude Code. |
 | `-Codex` | Use OpenAI Codex instead of Claude Code. |
 | `-Strict` | Apply the strict engineering overlay (sampler + system prompt). Requires `Strict: true` on the model. |
 | `-Mode <name>` | `native` / `turboquant` / `mtpturbo` — which llama-server binary to use. |
@@ -414,7 +417,7 @@ the **IQ4_XS** quant with **q4_0 KV cache** is the only setup that fits a full
 
 ```powershell
 qcoder -Ctx 256 -Quant iq4xs                  # Claude Code @ 256k
-qcoder -Ctx 256 -Quant iq4xs -Unshackled      # Unshackled @ 256k
+qcoder -Ctx 256 -Quant iq4xs -LocalPilot      # LocalPilot @ 256k
 ```
 
 Weights ~16.5 GB; q4_0 KV @ 256k ~6 GB; total ~23.6 GB.
@@ -492,8 +495,8 @@ to fix paths on a fresh machine.
 Use the helper instead of editing JSON:
 
 ```powershell
-Set-LocalLLMSetting UnshackledRoot 'D:\repos\rust\unshackled'   # usually auto-set by install.ps1
-Set-LocalLLMSetting BenchPilotRoot '<path-to-benchpilot>'   # usually auto-set by install.ps1
+Set-LocalLLMSetting LocalPilotRoot 'D:\repos\rust\localpilot'   # usually auto-set by install.ps1
+Set-LocalLLMSetting LocalBenchRoot '<path-to-localbench>'   # usually auto-set by install.ps1
 Set-LocalLLMSetting LocalBoxRoot '<path-to-LocalBox>'        # auto-set by install.ps1
 Set-LocalLLMSetting Default q36plus
 Set-LocalLLMSetting VRAMGB 32                        # override auto-detect
@@ -507,9 +510,9 @@ Set-LocalLLMSetting LlamaCppMlock $false             # disable RAM locking (defa
 Set-LocalLLMSetting LlamaCppNoMmap $false            # disable no-mmap (default $true)
 Set-LocalLLMSetting LlamaCppAgentParallel 1          # agent slots (default 1; 0 = llama.cpp auto)
 Set-LocalLLMSetting LlamaCppAgentCacheReuse 256      # prompt-cache reuse chunk size (default 256; 0 = llama.cpp default)
-Set-LocalLLMSetting LocalModelMaxOutputTokens 4096   # cap local Claude/Unshackled completions (0 = tool default)
+Set-LocalLLMSetting LocalModelMaxOutputTokens 4096   # cap local Claude/LocalPilot completions (0 = tool default)
 Set-LocalLLMSetting LocalModelSkipPermissions $false # require Claude Code permission prompts (default $true = skip them)
-Set-LocalLLMSetting UnshackledRoot $null             # remove an entry
+Set-LocalLLMSetting LocalPilotRoot $null             # remove an entry
 ```
 
 The `Models` and `CommandAliases` keys are catalog-only and rejected by
@@ -570,10 +573,10 @@ Example per-model override:
 
 ---
 
-## BenchPilot auto-tuner (`findbest`)
+## LocalBench auto-tuner (`findbest`)
 
 `findbest` is a LocalBox compatibility command that delegates tuning to
-[BenchPilot](https://github.com/David-c0degeek/benchpilot). BenchPilot writes a
+[LocalBench](https://github.com/David-c0degeek/LocalBench). LocalBench writes a
 LocalBox-compatible result to `~/.local-llm/tuner/best-<key>.json`, and
 `Start-ClaudeWithLlamaCppModel -AutoBest` replays that saved profile.
 
@@ -616,7 +619,7 @@ findbest q36plus -ContextKey 256k -AllowedKvTypes q8_0,q4_0 -AggressiveKv
 # Power-user: tune separate short- and long-prefill profiles
 findbest q36plus -ContextKey 256k -PromptLengths short,long
 
-# Cache control. BenchPilot reuses prior measurements across runs (keyed by a
+# Cache control. LocalBench reuses prior measurements across runs (keyed by a
 # fingerprint of the build, prompt, and tuner version). After changing
 # measurement/scoring code that doesn't move that fingerprint, force fresh
 # numbers: -ClearTrialCache deletes the cache then repopulates it; -NoTrialCache
@@ -629,7 +632,7 @@ findbest q36plus -ContextKey 256k -NoTrialCache
 Show-LlamaCppTunerHistory -Key q36plus -Last 50
 ```
 
-BenchPilot may use fast `llama-bench` probes where supported, but turboquant
+LocalBench may use fast `llama-bench` probes where supported, but turboquant
 mode uses `llama-server` probes so `turbo3` / `turbo4` are measured through the
 same binary LocalBox will actually launch. Upstream `llama-bench` has KV-cache
 flags (`-ctk` / `-ctv`), but TurboQuant cache types only work in a fork/build
@@ -651,7 +654,7 @@ is recorded as provenance for the actual `num_ctx` used by the run. On a miss
 it warns and falls through to defaults. Caller-supplied `-KvCacheK` /
 `-KvCacheV` / `-ExtraArgs` always win over the saved values.
 
-Before handing an AutoBest llama.cpp session to Claude or Unshackled, LocalBox
+Before handing an AutoBest llama.cpp session to Claude or LocalPilot, LocalBox
 sends a tiny `/v1/messages` smoke request, including the same system prompt
 used for the real launch, through the same Anthropic-compatible route. The
 smoke must produce the requested visible answer; text hidden inside
@@ -743,14 +746,14 @@ Useful controls:
 | `Left` | Go back one wizard step. |
 | `Space` | Cycle the current step. |
 | `Tab` | Move focus to details so long text can scroll. |
-| `Ctrl+B` | Open BenchPilot.Tui when BenchPilot is installed and has a TUI build. |
+| `Ctrl+B` | Open LocalBench.Tui when LocalBench is installed and has a TUI build. |
 | `F5` | Refresh backend data. |
 | `F9` | Show dry-run launch command. |
 | `F10` | Quit. |
 
-`bptui` opens BenchPilot.Tui directly. It runs the BenchPilot TUI project from a
+`lbtui` opens LocalBench.Tui directly. It runs the LocalBench TUI project from a
 checkout when available, otherwise it falls back to the published
-`~/.local-llm/tools/benchpilot/bin/BenchPilot.Tui.exe`.
+`~/.local-llm/tools/localbench/bin/LocalBench.Tui.exe`.
 
 ---
 
@@ -774,8 +777,8 @@ setups, so they stay.
   `llmc` for the native picker or set `$env:LOCAL_LLM_NO_SPECTRE=1` to disable
   Spectre everywhere.
 - **Spectre wizard stalls** → raise `$env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS`.
-- **`unshackled` not on PATH** -> install the CLI with
-  `cargo install unshackled-cli`.
+- **`localpilot` not on PATH** -> install the CLI with
+  `cargo install localpilot-cli`.
 - **Need to roll back to the Ollama era** → `git checkout ollama-classic` in
   the repo and re-run `install.ps1`.
 

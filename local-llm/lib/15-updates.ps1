@@ -1,4 +1,4 @@
-# Git-backed update helpers for LocalBox and optional companion checkouts.
+﻿# Git-backed update helpers for LocalBox and optional companion checkouts.
 
 function Find-LocalBoxCheckoutUpwards {
     [CmdletBinding()]
@@ -69,21 +69,21 @@ function Resolve-LocalBoxRoot {
     return $null
 }
 
-function Resolve-UnshackledRoot {
+function Resolve-LocalPilotRoot {
     [CmdletBinding()]
     param()
 
     $candidates = New-Object System.Collections.Generic.List[string]
 
-    if (-not [string]::IsNullOrWhiteSpace($env:UNSHACKLED_ROOT)) {
-        $candidates.Add($env:UNSHACKLED_ROOT) | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALPILOT_ROOT)) {
+        $candidates.Add($env:LOCALPILOT_ROOT) | Out-Null
     }
 
-    if ($script:Cfg -and $script:Cfg.ContainsKey('UnshackledRoot') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.UnshackledRoot)) {
-        $candidates.Add($script:Cfg.UnshackledRoot) | Out-Null
+    if ($script:Cfg -and $script:Cfg.ContainsKey('LocalPilotRoot') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.LocalPilotRoot)) {
+        $candidates.Add($script:Cfg.LocalPilotRoot) | Out-Null
     }
 
-    $candidates.Add((Join-Path $HOME '.local-llm\tools\unshackled')) | Out-Null
+    $candidates.Add((Join-Path $HOME '.local-llm\tools\localpilot')) | Out-Null
 
     foreach ($candidate in @($candidates)) {
         $expanded = Expand-LocalLLMPath $candidate
@@ -233,18 +233,18 @@ function Test-LocalBoxTuiInstalled {
     return (Test-Path -LiteralPath (Get-LocalBoxTuiInstallPath) -PathType Leaf -ErrorAction SilentlyContinue)
 }
 
-function Get-BenchPilotTuiInstallPath {
+function Get-LocalBenchTuiInstallPath {
     [CmdletBinding()]
     param()
 
-    return Join-Path $HOME '.local-llm\tools\benchpilot\bin\BenchPilot.Tui.exe'
+    return Join-Path $HOME '.local-llm\tools\localbench\bin\LocalBench.Tui.exe'
 }
 
-function Test-BenchPilotTuiInstalled {
+function Test-LocalBenchTuiInstalled {
     [CmdletBinding()]
     param()
 
-    return (Test-Path -LiteralPath (Get-BenchPilotTuiInstallPath) -PathType Leaf -ErrorAction SilentlyContinue)
+    return (Test-Path -LiteralPath (Get-LocalBenchTuiInstallPath) -PathType Leaf -ErrorAction SilentlyContinue)
 }
 
 function Invoke-LocalLLMTuiPublisher {
@@ -287,14 +287,14 @@ function Invoke-LocalBoxTuiPublishFromRoot {
     Invoke-LocalLLMTuiPublisher -Name 'LocalBox.Tui' -PublisherScript (Join-Path $Root 'tui\publish-tui.ps1') -DryRun:$DryRun
 }
 
-function Invoke-BenchPilotTuiPublishFromRoot {
+function Invoke-LocalBenchTuiPublishFromRoot {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [switch]$DryRun
     )
 
-    Invoke-LocalLLMTuiPublisher -Name 'BenchPilot.Tui' -PublisherScript (Join-Path $Root 'tui\publish-tui.ps1') -DryRun:$DryRun
+    Invoke-LocalLLMTuiPublisher -Name 'LocalBench.Tui' -PublisherScript (Join-Path $Root 'tui\publish-tui.ps1') -DryRun:$DryRun
 }
 
 function Invoke-LocalBoxInstallFromRoot {
@@ -390,8 +390,8 @@ function Update-LocalLLMSuite {
     }
 
     $companions = @(
-        [pscustomobject]@{ Name = 'Unshackled'; Root = (Resolve-UnshackledRoot) },
-        [pscustomobject]@{ Name = 'BenchPilot'; Root = $(if (Get-Command Resolve-BenchPilotRoot -ErrorAction SilentlyContinue) { $resolved = Resolve-BenchPilotRoot; if ($resolved) { $resolved.Root } else { $null } } else { $null }) }
+        [pscustomobject]@{ Name = 'LocalPilot'; Root = (Resolve-LocalPilotRoot) },
+        [pscustomobject]@{ Name = 'LocalBench'; Root = $(if (Get-Command Resolve-LocalBenchRoot -ErrorAction SilentlyContinue) { $resolved = Resolve-LocalBenchRoot; if ($resolved) { $resolved.Root } else { $null } } else { $null }) }
     )
 
     foreach ($companion in $companions) {
@@ -399,10 +399,10 @@ function Update-LocalLLMSuite {
             $result = Invoke-LocalLLMGitFastForwardUpdate -Name $companion.Name -Root $companion.Root -DryRun:$DryRun
             $results += $result
 
-            if ($companion.Name -eq 'BenchPilot' -and $result.Installed) {
-                $refreshBenchPilotTui = $InstallTui -or (Test-BenchPilotTuiInstalled)
-                if (($result.Updated -and $refreshBenchPilotTui) -or $InstallTui) {
-                    Invoke-BenchPilotTuiPublishFromRoot -Root $result.Root -DryRun:$DryRun
+            if ($companion.Name -eq 'LocalBench' -and $result.Installed) {
+                $refreshLocalBenchTui = $InstallTui -or (Test-LocalBenchTuiInstalled)
+                if (($result.Updated -and $refreshLocalBenchTui) -or $InstallTui) {
+                    Invoke-LocalBenchTuiPublishFromRoot -Root $result.Root -DryRun:$DryRun
                 }
             }
         }
