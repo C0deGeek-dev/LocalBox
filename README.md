@@ -1,4 +1,4 @@
-﻿```
+```
 ╔══════════════╗		██╗      ██████╗  ██████╗ █████╗ ██╗     ██████╗  ██████╗ ██╗  ██╗
 ║ ╔═══╗        ║		██║     ██╔═══██╗██╔════╝██╔══██╗██║     ██╔══██╗██╔═══██╗╚██╗██╔╝
 ║ ║███║  ████  ║║		██║     ██║   ██║██║     ███████║██║     ██████╔╝██║   ██║ ╚███╔╝
@@ -11,15 +11,15 @@
 # LocalBox
 
 [![install](https://img.shields.io/badge/install-one--liner-555?style=flat-square)](#install)
-[![stars](https://img.shields.io/github/stars/David-c0degeek/LocalBox?style=flat-square&label=stars&color=007ec6)](https://github.com/David-c0degeek/LocalBox/stargazers)
-[![issues](https://img.shields.io/github/issues/David-c0degeek/LocalBox?style=flat-square&label=issues&color=4c1)](https://github.com/David-c0degeek/LocalBox/issues)
+[![stars](https://img.shields.io/github/stars/C0deGeek-dev/LocalBox?style=flat-square&label=stars&color=007ec6)](https://github.com/C0deGeek-dev/LocalBox/stargazers)
+[![issues](https://img.shields.io/github/issues/C0deGeek-dev/LocalBox?style=flat-square&label=issues&color=4c1)](https://github.com/C0deGeek-dev/LocalBox/issues)
 [![runtime](https://img.shields.io/badge/runtime-llama.cpp-555?style=flat-square)](#llamacpp-modes)
 [![models](https://img.shields.io/badge/models-GGUF%20catalog-orange?style=flat-square)](#adding-a-model)
 [![harnesses](https://img.shields.io/badge/harnesses-3%20targets-4c1?style=flat-square)](#harness-mode)
 [![platform](https://img.shields.io/badge/platform-Windows%20PowerShell-007ec6?style=flat-square)](#install)
 
 A PowerShell-driven launcher that runs [Claude Code](https://claude.com/claude-code)
-or [LocalPilot](https://github.com/David-c0degeek/LocalPilot) against a
+or [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) against a
 **local model** served by [llama.cpp](https://github.com/ggerganov/llama.cpp)'s
 `llama-server`, with the right chat template, KV-cache type, sampling, system
 prompt, and tool allowlist for each model family.
@@ -37,16 +37,16 @@ prompt, and tool allowlist for each model family.
 
 ## LocalX Ecosystem
 
-- [LocalStack](https://github.com/David-c0degeek/LocalStack) is the umbrella
+- [LocalStack](https://github.com/C0deGeek-dev/LocalStack) is the umbrella
   ecosystem for the LocalX tools.
-- [LocalBox](https://github.com/David-c0degeek/LocalBox) is this model runtime
+- [LocalBox](https://github.com/C0deGeek-dev/LocalBox) is this model runtime
   and launcher: it runs local GGUF models through Claude Code, Codex, or
   LocalPilot via llama.cpp.
-- [LocalMind](https://github.com/David-c0degeek/LocalMind) is the local-first
+- [LocalMind](https://github.com/C0deGeek-dev/LocalMind) is the local-first
   memory and RAG layer for coding-agent sessions.
-- [LocalBench](https://github.com/David-c0degeek/LocalBench) is the benchmarking
+- [LocalBench](https://github.com/C0deGeek-dev/LocalBench) is the benchmarking
   and evaluation companion that exports recommended launcher profiles.
-- [LocalPilot](https://github.com/David-c0degeek/LocalPilot) is the local CLI
+- [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) is the local CLI
   coding agent that LocalBox can target with `-LocalPilot`.
 
 ---
@@ -146,7 +146,7 @@ Same flow, except the launch shells into `localpilot chat --model <model>`
 instead of `claude`. `LocalPilotRoot` points at the Rust checkout used by
 LocalBox update/install flows; the default is `D:\repos\rust\localpilot`, and
 `LocalPilotRepoUrl` defaults to
-`https://github.com/David-c0degeek/LocalPilot`.
+`https://github.com/C0deGeek-dev/LocalPilot`.
 
 ```powershell
 qcoder -Ctx 32k -LocalPilot
@@ -576,7 +576,7 @@ Example per-model override:
 ## LocalBench auto-tuner (`findbest`)
 
 `findbest` is a LocalBox compatibility command that delegates tuning to
-[LocalBench](https://github.com/David-c0degeek/LocalBench). LocalBench writes a
+[LocalBench](https://github.com/C0deGeek-dev/LocalBench). LocalBench writes a
 LocalBox-compatible result to `~/.local-llm/tuner/best-<key>.json`, and
 `Start-ClaudeWithLlamaCppModel -AutoBest` replays that saved profile.
 

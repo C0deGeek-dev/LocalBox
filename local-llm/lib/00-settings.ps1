@@ -1,4 +1,4 @@
-﻿# Settings + config loading. Three files participate, layered in this order:
+# Settings + config loading. Three files participate, layered in this order:
 #   1. defaults.json (committed) — shipped launcher defaults (top-level scalars).
 #   2. llm-models.json (committed) — pure catalog: Models + CommandAliases only.
 #      Legacy installs may still carry the old scalars at the top level; those
@@ -154,7 +154,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppAgentCacheReuse"))       { $cfg.LlamaCppAgentCacheReuse = 256 }
     if (-not $cfg.ContainsKey("LocalModelMaxOutputTokens"))     { $cfg.LocalModelMaxOutputTokens = 4096 }
     if (-not $cfg.ContainsKey("LocalBenchRoot"))                { $cfg.LocalBenchRoot = "" }
-    if (-not $cfg.ContainsKey("LocalBenchRepoUrl"))             { $cfg.LocalBenchRepoUrl = "https://github.com/David-c0degeek/LocalBench" }
+    if (-not $cfg.ContainsKey("LocalBenchRepoUrl"))             { $cfg.LocalBenchRepoUrl = "https://github.com/C0deGeek-dev/LocalBench" }
     if (-not $cfg.ContainsKey("LocalBenchMinimumVersion"))      { $cfg.LocalBenchMinimumVersion = "0.1.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
     if (-not $cfg.ContainsKey("LocalPilotRoot"))                { $cfg.LocalPilotRoot = "D:\repos\rust\localpilot" }
@@ -191,7 +191,7 @@ function Import-LocalLLMConfig {
     }
 
     if (-not $cfg.ContainsKey("LocalPilotRepoUrl")) {
-        $cfg.LocalPilotRepoUrl = "https://github.com/David-c0degeek/LocalPilot"
+        $cfg.LocalPilotRepoUrl = "https://github.com/C0deGeek-dev/LocalPilot"
     }
 
     # Validate the merged config. Throws a single consolidated error message

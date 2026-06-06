@@ -1,4 +1,4 @@
-﻿# Claude Code / LocalPilot launcher path. Backs up Claude env vars, points
+# Claude Code / LocalPilot launcher path. Backs up Claude env vars, points
 # them at the no-think strip proxy in front of llama-server, launches the
 # agent, restores the env on exit.
 
@@ -1080,7 +1080,7 @@ function Install-LocalPilot {
     $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.LocalPilotRepoUrl)) {
         [string]$script:Cfg.LocalPilotRepoUrl
     } else {
-        'https://github.com/David-c0degeek/LocalPilot'
+        'https://github.com/C0deGeek-dev/LocalPilot'
     }
 
     Ensure-Directory (Split-Path -Parent $Destination)

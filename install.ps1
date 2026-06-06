@@ -1,4 +1,4 @@
-﻿# Install LocalBox to %USERPROFILE%\.local-llm and %USERPROFILE%\.localbox-proxy.
+# Install LocalBox to %USERPROFILE%\.local-llm and %USERPROFILE%\.localbox-proxy.
 #
 # Modes:
 #   .\install.ps1                  copy files (default)
@@ -491,8 +491,8 @@ function Ensure-TuiBinaries {
 
 function Ensure-CompanionTools {
     $catalog = Get-InstallCatalog
-    $localBenchRepo = if ($catalog.Contains("LocalBenchRepoUrl")) { [string]$catalog.LocalBenchRepoUrl } else { "https://github.com/David-c0degeek/LocalBench" }
-    $localpilotRepo = if ($catalog.Contains("LocalPilotRepoUrl")) { [string]$catalog.LocalPilotRepoUrl } else { "https://github.com/David-c0degeek/LocalPilot" }
+    $localBenchRepo = if ($catalog.Contains("LocalBenchRepoUrl")) { [string]$catalog.LocalBenchRepoUrl } else { "https://github.com/C0deGeek-dev/LocalBench" }
+    $localpilotRepo = if ($catalog.Contains("LocalPilotRepoUrl")) { [string]$catalog.LocalPilotRepoUrl } else { "https://github.com/C0deGeek-dev/LocalPilot" }
 
     $lb = Find-LocalBenchInstall
     if ($lb) {
@@ -549,7 +549,7 @@ function Show-Diagnostics {
         Write-Host "localbench: ok  ($($localBench.Root))" -ForegroundColor Green
     }
     else {
-        Write-Host "localbench: missing — installer can clone https://github.com/David-c0degeek/LocalBench into ~/.local-llm/tools/localbench" -ForegroundColor Yellow
+        Write-Host "localbench: missing — installer can clone https://github.com/C0deGeek-dev/LocalBench into ~/.local-llm/tools/localbench" -ForegroundColor Yellow
     }
 
     $localBoxTui = Join-Path $DeployedLocalLLM "bin\LocalBox.Tui.exe"
@@ -573,7 +573,7 @@ function Show-Diagnostics {
         Write-Host "localpilot: ok  ($($localpilot.Root))" -ForegroundColor Green
     }
     else {
-        Write-Host "localpilot: missing — installer can clone https://github.com/David-c0degeek/LocalPilot into D:\repos\rust\localpilot" -ForegroundColor Yellow
+        Write-Host "localpilot: missing — installer can clone https://github.com/C0deGeek-dev/LocalPilot into D:\repos\rust\localpilot" -ForegroundColor Yellow
     }
 
     Write-Host ""

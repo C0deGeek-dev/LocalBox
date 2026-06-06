@@ -1,4 +1,4 @@
-﻿# LocalBench discovery/import bridge. The launcher owns launch-time AutoBest
+# LocalBench discovery/import bridge. The launcher owns launch-time AutoBest
 # loading; LocalBench owns benchmark execution and compatible profile export.
 
 function Resolve-LocalBenchModulePath {
@@ -372,7 +372,7 @@ function Install-LocalBench {
     $repoUrl = if ($script:Cfg.ContainsKey('LocalBenchRepoUrl') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.LocalBenchRepoUrl)) {
         [string]$script:Cfg.LocalBenchRepoUrl
     } else {
-        'https://github.com/David-c0degeek/LocalBench'
+        'https://github.com/C0deGeek-dev/LocalBench'
     }
 
     Ensure-Directory (Split-Path -Parent $Destination)

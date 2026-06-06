@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 Past-tense record of shipped changes.
 
@@ -103,7 +103,7 @@ The catalog gained one realistic 256k coder option (`qcoder30 -Ctx 256 -Quant iq
 
 - **`~/.local-llm/settings.json`** — per-machine overlay for the catalog. Top-level scalars (`LocalPilotRoot`, `OllamaAppPath`, `Default`, `KeepAlive`, `RequireAdvertisedTools`, `NoThinkProxyPort`, `LocalModelTools`, `LocalPilotRepoUrl`, etc.) load from `llm-models.json` first, then any matching keys in `settings.json` override. `Models` and `CommandAliases` are catalog-only and protected from override.
 - **`Set-LocalLLMSetting <Key> <Value>`** — writes to `settings.json` and reloads. Pass `$null`/`""` to remove a key. Refuses `Models`/`CommandAliases`.
-- **`LocalPilotRepoUrl`** config field, defaulting to `https://github.com/David-c0degeek/LocalPilot`.
+- **`LocalPilotRepoUrl`** config field, defaulting to `https://github.com/C0deGeek-dev/LocalPilot`.
 - **`Ensure-LocalPilotInstalled`** — called by `Invoke-LocalPilotCli` before doing anything. If the configured `LocalPilotRoot` doesn't contain `src/entrypoints/cli.tsx`, it prompts `Clone <url>? [y/N]` and runs `git clone` on confirmation. Aborts with a clear instruction otherwise.
 - `settings.json` added to `.gitignore` so per-machine config never lands in the repo.
 - `install.ps1` prints a tip pointing at `Set-LocalLLMSetting` for fresh-machine setup.
@@ -114,7 +114,7 @@ Cloning the public repo onto a different machine should not require editing `llm
 
 ## 2026-04-30 — LocalPilot rename
 
-The external harness fork was renamed to [LocalPilot](https://github.com/David-c0degeek/LocalPilot). Propagated through this project:
+The external harness fork was renamed to [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot). Propagated through this project:
 
 - JSON config field renamed to `LocalPilotRoot`.
 - Internal CLI wrapper renamed to `Invoke-LocalPilotCli`.
