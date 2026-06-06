@@ -43,7 +43,8 @@ prompt, and tool allowlist for each model family.
   and launcher: it runs local GGUF models through Claude Code, Codex, or
   LocalPilot via llama.cpp.
 - [LocalMind](https://github.com/C0deGeek-dev/LocalMind) is the local-first
-  memory and RAG layer for coding-agent sessions.
+  learning engine for reviewed project memory, graph-connected knowledge,
+  reusable skills, and agent context.
 - [LocalBench](https://github.com/C0deGeek-dev/LocalBench) is the benchmarking
   and evaluation companion that exports recommended launcher profiles.
 - [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) is the local CLI
