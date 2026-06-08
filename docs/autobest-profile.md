@@ -17,9 +17,19 @@ entry is matched by `Get-BestLlamaCppConfig` using:
 - `quant`
 - `vramGB` within +/- 1 GB
 - `tuner_version` when present
+- `vision` (text-only when omitted)
 
 Entries also record `contextTokens` as provenance for the resolved `num_ctx`;
 `contextKey` remains the launch-time match key.
+
+Vision and text-only profiles are not interchangeable (the mmproj module shifts
+VRAM use and behaviour), so an exact `vision` match is always preferred. Because
+no current tuning path records a vision-tuned entry, a vision launch
+(`-UseVision`) would otherwise never match. To keep AutoBest usable, a vision
+launch falls back to the matching text-only tune and prints a warning that the
+tune was measured without the mmproj (so VRAM headroom is tighter — raise
+`--n-cpu-moe` or launch without vision if you hit OOM). A non-vision launch is
+unaffected and only matches text-only entries.
 
 Entries must include an `overrides` object whose keys can be splatted into
 `Build-LlamaServerArgs`. The currently accepted tuning override keys are:

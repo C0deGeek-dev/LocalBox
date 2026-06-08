@@ -183,7 +183,8 @@ function Get-BestLlamaCppConfig {
         [string]$Quant,
         [int]$VramGB,
         [ValidateSet('pure','balanced')][string]$Profile = 'pure',
-        [bool]$Vision = $false
+        [bool]$Vision = $false,
+        [switch]$AllowVisionFallback
     )
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
@@ -206,6 +207,7 @@ function Get-BestLlamaCppConfig {
         if ($def.Contains('Quant')) { $Quant = [string]$def.Quant }
     }
 
+    $fallbackEntry = $null
     foreach ($entry in $data.entries) {
         $entryContextKey = try { Resolve-ModelContextKey -Def $def -ContextKey ([string]$entry.contextKey) } catch { [string]$entry.contextKey }
         if ($entryContextKey -ne $ContextKey) { continue }
@@ -214,17 +216,24 @@ function Get-BestLlamaCppConfig {
         if ($entryPromptLength -ne $PromptLength) { continue }
         $entryProfile = if ($entry.profile) { [string]$entry.profile } else { 'pure' }
         if ($entryProfile -ne $Profile) { continue }
-        # Vision and text-only profiles are not interchangeable (mmproj changes VRAM
-        # + behaviour). Missing 'vision' on legacy entries reads as text-only.
-        if (([bool]$entry.vision) -ne $Vision) { continue }
         if ($Quant -and $entry.quant -ne $Quant) { continue }
         $delta = [Math]::Abs([int]$entry.vramGB - [int]$VramGB)
         if ($delta -gt 1) { continue }
         if ($entry.tuner_version -and [int]$entry.tuner_version -ne $script:LlamaCppTunerVersion) { continue }
-        return $entry
+
+        # Vision and text-only profiles are not interchangeable (mmproj changes VRAM
+        # + behaviour). Missing 'vision' on legacy entries reads as text-only.
+        $entryVision = [bool]$entry.vision
+        if ($entryVision -eq $Vision) { return $entry }
+        # No vision-tuned entry yet: when allowed, remember the first otherwise-matching
+        # text-only entry as a fallback for a vision launch, but keep scanning in case a
+        # genuine vision match appears later (which takes precedence via the return above).
+        if ($AllowVisionFallback -and $Vision -and -not $entryVision -and $null -eq $fallbackEntry) {
+            $fallbackEntry = $entry
+        }
     }
 
-    return $null
+    return $fallbackEntry
 }
 
 function Get-PreferredLlamaCppBestConfig {
@@ -240,14 +249,15 @@ function Get-PreferredLlamaCppBestConfig {
         [string]$Quant,
         [int]$VramGB,
         [ValidateSet('auto','pure','balanced')][string]$Profile = 'auto',
-        [bool]$Vision = $false
+        [bool]$Vision = $false,
+        [switch]$AllowVisionFallback
     )
 
     $candidates = @()
     $selectionProfiles = if ($Profile -eq 'auto') { @('balanced', 'pure') } else { @($Profile) }
     foreach ($selectionProfile in $selectionProfiles) {
         foreach ($promptProfile in @('long', 'short')) {
-            $entry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfile -Quant $Quant -VramGB $VramGB -Profile $selectionProfile -Vision $Vision
+            $entry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfile -Quant $Quant -VramGB $VramGB -Profile $selectionProfile -Vision $Vision -AllowVisionFallback:$AllowVisionFallback
             if ($entry) {
                 $unit = [string]$entry.scoreUnit
                 $rank = if ($selectionProfile -eq 'balanced') { 0 } else { 1 }
@@ -262,13 +272,15 @@ function Get-PreferredLlamaCppBestConfig {
                     Profile = $selectionProfile
                     Rank = $rank
                     UnitRank = $unitRank
+                    VisionFallback = ($Vision -and -not [bool]$entry.vision)
                 }
             }
         }
     }
 
     if ($candidates.Count -eq 0) { return $null }
-    return @($candidates | Sort-Object Rank, UnitRank, @{ Expression = { if ($_.PromptLength -eq 'long') { 0 } else { 1 } } } | Select-Object -First 1)[0]
+    # A genuine vision match (VisionFallback=$false) always outranks a text-only fallback.
+    return @($candidates | Sort-Object @{ Expression = { if ($_.VisionFallback) { 1 } else { 0 } } }, Rank, UnitRank, @{ Expression = { if ($_.PromptLength -eq 'long') { 0 } else { 1 } } } | Select-Object -First 1)[0]
 }
 
 function Get-LlamaCppBestConfigCandidates {

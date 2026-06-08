@@ -31,6 +31,17 @@ try {
     if (-not $entry) { throw 'Get-BestLlamaCppConfig did not load the LocalBench fixture entry.' }
     if ($entry.source -ne 'localbench') { throw "Expected source localbench; got '$($entry.source)'." }
 
+    # Vision fallback: the text-only fixture must NOT match a vision launch by default,
+    # but should be returned as a fallback when -AllowVisionFallback is set.
+    $visionStrict = Get-BestLlamaCppConfig -Key 'q3635ba3b' -ContextKey '32k' -Mode 'native' -PromptLength 'short' -Quant 'iq2m' -VramGB 24 -Vision $true
+    if ($visionStrict) { throw 'Vision launch matched a text-only entry without -AllowVisionFallback.' }
+    $visionFallback = Get-BestLlamaCppConfig -Key 'q3635ba3b' -ContextKey '32k' -Mode 'native' -PromptLength 'short' -Quant 'iq2m' -VramGB 24 -Vision $true -AllowVisionFallback
+    if (-not $visionFallback) { throw '-AllowVisionFallback did not return the text-only entry for a vision launch.' }
+    $preferred = Get-PreferredLlamaCppBestConfig -Key 'q3635ba3b' -ContextKey '32k' -Mode 'native' -Profile 'pure' -Quant 'iq2m' -VramGB 24 -Vision $true -AllowVisionFallback
+    if (-not $preferred -or -not $preferred.VisionFallback) {
+        throw 'Get-PreferredLlamaCppBestConfig did not flag the text-only entry as VisionFallback under a vision launch.'
+    }
+
     $def = Get-ModelDef -Key 'q3635ba3b'
     $argsParams = @{
         Def = $def

@@ -664,10 +664,10 @@ function Start-LocalLLMLlamaCppServeBackend {
         $loadedProfile = $AutoBestProfile
 
         if ($promptProfileOverride) {
-            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision -AllowVisionFallback:$UseVision
             $loadedProfile = "pure/$promptProfileOverride"
         } else {
-            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile -Vision $UseVision
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile -Vision $UseVision -AllowVisionFallback:$UseVision
             if ($preferred) {
                 $bestEntry = $preferred.Entry
                 $loadedProfile = "$($preferred.Profile)/$($preferred.PromptLength)"
@@ -677,6 +677,9 @@ function Start-LocalLLMLlamaCppServeBackend {
         if ($bestEntry -and $bestEntry.overrides) {
             $autoBestLoadedProfile = $loadedProfile
             Write-Host "AutoBest: loaded saved tuner config (profile=$loadedProfile, score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
+            if ($UseVision -and -not [bool]$bestEntry.vision) {
+                Write-Warning "AutoBest: no vision-tuned config exists for this model; loaded a text-only tune as fallback. It was measured without the mmproj, so VRAM headroom is tighter - if you hit OOM, raise --n-cpu-moe or launch without vision."
+            }
             $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse','SpecType','SpecDraftNMax')
             foreach ($k in $tunable) {
                 if ($buildParams.ContainsKey($k)) { continue }
@@ -693,7 +696,8 @@ function Start-LocalLLMLlamaCppServeBackend {
             Write-Warning "AutoBest: matched saved entry has no 'overrides' field (older tuner version?). Skipping."
         } else {
             $profileHint = if ($promptProfileOverride) { $promptProfileOverride } else { 'long' }
-            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
+            $visionState = if ($UseVision) { 'on' } else { 'off' }
+            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile vision=$visionState quant=$([string]$def.Quant)). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
         }
     }
 
@@ -1290,13 +1294,16 @@ function Start-LocalPilot {
         $selectionProfile = if ($AutoBestProfile -in @('pure', 'balanced')) { $AutoBestProfile } else { 'auto' }
         $promptProfileOverride = if ($AutoBestProfile -in @('short', 'long')) { $AutoBestProfile } else { $null }
         if ($promptProfileOverride) {
-            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision -AllowVisionFallback:$UseVision
         } else {
-            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -Profile $selectionProfile -Vision $UseVision
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -Profile $selectionProfile -Vision $UseVision -AllowVisionFallback:$UseVision
             if ($preferred) { $bestEntry = $preferred.Entry }
         }
         if ($bestEntry -and $bestEntry.overrides) {
             Write-Host "AutoBest: loaded saved tuner config (profile=$AutoBestProfile)." -ForegroundColor Cyan
+            if ($UseVision -and -not [bool]$bestEntry.vision) {
+                Write-Warning "AutoBest: no vision-tuned config exists for this model; loaded a text-only tune as fallback. It was measured without the mmproj, so VRAM headroom is tighter - if you hit OOM, raise --n-cpu-moe or launch without vision."
+            }
             $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse','SpecType','SpecDraftNMax')
             foreach ($k in $tunable) {
                 if ($buildParams.ContainsKey($k)) { continue }
@@ -1667,10 +1674,10 @@ function Start-ClaudeWithLlamaCppModel {
         $promptProfileOverride = if ($AutoBestProfile -in @('short', 'long')) { $AutoBestProfile } else { $null }
         $loadedProfile = $AutoBestProfile
         if ($promptProfileOverride) {
-            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure -Vision $UseVision -AllowVisionFallback:$UseVision
             $loadedProfile = "pure/$promptProfileOverride"
         } else {
-            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile -Vision $UseVision
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile -Vision $UseVision -AllowVisionFallback:$UseVision
             if ($preferred) {
                 $bestEntry = $preferred.Entry
                 $loadedProfile = "$($preferred.Profile)/$($preferred.PromptLength)"
@@ -1679,6 +1686,9 @@ function Start-ClaudeWithLlamaCppModel {
         if ($bestEntry -and $bestEntry.overrides) {
             $autoBestLoadedProfile = $loadedProfile
             Write-Host "AutoBest: loaded saved tuner config (profile=$loadedProfile, score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
+            if ($UseVision -and -not [bool]$bestEntry.vision) {
+                Write-Warning "AutoBest: no vision-tuned config exists for this model; loaded a text-only tune as fallback. It was measured without the mmproj, so VRAM headroom is tighter - if you hit OOM, raise --n-cpu-moe or launch without vision."
+            }
             if ([string]$bestEntry.scoreUnit -match '^(gen|tg)_') {
                 Write-Warning "AutoBest: this is a generation-only profile. Re-run: findbest $Key -ContextKey $ContextKey -Mode $Mode"
             }
@@ -1723,7 +1733,8 @@ function Start-ClaudeWithLlamaCppModel {
                 }
             }
             $profileHint = if ($promptProfileOverride) { $promptProfileOverride } else { 'long' }
-            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
+            $visionState = if ($UseVision) { 'on' } else { 'off' }
+            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile vision=$visionState quant=$quant vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
         }
     }
 
