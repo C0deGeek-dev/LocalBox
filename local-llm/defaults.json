@@ -11,6 +11,18 @@
   "LlamaCppDefaultMode": "native",
   "LlamaCppHealthCheckTimeoutSec": 300,
   "LlamaCppSmokeTestTimeoutSec": 300,
-  "LocalModelSkipPermissions": true,
+  "LlamaCppPinnedTag": "b9596",
+  "LlamaCppTurboquantPinnedTag": "tqp-v0.1.1",
+  "LlamaCppMtpTurboCommit": "a578bb6b94529b7b2721d0ee49eaea5dbb2c6d07",
+  "LlamaCppRequireDownloadPins": true,
+  "LlamaCppDownloadPins": {
+    "llama-b9596-bin-win-cpu-x64.zip": "d6af2cdf070fe3222c1ffc0cf9665d1d395aff32b985a29d8dc2e3ae1398d780",
+    "llama-b9596-bin-win-cuda-12.4-x64.zip": "4be0993b63ff501e3aa23e7f35e16e03a8b44404462792994cd66ce98915fa7e",
+    "llama-b9596-bin-win-cuda-13.3-x64.zip": "7edbf71071ead99843700d2800c92b5f14270e67da29941738dab1eb3daae91f",
+    "llama-b9596-bin-win-vulkan-x64.zip": "46bf6ee71b3d9c842aaadee2f6e51da6e8d9139dc3d8b931e5615150521f8f71",
+    "cudart-llama-bin-win-cuda-12.4-x64.zip": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+    "cudart-llama-bin-win-cuda-13.3-x64.zip": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e",
+    "turboquant-plus-tqp-v0.1.1-windows-x64-cuda12.4.zip": "a4f88e934d38f941e909337dbacc81620660f2d063ca4d7b176ea5dd00eff624"
+  },
   "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop"
 }

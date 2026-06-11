@@ -1,4 +1,4 @@
-﻿# llama.cpp install / detection. Locates llama-server.exe, downloads a release
+# llama.cpp install / detection. Locates llama-server.exe, downloads a release
 # from github.com/ggerganov/llama.cpp when missing, or pulls the turboquant
 # Docker image. All work is lazy — nothing happens at module load.
 
@@ -155,8 +155,23 @@ function Get-LlamaCppGpuVariant {
 
 function Get-LlamaCppLatestRelease {
     # Hits the public GitHub API. Returns the parsed JSON object or throws.
+    return Get-GitHubRelease -Repo 'ggerganov/llama.cpp'
+}
+
+function Get-GitHubRelease {
+    # Fetches release metadata from the public GitHub API: a specific tag when
+    # given, otherwise the latest release.
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [string]$Tag
+    )
+
     $headers = @{ "User-Agent" = "LocalLLMProfile/1.0"; "Accept" = "application/vnd.github+json" }
-    $url = "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest"
+    $url = if ([string]::IsNullOrWhiteSpace($Tag)) {
+        "https://api.github.com/repos/$Repo/releases/latest"
+    } else {
+        "https://api.github.com/repos/$Repo/releases/tags/$Tag"
+    }
 
     $oldProgress = $global:ProgressPreference
     $global:ProgressPreference = 'SilentlyContinue'
@@ -166,6 +181,27 @@ function Get-LlamaCppLatestRelease {
     finally {
         $global:ProgressPreference = $oldProgress
     }
+}
+
+function Get-LlamaCppPinnedTag {
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    if (-not $script:Cfg -or -not $script:Cfg.Contains($Key)) { return '' }
+    return [string]$script:Cfg[$Key]
+}
+
+function Resolve-LlamaCppRelease {
+    # Release the native installer targets: the tag pinned in settings
+    # (LlamaCppPinnedTag) when set, otherwise the moving latest release.
+    # Pinning the tag is what makes the per-asset SHA-256 pins meaningful —
+    # `latest` changes asset names every release.
+    $tag = Get-LlamaCppPinnedTag -Key 'LlamaCppPinnedTag'
+    if (-not [string]::IsNullOrWhiteSpace($tag)) {
+        Write-Host "  Using pinned llama.cpp release: $tag" -ForegroundColor DarkGreen
+        return Get-GitHubRelease -Repo 'ggerganov/llama.cpp' -Tag $tag
+    }
+    Write-Host "  No LlamaCppPinnedTag set — using latest release (unpinned)." -ForegroundColor DarkYellow
+    return Get-LlamaCppLatestRelease
 }
 
 function Select-LlamaCppReleaseAsset {
@@ -179,8 +215,10 @@ function Select-LlamaCppReleaseAsset {
     #   cuda   -> cuda-*, cu*, then any cuda
     #   vulkan -> vulkan
     #   cpu    -> avx2, then avx512, then avx, then noavx
+    # x64 required: releases also ship win-*-arm64 assets that would otherwise
+    # match the variant patterns below.
     $assets = @($Release.assets | Where-Object {
-        $_.name -match '\.zip$' -and $_.name -match 'win' -and $_.name -notmatch 'cudart'
+        $_.name -match '\.zip$' -and $_.name -match 'win' -and $_.name -match 'x64' -and $_.name -notmatch 'cudart'
     })
 
     if ($assets.Count -eq 0) {
@@ -190,7 +228,9 @@ function Select-LlamaCppReleaseAsset {
     $patterns = switch ($Variant) {
         'cuda'   { @('-cuda-12','-cuda-11','-cuda') }
         'vulkan' { @('-vulkan') }
-        'cpu'    { @('-avx2-','-avx512-','-avx-','-noavx-') }
+        # Upstream renamed the CPU asset from per-ISA (-avx2- etc.) to a single
+        # -cpu- build; keep the old names first for older pinned tags.
+        'cpu'    { @('-avx2-','-avx512-','-avx-','-noavx-','-cpu-') }
         default  { @('-cpu') }
     }
 
@@ -222,9 +262,9 @@ function Install-LlamaServerNative {
     }
 
     $variant = Get-LlamaCppGpuVariant
-    Write-Host "Resolving latest llama.cpp release ($variant)..." -ForegroundColor Cyan
+    Write-Host "Resolving llama.cpp release ($variant)..." -ForegroundColor Cyan
 
-    $release = Get-LlamaCppLatestRelease
+    $release = Resolve-LlamaCppRelease
     $asset = Select-LlamaCppReleaseAsset -Release $release -Variant $variant
 
     Write-Host "Downloading $($asset.name) ($([math]::Round($asset.size / 1MB, 1)) MB)..." -ForegroundColor Cyan
@@ -365,7 +405,7 @@ function Ensure-LlamaPerplexityExe {
     if ($Mode -eq 'turboquant' -and -not $NonInteractive) {
         Write-Host ""
         Write-Host "llama-perplexity (turboquant) is not installed." -ForegroundColor Yellow
-        Write-Host "  Source: github.com/$(Get-LlamaCppTurboquantRepo)/releases/latest" -ForegroundColor DarkGray
+        Write-Host "  Source: github.com/$(Get-LlamaCppTurboquantRepo)/releases" -ForegroundColor DarkGray
         Write-Host "  Target: $(Get-LlamaCppTurboquantInstallRoot)" -ForegroundColor DarkGray
         $answer = (Read-Host "Download/reinstall turboquant llama.cpp tools now? [Y/n]").Trim().ToLowerInvariant()
 
@@ -427,17 +467,19 @@ function Get-LlamaCppTurboquantRepo {
 }
 
 function Get-LlamaCppTurboquantLatestRelease {
-    $headers = @{ "User-Agent" = "LocalLLMProfile/1.0"; "Accept" = "application/vnd.github+json" }
-    $url = "https://api.github.com/repos/$(Get-LlamaCppTurboquantRepo)/releases/latest"
+    return Get-GitHubRelease -Repo (Get-LlamaCppTurboquantRepo)
+}
 
-    $oldProgress = $global:ProgressPreference
-    $global:ProgressPreference = 'SilentlyContinue'
-    try {
-        return Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 30
+function Resolve-LlamaCppTurboquantRelease {
+    # Same pin-or-latest policy as the native installer, keyed by
+    # LlamaCppTurboquantPinnedTag.
+    $tag = Get-LlamaCppPinnedTag -Key 'LlamaCppTurboquantPinnedTag'
+    if (-not [string]::IsNullOrWhiteSpace($tag)) {
+        Write-Host "  Using pinned turboquant release: $tag" -ForegroundColor DarkGreen
+        return Get-GitHubRelease -Repo (Get-LlamaCppTurboquantRepo) -Tag $tag
     }
-    finally {
-        $global:ProgressPreference = $oldProgress
-    }
+    Write-Host "  No LlamaCppTurboquantPinnedTag set — using latest release (unpinned)." -ForegroundColor DarkYellow
+    return Get-LlamaCppTurboquantLatestRelease
 }
 
 function Select-TurboquantReleaseAsset {
@@ -470,9 +512,9 @@ function Install-LlamaServerTurboquant {
         return $existing
     }
 
-    Write-Host "Resolving latest turboquant release ($(Get-LlamaCppTurboquantRepo))..." -ForegroundColor Cyan
+    Write-Host "Resolving turboquant release ($(Get-LlamaCppTurboquantRepo))..." -ForegroundColor Cyan
 
-    $release = Get-LlamaCppTurboquantLatestRelease
+    $release = Resolve-LlamaCppTurboquantRelease
     $asset = Select-TurboquantReleaseAsset -Release $release
 
     $sizeMB = [math]::Round($asset.size / 1MB, 1)
@@ -566,7 +608,7 @@ function Ensure-LlamaServerTurboquant {
 
     Write-Host ""
     Write-Host "turboquant llama-server is not installed." -ForegroundColor Yellow
-    Write-Host "  Source: github.com/$(Get-LlamaCppTurboquantRepo)/releases/latest" -ForegroundColor DarkGray
+    Write-Host "  Source: github.com/$(Get-LlamaCppTurboquantRepo)/releases" -ForegroundColor DarkGray
     Write-Host "  Target: $(Get-LlamaCppTurboquantInstallRoot)" -ForegroundColor DarkGray
     Write-Host "  Note  : ~700 MB download (Windows x64 CUDA 12.4 only)" -ForegroundColor DarkGray
     $answer = (Read-Host "Download and install now? [Y/n]").Trim().ToLowerInvariant()

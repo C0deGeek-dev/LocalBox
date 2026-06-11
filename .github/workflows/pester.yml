@@ -35,3 +35,21 @@ jobs:
         with:
           name: pester-results
           path: tests/results.xml
+
+  proxy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test tooling
+        run: python -m pip install pytest ruff
+
+      - name: Lint proxy
+        run: ruff check localbox-proxy tests/test_no_think_proxy.py
+
+      - name: Run proxy tests
+        run: python -m pytest tests/test_no_think_proxy.py -q

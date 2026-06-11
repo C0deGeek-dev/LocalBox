@@ -15,6 +15,8 @@ $script:LocalLLMDefaultsKeys = @(
     'LlamaCppPort', 'LlamaCppServerPath',
     'LlamaCppTurboquantRoot', 'LlamaCppTurboquantRepo', 'LlamaCppMtpTurboRoot', 'LlamaCppGgufRoot',
     'LlamaCppDefaultMode', 'LlamaCppHealthCheckTimeoutSec', 'LlamaCppSmokeTestTimeoutSec',
+    'LlamaCppPinnedTag', 'LlamaCppTurboquantPinnedTag', 'LlamaCppMtpTurboCommit',
+    'LlamaCppRequireDownloadPins', 'LlamaCppDownloadPins',
     'LocalModelTools'
 )
 
@@ -231,7 +233,9 @@ function Set-LocalLLMSetting {
         [ordered]@{}
     }
 
-    if ($null -eq $Value -or $Value -eq "") {
+    # Unset on $null or empty string only. A literal $false must persist:
+    # `$Value -eq ""` would coerce "" to $false and treat it as an unset.
+    if ($null -eq $Value -or ($Value -is [string] -and $Value -eq "")) {
         if ($settings.Contains($Key)) {
             $settings.Remove($Key) | Out-Null
             Write-Host "Unset $Key in $path" -ForegroundColor Yellow

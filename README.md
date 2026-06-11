@@ -109,7 +109,8 @@ info -Commands                              full LocalBox + LocalBench command l
 
 A **harness** is the agent loop wrapping the model — the thing that turns raw
 generation into "read this file, run that command, edit this code, then ask the
-user". Claude Code is one such harness. LocalPilot is a fork of it.
+user". Claude Code is one such harness. LocalPilot is an independent,
+clean-room harness with a similar operating model.
 
 ### Claude Code harness (default)
 
@@ -129,13 +130,15 @@ What happens:
    `ANTHROPIC_DEFAULT_*_MODEL` at the model's `Root`, disables thinking +
    prompt caching, bumps `API_TIMEOUT_MS` to 30 min (local prefill is slow on
    big prompts).
-6. Launches `claude --model <root> --dangerously-skip-permissions
+6. Launches `claude --model <root> [--dangerously-skip-permissions]
    [--tools <allowlist>] --append-system-prompt <local-tool-rules>`.
-   The permission skip is the default (matching the historical local flow) but
-   is now opt-out: `Set-LocalLLMSetting LocalModelSkipPermissions $false` (or
-   `LOCAL_LLM_SKIP_PERMISSIONS=0`) restores Claude Code's per-action permission
-   prompts — worth doing for less-aligned local models, where the prompt is the
-   human-in-the-loop that catches a runaway or injected tool call.
+   Whether the permission skip is passed is a first-run decision: the first
+   agent launch asks "skip permission prompts for agent launches? [y/N]" and
+   persists the answer to `settings.json`. The default answer keeps Claude
+   Code's per-action permission prompts — the human-in-the-loop that catches a
+   runaway or injected tool call from a less-aligned local model. Change it
+   any time with `Set-LocalLLMSetting LocalModelSkipPermissions $true|$false`
+   or per-shell with `LOCAL_LLM_SKIP_PERMISSIONS=1|0`.
 7. On exit, restores the original env, stops the proxy, and stops `llama-server`.
 
 The model believes it's Claude. Claude Code believes it's talking to Anthropic.
@@ -512,7 +515,7 @@ Set-LocalLLMSetting LlamaCppNoMmap $false            # disable no-mmap (default 
 Set-LocalLLMSetting LlamaCppAgentParallel 1          # agent slots (default 1; 0 = llama.cpp auto)
 Set-LocalLLMSetting LlamaCppAgentCacheReuse 256      # prompt-cache reuse chunk size (default 256; 0 = llama.cpp default)
 Set-LocalLLMSetting LocalModelMaxOutputTokens 4096   # cap local Claude/LocalPilot completions (0 = tool default)
-Set-LocalLLMSetting LocalModelSkipPermissions $false # require Claude Code permission prompts (default $true = skip them)
+Set-LocalLLMSetting LocalModelSkipPermissions $false # require Claude Code permission prompts (unset = first launch asks once)
 Set-LocalLLMSetting LocalPilotRoot $null             # remove an entry
 ```
 
@@ -522,21 +525,39 @@ The `Models` and `CommandAliases` keys are catalog-only and rejected by
 ### Verified binary downloads
 
 LocalBox downloads `llama-server` binaries from third-party GitHub releases and
-builds the `mtpturbo` binary from a fork branch. Every binary download now goes
-through a SHA-256 check:
+builds the `mtpturbo` binary from a fork branch. Out of the box, every binary
+download is pinned and verified:
 
-- **No pin recorded** → the download proceeds (trust-on-first-use) and prints the
-  computed `sha256=...`. Copy that into a `LlamaCppDownloadPins` map (keyed by the
-  exact asset filename) in `~/.local-llm/settings.json` to pin it:
-  ```json
-  "LlamaCppDownloadPins": { "llama-<tag>-bin-win-cuda-x64.zip": "<sha256>" }
-  ```
-  (`LlamaCppDownloadPins` is a nested map, so edit `settings.json` directly rather
-  than via `Set-LocalLLMSetting`.)
-- **Pin recorded** → a mismatch deletes the file and aborts the install.
-- `LlamaCppRequireDownloadPins $true` makes an *unpinned* download a hard failure.
-- `LlamaCppMtpTurboCommit <sha>` pins the from-source mtpturbo build to an exact
-  commit instead of a force-pushable branch HEAD.
+- **`defaults.json` ships pinned release tags** (`LlamaCppPinnedTag` for
+  llama.cpp, `LlamaCppTurboquantPinnedTag` for turboquant) **and a
+  `LlamaCppDownloadPins` table** with the SHA-256 of every asset those tags can
+  install. Downloads target the pinned tag, and a checksum mismatch deletes the
+  file and aborts the install.
+- **`LlamaCppRequireDownloadPins` defaults to `true`**: an asset with no
+  recorded pin is a hard failure. To opt out of pinning (trust-on-first-use:
+  the download proceeds and prints its `sha256=...`), set it to `false`:
+  `Set-LocalLLMSetting LlamaCppRequireDownloadPins $false`.
+- **`LlamaCppMtpTurboCommit`** pins the from-source mtpturbo build to an exact
+  commit instead of a force-pushable branch HEAD (also pre-set in
+  `defaults.json`).
+
+**Updating the pins** (e.g. to move to a newer llama.cpp build) is a deliberate
+loop, done in `~/.local-llm/settings.json` (overrides the shipped defaults;
+`LlamaCppDownloadPins` is a nested map, so edit the file directly rather than
+via `Set-LocalLLMSetting`):
+
+1. Pick the new tag on the release page and set `LlamaCppPinnedTag` (or
+   `LlamaCppTurboquantPinnedTag`) to it.
+2. Take each asset's SHA-256 from the GitHub release API's `digest` field
+   (`https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/<tag>`)
+   and record it under `LlamaCppDownloadPins`, keyed by the exact asset
+   filename. Cross-check one real download with
+   `(Get-FileHash -Algorithm SHA256 <file>).Hash` if you want a second source.
+3. Reinstall (`Install-LlamaServerNative -Force`) — the install fails loudly
+   if a hash doesn't match.
+
+The same keys in `settings.json` always win over `defaults.json`, so machine
+pins can lead or lag the shipped ones.
 
 ### Per-workspace default model
 

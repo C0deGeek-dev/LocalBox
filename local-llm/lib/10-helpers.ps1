@@ -3,23 +3,61 @@
 
 function Get-LocalModelPermissionArgs {
     # Resolve whether agent launches pass '--dangerously-skip-permissions'.
-    # Default is ON (skip permission prompts) to preserve the historical local
-    # workflow, but it is now opt-out: set LocalModelSkipPermissions=false in
-    # settings.json, or LOCAL_LLM_SKIP_PERMISSIONS=0 in the environment, to get
-    # Claude Code's normal per-action permission prompts back. Permission
-    # prompts are the human-in-the-loop that breaks prompt-injection / runaway
-    # tool calls, which matter more with smaller, less-aligned local models.
-    $skip = $true
-    if ($script:Cfg -and $script:Cfg.Contains('LocalModelSkipPermissions')) {
-        $skip = [bool]$script:Cfg.LocalModelSkipPermissions
-    }
-    if (-not [string]::IsNullOrEmpty($env:LOCAL_LLM_SKIP_PERMISSIONS)) {
-        $skip = $env:LOCAL_LLM_SKIP_PERMISSIONS -notin @('0', 'false', 'no', 'off')
-    }
+    # Resolution order:
+    #   1. LOCAL_LLM_SKIP_PERMISSIONS in the environment (0/false/no/off = keep
+    #      the agent's per-action permission prompts; anything else = skip).
+    #   2. LocalModelSkipPermissions from config (settings.json per machine).
+    #   3. Neither set (first run): ask once and persist the answer, defaulting
+    #      to keeping prompts on. Non-interactive sessions keep prompts on for
+    #      the launch without persisting a choice.
+    # Permission prompts are the human-in-the-loop that breaks prompt-injection
+    # / runaway tool calls, which matter more with smaller, less-aligned local
+    # models — so skipping them is a decision, never an inheritance.
     # Callers wrap the result with @(...), so a scalar (skip on) or empty (off)
     # both normalize cleanly without injecting a stray $null arg.
-    if ($skip) { return @('--dangerously-skip-permissions') }
+    if (-not [string]::IsNullOrEmpty($env:LOCAL_LLM_SKIP_PERMISSIONS)) {
+        if ($env:LOCAL_LLM_SKIP_PERMISSIONS -notin @('0', 'false', 'no', 'off')) {
+            return @('--dangerously-skip-permissions')
+        }
+        return @()
+    }
+
+    if ($script:Cfg -and $script:Cfg.Contains('LocalModelSkipPermissions')) {
+        if ([bool]$script:Cfg.LocalModelSkipPermissions) {
+            return @('--dangerously-skip-permissions')
+        }
+        return @()
+    }
+
+    if (Request-LocalModelPermissionDecision) {
+        return @('--dangerously-skip-permissions')
+    }
     return @()
+}
+
+function Request-LocalModelPermissionDecision {
+    # First agent launch on a machine with no persisted choice: make
+    # permission skipping a conscious decision. Returns $true to skip prompts.
+    # The answer persists to settings.json, so this asks exactly once.
+    Write-Host ""
+    Write-Host "Agent launches can skip the harness's per-action permission prompts" -ForegroundColor Yellow
+    Write-Host "(--dangerously-skip-permissions). Keeping the prompts gives you a" -ForegroundColor DarkGray
+    Write-Host "human-in-the-loop that catches runaway or injected tool calls from" -ForegroundColor DarkGray
+    Write-Host "less-aligned local models. You can change this later with:" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting LocalModelSkipPermissions `$true|`$false" -ForegroundColor DarkGray
+
+    try {
+        $answer = (Read-Host "Skip permission prompts for agent launches? [y/N]").Trim().ToLowerInvariant()
+    }
+    catch {
+        Write-Host "Non-interactive session — keeping permission prompts on for this launch." -ForegroundColor DarkGray
+        return $false
+    }
+
+    $skip = $answer -in @('y', 'yes')
+    Set-LocalLLMSetting LocalModelSkipPermissions $skip
+    if ($script:Cfg) { $script:Cfg['LocalModelSkipPermissions'] = $skip }
+    return $skip
 }
 
 function Ensure-Directory {
