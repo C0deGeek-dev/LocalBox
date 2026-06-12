@@ -36,6 +36,37 @@ jobs:
           name: pester-results
           path: tests/results.xml
 
+  launcher-contract:
+    # Cross-repo guard: assert this launcher still satisfies LocalBench's
+    # documented contract (functions and required parameters), so a breaking
+    # launcher change fails this repo's build, not a user's tuning run.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Checkout LocalBench
+        uses: actions/checkout@v6
+        with:
+          repository: C0deGeek-dev/LocalBench
+          path: external/LocalBench
+
+      - name: Install Pester 5
+        shell: pwsh
+        run: |
+          Install-Module -Name Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Assert contract conformance
+        shell: pwsh
+        env:
+          LOCALBOX_ROOT: ${{ github.workspace }}
+        run: |
+          Import-Module Pester -MinimumVersion 5.0.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'external/LocalBench/tests/launcher-contract-localbox.tests.ps1'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+
   lint:
     runs-on: windows-latest
     steps:

@@ -604,6 +604,12 @@ Example per-model override:
 LocalBox-compatible result to `~/.local-llm/tuner/best-<key>.json`, and
 `Start-ClaudeWithLlamaCppModel -AutoBest` replays that saved profile.
 
+The functions, parameters, shared file formats, and version gates the two
+repos exchange are governed by the formal contract LocalBench owns:
+[`docs/launcher-contract.md`](https://github.com/C0deGeek-dev/LocalBench/blob/main/docs/launcher-contract.md).
+Both repos' CI assert conformance against the real counterpart, so a breaking
+change on either side fails that side's build.
+
 Standard catalog context aliases are `32k`, `64k`, `128k`, and `256k` unless a
 model explicitly lacks support. AutoBest profiles are context-aware: the saved
 entry records both `contextKey` and the resolved `contextTokens`, and launcher
