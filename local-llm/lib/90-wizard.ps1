@@ -1,4 +1,4 @@
-﻿# Interactive wizard. Two implementations: a native selectable console one and
+# Interactive wizard. Two implementations: a native selectable console one and
 # a Spectre.Console one. Start-LLMWizard prefers Spectre when available; set
 # LOCAL_LLM_NO_SPECTRE=1 or use llmc to force the native picker.
 
@@ -1182,7 +1182,9 @@ function Get-LlamaCppWizardAutoBestChoices {
                 Profile = $profileName
             }
         }
-        catch {}
+        catch {
+            Write-Verbose "Skipping saved AutoBest choice for profile '$profileName': $($_.Exception.Message)"
+        }
     }
 
     return @($choices)
@@ -2092,7 +2094,9 @@ function Write-LocalLLMSafeHost {
         }
     }
     catch {
-        try { [Console]::Out.WriteLine($text) } catch { }
+        # Last-resort output path: the console itself is unusable, so there
+        # is nowhere left to report the failure.
+        try { [Console]::Out.WriteLine($text) } catch { $null = $_ }
     }
 }
 
@@ -2121,7 +2125,9 @@ function Save-LocalLLMWizardError {
         ""
     ) -join "`n"
 
-    try { Add-Content -LiteralPath $logPath -Value $block -ErrorAction Stop } catch { }
+    try { Add-Content -LiteralPath $logPath -Value $block -ErrorAction Stop } catch {
+        Write-LocalLLMSafeHost "Could not write error log $logPath : $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
 
     Write-LocalLLMSafeHost ""
     Write-LocalLLMSafeHost "=== ERROR captured ($Context) ===" -ForegroundColor Red

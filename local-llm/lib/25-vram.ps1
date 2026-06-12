@@ -43,7 +43,9 @@ function Get-LocalLLMVRAMInfo {
             if ($val -gt 0) {
                 return @{ GB = $val; Source = "configured" }
             }
-        } catch { }
+        } catch {
+            Write-Verbose "Ignoring non-numeric VRAMGB setting '$($script:Cfg.VRAMGB)'; falling back to auto-detect."
+        }
     }
 
     if ($null -eq $script:LocalLLMVRAMCache) {
@@ -68,7 +70,9 @@ function Get-Q8KvMaxContext {
     # Default scales with VRAM: each GB above ~16 GB is worth ~16k extra q8 tokens
     # (rough heuristic across the catalog's MoE coders). Floors at 64k.
     if ($script:Cfg -and $script:Cfg.Contains("Q8KvMaxContext")) {
-        try { return [int]$script:Cfg.Q8KvMaxContext } catch { }
+        try { return [int]$script:Cfg.Q8KvMaxContext } catch {
+            Write-Verbose "Ignoring non-numeric Q8KvMaxContext setting '$($script:Cfg.Q8KvMaxContext)'; using the VRAM-derived default."
+        }
     }
 
     $vramGB = Get-LocalLLMVRAMGB

@@ -70,7 +70,9 @@ function Test-LlamaCppPortFree {
     }
     finally {
         if ($listener) {
-            try { $listener.Stop() } catch {}
+            try { $listener.Stop() } catch {
+                Write-Verbose "Port-probe listener cleanup failed: $($_.Exception.Message)"
+            }
         }
     }
 }
@@ -106,7 +108,9 @@ function Wait-LlamaServer {
 
     while ((Get-Date) -lt $deadline) {
         if ($Process) {
-            try { $Process.Refresh() } catch {}
+            try { $Process.Refresh() } catch {
+                Write-Verbose "Process refresh failed (it may have exited): $($_.Exception.Message)"
+            }
             if ($Process.HasExited) {
                 if ($progressShownAt) { Write-Host "" }
 

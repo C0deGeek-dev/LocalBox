@@ -55,10 +55,10 @@ function Get-HuggingFaceMmprojFiles {
 
             $bytes = 0L
             if ($s.PSObject.Properties.Match('lfs').Count -gt 0 -and $s.lfs -and $s.lfs.size) {
-                try { $bytes = [long]$s.lfs.size } catch { }
+                try { $bytes = [long]$s.lfs.size } catch { $bytes = 0L }
             }
             if ($bytes -le 0 -and $s.PSObject.Properties.Match('size').Count -gt 0 -and $s.size) {
-                try { $bytes = [long]$s.size } catch { }
+                try { $bytes = [long]$s.size } catch { $bytes = 0L }
             }
 
             $sizeGB = if ($bytes -gt 0) { [math]::Round($bytes / 1000000000, 1) } else { 0 }
@@ -101,10 +101,10 @@ function Get-HuggingFaceFileSizesGB {
 
         $bytes = 0L
         if ($s.PSObject.Properties.Match('lfs').Count -gt 0 -and $s.lfs -and $s.lfs.size) {
-            try { $bytes = [long]$s.lfs.size } catch { }
+            try { $bytes = [long]$s.lfs.size } catch { $bytes = 0L }
         }
         if ($bytes -le 0 -and $s.PSObject.Properties.Match('size').Count -gt 0 -and $s.size) {
-            try { $bytes = [long]$s.size } catch { }
+            try { $bytes = [long]$s.size } catch { $bytes = 0L }
         }
 
         if ($bytes -gt 0) {

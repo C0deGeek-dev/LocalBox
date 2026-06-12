@@ -94,7 +94,7 @@ function Test-LocalLLMModelEntry {
                 foreach ($k in @($Def.QuantSizesGB.Keys)) {
                     $v = $Def.QuantSizesGB[$k]
                     $isNumber = $false
-                    try { [void][double]$v; $isNumber = $true } catch {}
+                    try { [void][double]$v; $isNumber = $true } catch { $isNumber = $false }
                     if (-not $isNumber -or [double]$v -le 0) {
                         Add-LocalLLMValidationError -Errors $Errors -ModelKey $Key -Field "QuantSizesGB.$k" -Message "must be a positive number; got '$v'"
                     }
@@ -148,7 +148,7 @@ function Test-LocalLLMModelEntry {
         $v = $Def.$intField
         if ($null -eq $v) { continue }
         $isInt = $false
-        try { [void][int]$v; $isInt = $true } catch {}
+        try { [void][int]$v; $isInt = $true } catch { $isInt = $false }
         if (-not $isInt) {
             Add-LocalLLMValidationError -Errors $Errors -ModelKey $Key -Field $intField -Message "must be an integer when set; got '$v'"
         }

@@ -176,6 +176,7 @@ function Get-LlamaCppNvidiaProcessMemory {
         }
     } catch {
         # Some Windows/NVIDIA combinations don't report per-process compute memory.
+        Write-Verbose "nvidia-smi per-process compute memory unavailable: $($_.Exception.Message)"
     }
     return $map
 }
@@ -275,6 +276,14 @@ function Get-LlamaCppStatus {
     # Returns an array of per-process status objects. The shape is documented
     # at the bottom of this function so callers can pipe to Format-Table or
     # ConvertTo-Json without surprise.
+    #
+    # The empty catches here are deliberate presence probes: every
+    # `try { $x = $props.<field> } catch {}` reads an optional field that
+    # older/other llama-server builds simply don't ship, and absence is the
+    # informative outcome ($null stays in place). Logging each miss would
+    # spam every status call on every non-bleeding-edge server.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '',
+        Justification = 'optional endpoint fields; absence is the probed state, $null is the result')]
     [CmdletBinding()]
     param(
         [int[]]$ProcessId,

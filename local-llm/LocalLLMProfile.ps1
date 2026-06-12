@@ -1,4 +1,4 @@
-﻿# =========================
+# =========================
 # LocalBox profile entry point
 # llama.cpp + Claude Code + LocalPilot
 # Windows / PowerShell only — does not work in WSL/bash.
@@ -43,7 +43,9 @@ $script:NoThinkProxyPort = [int]$script:Cfg.NoThinkProxyPort
 # launcher's required version. The check is non-fatal (proxy may still work);
 # silent on success. LOCALBOX_SKIP_PROXY_CHECK=1 disables it entirely.
 if ($env:LOCALBOX_SKIP_PROXY_CHECK -ne '1' -and (Get-Command Test-LocalLLMProxyVersion -ErrorAction SilentlyContinue)) {
-    try { Test-LocalLLMProxyVersion | Out-Null } catch {}
+    try { Test-LocalLLMProxyVersion | Out-Null } catch {
+        Write-Verbose "Proxy version check failed: $($_.Exception.Message)"
+    }
 }
 
 Register-ModelShortcuts

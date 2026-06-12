@@ -937,7 +937,9 @@ function Get-LocalNvidiaComputeCapability {
     try {
         $out = & nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>$null | Select-Object -First 1
         if ($out) { return $out.Trim() }
-    } catch {}
+    } catch {
+        Write-Verbose "nvidia-smi compute_cap query failed: $($_.Exception.Message)"
+    }
     return $null
 }
 

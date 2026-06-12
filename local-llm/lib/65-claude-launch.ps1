@@ -449,7 +449,9 @@ function Format-LocalLLMServeGatewayStatus {
             $uptime = (Get-Date) - ([datetime]$Session.StartedAt)
             $lines.Add("Uptime  : {0:hh\:mm\:ss}" -f $uptime) | Out-Null
         }
-        catch {}
+        catch {
+            Write-Verbose "Could not compute uptime from '$($Session.StartedAt)': $($_.Exception.Message)"
+        }
     }
     if ($Session.ContainsKey('GatewayOutLog') -and $Session.GatewayOutLog) {
         $lines.Add("Log out : $($Session.GatewayOutLog)") | Out-Null
@@ -559,7 +561,9 @@ function Get-LocalLLMServeAdvertiseHosts {
             }
         }
     }
-    catch {}
+    catch {
+        Write-Verbose "LAN address enumeration failed: $($_.Exception.Message)"
+    }
 
     if ($hosts.Count -eq 0) {
         $hosts.Add('<server-ip>') | Out-Null

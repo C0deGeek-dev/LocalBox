@@ -15,8 +15,10 @@
     #   PSUseBOMForUnicodeEncodedFile
     # Quarantined legacy debt (tracked for the wizard/launcher extraction
     # work, where each site gets reviewed):
-    #   PSAvoidAssignmentToAutomaticVariable, PSAvoidUsingEmptyCatchBlock,
-    #   PSReviewUnusedParameter
+    #   PSAvoidAssignmentToAutomaticVariable, PSReviewUnusedParameter
+    # PSAvoidUsingEmptyCatchBlock is now blocking: every catch records its
+    # outcome (assignment, log line, or a narrowly justified per-function
+    # SuppressMessage for presence probes).
     ExcludeRules = @(
         'PSAvoidUsingWriteHost',
         'PSUseShouldProcessForStateChangingFunctions',
@@ -25,7 +27,6 @@
         'PSUseOutputTypeCorrectly',
         'PSUseBOMForUnicodeEncodedFile',
         'PSAvoidAssignmentToAutomaticVariable',
-        'PSAvoidUsingEmptyCatchBlock',
         'PSReviewUnusedParameter'
     )
 }

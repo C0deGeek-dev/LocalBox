@@ -36,7 +36,9 @@ function Get-LlamaCppMtpTurboRemoteShortSha {
             if ($sha.Length -ge 7) { return $sha.Substring(0, 7) }
         }
     }
-    catch {}
+    catch {
+        Write-Verbose "git ls-remote for $repo/$branch failed: $($_.Exception.Message)"
+    }
     return ''
 }
 

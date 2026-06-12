@@ -1,4 +1,4 @@
-﻿# LocalBench bridge and AutoBest profile contract.
+# LocalBench bridge and AutoBest profile contract.
 #
 # LocalBox no longer owns llama.cpp benchmark/search logic. Tuning is delegated
 # to LocalBench; this file only keeps the launcher-facing profile I/O and
@@ -118,7 +118,9 @@ function Save-LlamaCppBestConfig {
     }
 
     if (-not $ContextTokens -or $ContextTokens -le 0) {
-        try { $ContextTokens = [int](Get-ModelContextValue -Def (Get-ModelDef -Key $Key) -ContextKey $ContextKey) } catch {}
+        try { $ContextTokens = [int](Get-ModelContextValue -Def (Get-ModelDef -Key $Key) -ContextKey $ContextKey) } catch {
+            Write-Verbose "Could not resolve context tokens for '$Key' ('$ContextKey'): $($_.Exception.Message)"
+        }
     }
 
     $entries = @($existing.entries | Where-Object {
