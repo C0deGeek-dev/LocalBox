@@ -5,7 +5,7 @@
 #   .\install.ps1 -Symlink         symlink files (requires admin / developer mode)
 #   .\install.ps1 -SetupProfile    only ensure $PROFILE dot-sources the deployed entry point
 #   .\install.ps1 -InstallLocalBench   clone LocalBench into ~/.local-llm/tools/localbench if missing
-#   .\install.ps1 -InstallLocalPilot   clone LocalPilot into D:\repos\rust\localpilot if missing
+#   .\install.ps1 -InstallLocalPilot   clone LocalPilot into ~/.local-llm/tools/localpilot if missing
 #   .\install.ps1 -InstallTui      publish LocalBox.Tui and LocalBench.Tui when available
 #   .\install.ps1 -SkipToolPrompts     do not prompt for optional companion checkouts
 #   .\install.ps1 -DryRun          preview the actions without changing anything
@@ -34,7 +34,8 @@ $DeployedLocalLLM = Join-Path $HOME ".local-llm"
 $DeployedProxy = Join-Path $HOME ".localbox-proxy"
 $ManagedToolsRoot = Join-Path $DeployedLocalLLM "tools"
 $ManagedLocalBenchRoot = Join-Path $ManagedToolsRoot "localbench"
-$ManagedLocalPilotRoot = "D:\repos\rust\localpilot"
+$ManagedLocalPilotRoot = Join-Path $ManagedToolsRoot "localpilot"
+$SiblingLocalPilotRoot = Join-Path (Split-Path $RepoRoot -Parent) "LocalPilot"
 $ProfileDotSourceLine = ". `"$DeployedLocalLLM\LocalLLMProfile.ps1`""
 
 # -SetupProfile alone (no -Symlink, no -DryRun) means "just wire up $PROFILE, don't touch files".
@@ -357,6 +358,7 @@ function Find-LocalPilotInstall {
 
     if ($settings.Contains("LocalPilotRoot")) { $candidates += [string]$settings.LocalPilotRoot }
     if ($catalog.Contains("LocalPilotRoot")) { $candidates += [string]$catalog.LocalPilotRoot }
+    $candidates += $SiblingLocalPilotRoot
     $candidates += $ManagedLocalPilotRoot
 
     foreach ($candidate in $candidates) {
@@ -573,7 +575,7 @@ function Show-Diagnostics {
         Write-Host "localpilot: ok  ($($localpilot.Root))" -ForegroundColor Green
     }
     else {
-        Write-Host "localpilot: missing — installer can clone https://github.com/C0deGeek-dev/LocalPilot into D:\repos\rust\localpilot" -ForegroundColor Yellow
+        Write-Host "localpilot: missing — installer can clone https://github.com/C0deGeek-dev/LocalPilot into $ManagedLocalPilotRoot" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -629,7 +631,7 @@ if (-not $DryRun) {
     Write-Host ""
     Write-Host "Per-machine settings (paths, defaults) belong in ~/.local-llm/settings.json." -ForegroundColor DarkGray
     Write-Host "Use the helper instead of editing JSON:" -ForegroundColor DarkGray
-    Write-Host "  Set-LocalLLMSetting LocalPilotRoot 'D:\repos\rust\localpilot'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting LocalPilotRoot '<path-to-localpilot>'" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting LocalBenchRoot '<path-to-localbench>'" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting Default q36plus" -ForegroundColor DarkGray
 }

@@ -148,8 +148,9 @@ The proxy quietly strips Anthropic-only fields the local backend can't parse.
 
 Same flow, except the launch shells into `localpilot chat --model <model>`
 instead of `claude`. `LocalPilotRoot` points at the Rust checkout used by
-LocalBox update/install flows; the default is `D:\repos\rust\localpilot`, and
-`LocalPilotRepoUrl` defaults to
+LocalBox update/install flows; when unset, LocalBox discovers a sibling
+`LocalPilot` checkout next to the LocalBox repo and otherwise falls back to
+`~/.local-llm/tools/localpilot`. `LocalPilotRepoUrl` defaults to
 `https://github.com/C0deGeek-dev/LocalPilot`.
 
 ```powershell
@@ -360,8 +361,9 @@ llmtui                           # Terminal.Gui TUI, explicit preview path
 info                             # verify: VRAM, default model, configured quants
 ```
 
-The install step offers to clone missing LocalBench into `~/.local-llm/tools/`
-and LocalPilot into `D:\repos\rust\localpilot`. Use `-SkipToolPrompts` for
+The install step offers to clone missing LocalBench and LocalPilot into
+`~/.local-llm/tools/` (a sibling `LocalPilot` checkout next to the LocalBox
+repo is detected and used first). Use `-SkipToolPrompts` for
 unattended installs. `Show-Diagnostics` also reports on `python`, the
 `localpilot` CLI, `PwshSpectreConsole`, LocalBench, and LocalPilot.
 Installs also record `LocalBoxRoot` in `settings.json`, which lets `llm-update`
@@ -499,7 +501,7 @@ to fix paths on a fresh machine.
 Use the helper instead of editing JSON:
 
 ```powershell
-Set-LocalLLMSetting LocalPilotRoot 'D:\repos\rust\localpilot'   # usually auto-set by install.ps1
+Set-LocalLLMSetting LocalPilotRoot '<path-to-localpilot>'   # else: sibling checkout, then ~/.local-llm/tools/localpilot
 Set-LocalLLMSetting LocalBenchRoot '<path-to-localbench>'   # usually auto-set by install.ps1
 Set-LocalLLMSetting LocalBoxRoot '<path-to-LocalBox>'        # auto-set by install.ps1
 Set-LocalLLMSetting Default q36plus

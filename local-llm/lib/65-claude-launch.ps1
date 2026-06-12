@@ -153,6 +153,39 @@ function Test-LocalLLMServePublicHttp {
     return $true
 }
 
+function Get-LocalLLMServeGuardDecision {
+    # Pure decision logic for the serve-gateway exposure guard, separated so
+    # the refuse/allow/opt-in matrix is unit-testable without starting
+    # anything. Open (no-auth) HTTP on a public-looking address is refused
+    # unless the caller opts in explicitly; password-only public HTTP stays
+    # allowed-with-warning.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'Password')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string[]]$BaseUrls,
+        [AllowEmptyString()][string]$Password = '',
+        [switch]$AllowPublicNoAuth
+    )
+
+    $publicUrls = @($BaseUrls | Where-Object { Test-LocalLLMServePublicHttp -BaseUrl $_ })
+    $noAuth = [string]::IsNullOrWhiteSpace($Password)
+    $refuse = ($publicUrls.Count -gt 0) -and $noAuth -and (-not $AllowPublicNoAuth)
+
+    $reason = ''
+    if ($refuse) {
+        $reason = "open (no auth) HTTP on a public-looking address: $($publicUrls -join ', '). " +
+            "Set a password (-Password or LOCAL_LLM_SERVE_PASS), bind a private address " +
+            "(-ListenHost/-AdvertiseHost), or opt in explicitly with -AllowPublicNoAuth."
+    }
+
+    return [pscustomobject]@{
+        PublicUrls = $publicUrls
+        Refuse     = $refuse
+        OptedIn    = [bool]($AllowPublicNoAuth -and $noAuth -and $publicUrls.Count -gt 0)
+        Reason     = $reason
+    }
+}
+
 function Set-ClaudeLocalEnv {
     # Common env-var setup for the llama-server backend. Caller
     # is responsible for Save-ClaudeEnvBackup before and Restore-ClaudeEnvBackup
@@ -865,14 +898,13 @@ function Start-LocalLLMServeGateway {
         [string]$Password = $env:LOCAL_LLM_SERVE_PASS,
         [string[]]$ExtraArgs,
         [switch]$NoMonitor,
+        [switch]$AllowPublicNoAuth,
         [switch]$DryRun
     )
 
     if ($ListenPort -le 0) {
         $ListenPort = $script:NoThinkProxyPort
     }
-
-    $backendInfo = Start-LocalLLMLlamaCppServeBackend -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict -UseVision:$UseVision -AutoBest:$AutoBest -AutoBestProfile $AutoBestProfile -ExtraArgs $ExtraArgs -DryRun:$DryRun
 
     $hosts = if ([string]::IsNullOrWhiteSpace($AdvertiseHost)) {
         Get-LocalLLMServeAdvertiseHosts -ListenHost $ListenHost
@@ -882,10 +914,22 @@ function Start-LocalLLMServeGateway {
     $baseUrls = @($hosts | ForEach-Object { "http://${_}:$ListenPort" })
     $primaryBaseUrl = $baseUrls[0]
 
+    # Exposure guard runs before the backend spins up: refusing after a model
+    # load would waste the load and leave a server to tear down.
+    $guard = Get-LocalLLMServeGuardDecision -BaseUrls $baseUrls -Password $Password -AllowPublicNoAuth:$AllowPublicNoAuth
+    if ($guard.Refuse -and -not $DryRun) {
+        throw "Serve gateway refused: $($guard.Reason)"
+    }
+
+    $backendInfo = Start-LocalLLMLlamaCppServeBackend -Key $Key -ContextKey $ContextKey -Mode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict -UseVision:$UseVision -AutoBest:$AutoBest -AutoBestProfile $AutoBestProfile -ExtraArgs $ExtraArgs -DryRun:$DryRun
+
     if ($DryRun) {
         $commands = Get-LocalLLMServeClientEnvCommands -BaseUrl $primaryBaseUrl -Password $Password
         $notes = @("Example LocalPilot command: $($commands.Bash -join '; '); localpilot")
-        if (Test-LocalLLMServePublicHttp -BaseUrl $primaryBaseUrl) {
+        if ($guard.Refuse) {
+            $notes += "A real launch would refuse: $($guard.Reason)"
+        }
+        elseif (Test-LocalLLMServePublicHttp -BaseUrl $primaryBaseUrl) {
             $authNote = if ([string]::IsNullOrWhiteSpace($Password)) { "Open (no auth)" } else { "Password-only" }
             $notes += "$authNote HTTP on a public-looking address is not encrypted."
         }

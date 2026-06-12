@@ -52,6 +52,32 @@ function Expand-LocalLLMPath {
     return $expanded
 }
 
+function Find-LocalLLMLocalPilotRoot {
+    # Resolves a LocalPilot checkout when no explicit LocalPilotRoot setting
+    # exists. Discovery order: a sibling checkout next to the LocalBox repo,
+    # then the installer-managed tools dir. Returns the managed default even
+    # when nothing exists yet, so messages can point at where a clone lands.
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$LocalBoxRoot = '')
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($LocalBoxRoot)) {
+        $parent = Split-Path -Path $LocalBoxRoot -Parent
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            $candidates += (Join-Path $parent 'LocalPilot')
+        }
+    }
+    $managedDefault = Join-Path $HOME '.local-llm\tools\localpilot'
+    $candidates += $managedDefault
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path (Join-Path $candidate 'Cargo.toml')) {
+            return $candidate
+        }
+    }
+    return $managedDefault
+}
+
 function Get-LocalLLMSettingsPath {
     if ($env:LOCAL_LLM_SETTINGS) {
         return $env:LOCAL_LLM_SETTINGS
@@ -159,7 +185,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LocalBenchRepoUrl"))             { $cfg.LocalBenchRepoUrl = "https://github.com/C0deGeek-dev/LocalBench" }
     if (-not $cfg.ContainsKey("LocalBenchMinimumVersion"))      { $cfg.LocalBenchMinimumVersion = "0.1.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
-    if (-not $cfg.ContainsKey("LocalPilotRoot"))                { $cfg.LocalPilotRoot = "D:\repos\rust\localpilot" }
+    if (-not $cfg.ContainsKey("LocalPilotRoot"))                { $cfg.LocalPilotRoot = "" }
     if (-not $cfg.ContainsKey("CodexEnableSearch"))             { $cfg.CodexEnableSearch = $false }
     if (-not $cfg.ContainsKey("CodexBypassApprovalsAndSandbox")) { $cfg.CodexBypassApprovalsAndSandbox = $true }
     if (-not $cfg.ContainsKey("CodexStreamIdleTimeoutMs"))       { $cfg.CodexStreamIdleTimeoutMs = 10000000 }
@@ -181,11 +207,8 @@ function Import-LocalLLMConfig {
     $cfg.LocalBoxRoot           = Expand-LocalLLMPath $cfg.LocalBoxRoot
 
     $cfg.LocalPilotRoot = Expand-LocalLLMPath $cfg.LocalPilotRoot
-    $legacyLocalPilotLeaf = Split-Path -Path ([string]$cfg.LocalPilotRoot) -Leaf
-    $legacyLocalPilotParent = Split-Path -Path ([string]$cfg.LocalPilotRoot) -Parent
-    $legacyRustLeaf = 'LocalPilot' + '-Rust'
-    if ($legacyLocalPilotParent -eq 'D:\repos' -and $legacyLocalPilotLeaf -in @('LocalPilot', $legacyRustLeaf)) {
-        $cfg.LocalPilotRoot = 'D:\repos\rust\localpilot'
+    if ([string]::IsNullOrWhiteSpace([string]$cfg.LocalPilotRoot)) {
+        $cfg.LocalPilotRoot = Find-LocalLLMLocalPilotRoot -LocalBoxRoot ([string]$cfg.LocalBoxRoot)
     }
 
     if (-not $cfg.ContainsKey("NoThinkProxyPort")) {
