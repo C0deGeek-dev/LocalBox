@@ -183,7 +183,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LocalModelMaxOutputTokens"))     { $cfg.LocalModelMaxOutputTokens = 4096 }
     if (-not $cfg.ContainsKey("LocalBenchRoot"))                { $cfg.LocalBenchRoot = "" }
     if (-not $cfg.ContainsKey("LocalBenchRepoUrl"))             { $cfg.LocalBenchRepoUrl = "https://github.com/C0deGeek-dev/LocalBench" }
-    if (-not $cfg.ContainsKey("LocalBenchMinimumVersion"))      { $cfg.LocalBenchMinimumVersion = "0.1.0" }
+    if (-not $cfg.ContainsKey("LocalBenchMinimumVersion"))      { $cfg.LocalBenchMinimumVersion = "0.3.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
     if (-not $cfg.ContainsKey("LocalPilotRoot"))                { $cfg.LocalPilotRoot = "" }
     if (-not $cfg.ContainsKey("CodexEnableSearch"))             { $cfg.CodexEnableSearch = $false }
