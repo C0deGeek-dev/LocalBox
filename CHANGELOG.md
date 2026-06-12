@@ -2,6 +2,12 @@
 
 Past-tense record of shipped changes.
 
+## 2026-06-12 - v0.2.0-beta.1 LocalX release train
+
+- Aligned LocalBox with the coordinated LocalX `v0.2.0-beta.1` beta release.
+- Kept the LocalBench launcher contract binding and updated the no-think proxy
+  required version marker for this release train.
+
 ## 2026-06-03 - Serve gateway rename
 
 - **Remote launch target renamed to Serve.** The TUI action contract now uses `serve`, the command is `llmserve`, the password environment variable is `LOCAL_LLM_SERVE_PASS`, and the docs describe the gateway as serving any Anthropic-compatible agentic client, with LocalPilot as one example.
