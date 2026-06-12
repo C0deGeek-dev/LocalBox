@@ -52,7 +52,7 @@ LOG = logging.getLogger("no-think-proxy")
 # handling). LocalBox compares this against NoThinkProxyRequiredVersion in
 # defaults.json and warns when the deployed proxy is older than the launcher
 # expects. Format: SemVer.
-__version__ = "0.2.0-beta.1"
+__version__ = "0.3.0-beta.1"
 
 
 TARGET_HOST = "127.0.0.1"

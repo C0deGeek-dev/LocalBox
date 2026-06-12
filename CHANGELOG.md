@@ -2,9 +2,9 @@
 
 Past-tense record of shipped changes.
 
-## 2026-06-12 - v0.2.0-beta.1 LocalX release train
+## 2026-06-12 - v0.3.0-beta.1 LocalX release train
 
-- Aligned LocalBox with the coordinated LocalX `v0.2.0-beta.1` beta release.
+- Aligned LocalBox with the coordinated LocalX `v0.3.0-beta.1` beta release.
 - Kept the LocalBench launcher contract binding and updated the no-think proxy
   required version marker for this release train.
 
