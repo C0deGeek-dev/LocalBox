@@ -1,4 +1,4 @@
-﻿# Status / dashboard / per-model detail. Prefers PwshSpectreConsole when
+# Status / dashboard / per-model detail. Prefers PwshSpectreConsole when
 # installed; falls back to plain Write-Host. The fallback path stays usable on
 # fresh machines without any module installs.
 
@@ -654,7 +654,6 @@ function Show-ModelDetailFallback {
     param([Parameter(Mandatory = $true)][string]$Key)
 
     $def = Get-ModelDef -Key $Key
-    $tier = Get-ModelTier -Def $def
     $tierBadge = Format-ModelTierBadge -Def $def
 
     Write-Host ""

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 no-think-proxy
 ==============
@@ -52,7 +52,7 @@ LOG = logging.getLogger("no-think-proxy")
 # handling). LocalBox compares this against NoThinkProxyRequiredVersion in
 # defaults.json and warns when the deployed proxy is older than the launcher
 # expects. Format: SemVer "MAJOR.MINOR.PATCH".
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 
 TARGET_HOST = "127.0.0.1"
@@ -78,28 +78,68 @@ UPSTREAM_ERROR_CAPTURE_BYTES = 8 * 1024
 UPSTREAM_ERROR_LOG_BYTES = 2 * 1024
 
 # Online-guessing throttle for the auth gate. Keyed by client IP. After
-# AUTH_FAIL_FREE failures, each subsequent failure sleeps for a growing delay
-# (capped) before the 401 is returned, so a LAN attacker can't brute-force the
-# token at wire speed. A successful auth from the same IP resets the counter.
+# AUTH_FAIL_FREE failures, each subsequent failure sleeps for a short, growing
+# delay before the 401; once an IP is deep enough into the penalty window the
+# proxy stops sleeping (which would pin a handler thread) and replies 429 with
+# Retry-After instead. A successful auth from the same IP resets the counter.
 AUTH_FAIL_FREE = 5
 AUTH_FAIL_DELAY_STEP = 0.5          # seconds added per failure past the free ones
-AUTH_FAIL_DELAY_MAX = 5.0           # seconds, ceiling per attempt
+AUTH_FAIL_DELAY_MAX = 2.0           # seconds; deeper offenders get a 429, not a sleep
+AUTH_FAIL_REJECT_AFTER = 4.0        # computed delay at/above this -> immediate 429
 AUTH_FAIL_WINDOW = 300.0            # seconds; failure counters older than this reset
 _auth_fail_lock = threading.Lock()
-_auth_fail_state = {}               # ip -> [fail_count, first_fail_monotonic]
+_auth_fail_state = {}               # ip -> (fail_count, first_fail_monotonic)
+
+# Bound the number of requests handled at once. ThreadingHTTPServer spawns one
+# thread per connection with no ceiling; under a connection flood that means
+# unbounded threads and memory. Excess requests get a fast 503.
+MAX_CONCURRENT_REQUESTS = 64
+_concurrency_gate = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
+
+# Operational counters surfaced on /health. Coarse by design: enough to see
+# "is it taking traffic / is something being rejected" at a glance.
+_counters_lock = threading.Lock()
+_counters = {
+    "requests_total": 0,
+    "auth_failures_total": 0,
+    "throttled_total": 0,
+    "rejected_busy_total": 0,
+}
+
+
+def _count(name):
+    with _counters_lock:
+        _counters[name] += 1
+
+
+def _counters_snapshot():
+    with _counters_lock:
+        return dict(_counters)
 
 
 def _register_auth_failure(ip):
-    """Record a failed auth from `ip` and return how long to sleep before replying."""
+    """Record a failed auth from `ip`.
+
+    Returns the penalty in seconds. Callers sleep for values below
+    AUTH_FAIL_REJECT_AFTER and send an immediate 429 for values at or above
+    it. Expired entries for other IPs are swept opportunistically so the
+    state table cannot grow without bound.
+    """
     now = time.monotonic()
     with _auth_fail_lock:
+        expired = [
+            peer
+            for peer, (_, first) in _auth_fail_state.items()
+            if now - first > AUTH_FAIL_WINDOW
+        ]
+        for peer in expired:
+            del _auth_fail_state[peer]
+
         count, first = _auth_fail_state.get(ip, (0, now))
-        if now - first > AUTH_FAIL_WINDOW:
-            count, first = 0, now
         count += 1
         _auth_fail_state[ip] = (count, first)
     over = max(0, count - AUTH_FAIL_FREE)
-    return min(over * AUTH_FAIL_DELAY_STEP, AUTH_FAIL_DELAY_MAX)
+    return over * AUTH_FAIL_DELAY_STEP
 
 
 def _clear_auth_failures(ip):
@@ -336,6 +376,23 @@ class ThinkStripper:
         return out
 
 
+def _find_sse_separator(buffer):
+    """Locate the earliest SSE event separator in `buffer`.
+
+    The SSE spec allows events to be terminated by `\\n\\n`, `\\r\\n\\r\\n`,
+    or mixed line endings; llama-server builds differ. Returns
+    ``(index, separator_length)`` or ``(-1, 0)``.
+    """
+    candidates = []
+    for separator in (b"\r\n\r\n", b"\n\n"):
+        idx = buffer.find(separator)
+        if idx != -1:
+            candidates.append((idx, len(separator)))
+    if not candidates:
+        return -1, 0
+    return min(candidates)
+
+
 def _strip_think_in_obj(obj):
     """
     Walk a non-streaming Anthropic /v1/messages response and strip <think>
@@ -454,10 +511,33 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 _clear_auth_failures(client_ip)
             return True
 
+        _count("auth_failures_total")
         # Throttle repeated failures from the same IP to blunt online guessing.
+        # Light offenders get a short sleep; an IP deep in the penalty window
+        # gets an immediate 429 so it cannot pin handler threads by failing.
         delay = _register_auth_failure(client_ip)
+        if delay >= AUTH_FAIL_REJECT_AFTER:
+            _count("throttled_total")
+            self.log_message(
+                "throttling unauthorized %s %s from %s", self.command, self.path, client_ip
+            )
+            self.send_response(429)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Retry-After", str(int(AUTH_FAIL_WINDOW)))
+            self.send_header("Connection", "close")
+            body = b"Too many failed authentication attempts.\n"
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+
+            try:
+                self.wfile.write(body)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+
+            return False
         if delay > 0:
-            time.sleep(delay)
+            time.sleep(min(delay, AUTH_FAIL_DELAY_MAX))
 
         self.log_message("unauthorized %s %s from %s", self.command, self.path, client_ip)
         self.send_response(401)
@@ -479,9 +559,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _read_body(self):
         """Read the request body, bounded by MAX_REQUEST_BODY_BYTES.
 
-        Returns the body bytes, or None if the body was rejected as too large
-        (in which case a 413 has already been sent and the caller must return).
+        Returns the body bytes, or None when the request was rejected (a 4xx
+        has already been sent and the caller must return). Chunked transfer
+        encoding is rejected explicitly with 411: the read path is
+        Content-Length-based, and silently treating a chunked body as empty
+        would forward a mutilated request upstream.
         """
+        transfer_encoding = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in transfer_encoding:
+            self.log_message(
+                "rejecting chunked transfer-encoding from %s", self.client_address[0]
+            )
+            self._send_plain(411, "Chunked transfer encoding is not supported; send Content-Length.")
+            return None
+
         length = int(self.headers.get("Content-Length", "0") or "0")
 
         if length <= 0:
@@ -511,12 +602,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception:
             return body
 
-        data = strip_thinking_fields(data)
+        # Only JSON objects carry the fields we rewrite. A top-level array or
+        # scalar is forwarded untouched (previously this crashed the handler).
+        if not isinstance(data, dict):
+            return body
 
-        # Extra hard disable, useful for Claude Code wrappers.
-        data.pop("thinking", None)
-        data.pop("reasoning", None)
-        data.pop("reasoning_effort", None)
+        data = strip_thinking_fields(data)
 
         if MERGE_SYSTEM_MESSAGES:
             data, merged = merge_system_messages(data)
@@ -561,13 +652,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             buffer += chunk
 
             while True:
-                sep_idx = buffer.find(b"\n\n")
+                sep_idx, sep_len = _find_sse_separator(buffer)
 
                 if sep_idx == -1:
                     break
 
                 event_bytes = buffer[:sep_idx]
-                buffer = buffer[sep_idx + 2:]
+                buffer = buffer[sep_idx + sep_len:]
                 emit = self._rewrite_event(event_bytes, get_stripper, strippers)
 
                 try:
@@ -596,6 +687,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         out_lines = []
 
         for line in event_bytes.split(b"\n"):
+            # Upstreams may terminate SSE lines with \r\n; the \r is not part
+            # of the field value.
+            line = line.rstrip(b"\r")
             if not line.startswith(b"data: "):
                 out_lines.append(line)
                 continue
@@ -660,6 +754,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
             out_lines.append(line)
 
         return prefix_events + b"\n".join(out_lines) + b"\n\n"
+
+    def _busy(self):
+        """Reply 503 when the concurrency ceiling is reached."""
+        _count("rejected_busy_total")
+        self.log_message(
+            "rejecting request, %d concurrent requests in flight", MAX_CONCURRENT_REQUESTS
+        )
+        self.send_response(503)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Retry-After", "1")
+        self.send_header("Connection", "close")
+        body = b"Proxy is at its concurrency limit.\n"
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+
+        try:
+            self.wfile.write(body)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def _forward(self, method):
         if not self._require_auth():
@@ -811,20 +925,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 pass
 
     def do_GET(self):
+        _count("requests_total")
         if not self._require_auth():
             return
 
         if self.path in {"/", "/health", "/healthz"}:
-            body = json.dumps(
-                {
-                    "status": "ok",
-                    "auth_required": bool(AUTH_TOKEN),
-                    "target_host": TARGET_HOST,
-                    "target_port": TARGET_PORT,
-                    "target": f"{TARGET_HOST}:{TARGET_PORT}",
-                },
-                separators=(",", ":"),
-            ).encode("utf-8")
+            health = {
+                "status": "ok",
+                "version": __version__,
+                "auth_required": bool(AUTH_TOKEN),
+                "target_host": TARGET_HOST,
+                "target_port": TARGET_PORT,
+                "target": f"{TARGET_HOST}:{TARGET_PORT}",
+                "counters": _counters_snapshot(),
+            }
+            body = json.dumps(health, separators=(",", ":")).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -838,10 +953,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 pass
             return
 
-        self._forward("GET")
+        if not _concurrency_gate.acquire(blocking=False):
+            self._busy()
+            return
+        try:
+            self._forward("GET")
+        finally:
+            _concurrency_gate.release()
 
     def do_POST(self):
-        self._forward("POST")
+        _count("requests_total")
+        if not _concurrency_gate.acquire(blocking=False):
+            self._busy()
+            return
+        try:
+            self._forward("POST")
+        finally:
+            _concurrency_gate.release()
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -943,11 +1071,19 @@ def main():
         else os.environ.get("NO_THINK_PROXY_LISTEN_HOST", "127.0.0.1")
     )
 
-    AUTH_TOKEN = (
-        sys.argv[4]
-        if len(sys.argv) > 4
-        else os.environ.get("NO_THINK_PROXY_AUTH_TOKEN", "")
-    )
+    # DEPRECATED: passing the auth token as argv[4] leaks it to anything that
+    # can list processes (Task Manager, `ps`, WMI). Use the
+    # NO_THINK_PROXY_AUTH_TOKEN environment variable; the argv path will be
+    # removed in the next major version.
+    if len(sys.argv) > 4 and sys.argv[4]:
+        AUTH_TOKEN = sys.argv[4]
+        print(
+            "WARNING: passing the auth token on the command line is deprecated "
+            "(visible in the process list). Set NO_THINK_PROXY_AUTH_TOKEN instead.",
+            file=sys.stderr,
+        )
+    else:
+        AUTH_TOKEN = os.environ.get("NO_THINK_PROXY_AUTH_TOKEN", "")
 
     TARGET_HOST, TARGET_PORT = _parse_target(target_spec)
 

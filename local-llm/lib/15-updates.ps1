@@ -1,4 +1,4 @@
-﻿# Git-backed update helpers for LocalBox and optional companion checkouts.
+# Git-backed update helpers for LocalBox and optional companion checkouts.
 
 function Find-LocalBoxCheckoutUpwards {
     [CmdletBinding()]
@@ -578,6 +578,11 @@ function Migrate-LocalLLMConfig {
     # carries the legacy top-level scalars and a defaults.json doesn't yet exist
     # next to it, splits them out. Idempotent: returns 'noop' when nothing
     # needs doing.
+    #
+    # -WhatIf is a deliberately hand-rolled dry-run (it prints the migration
+    # plan rather than gating individual writes), so SupportsShouldProcess
+    # does not fit; keep the manual switch.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSupportsShouldProcess', '')]
     [CmdletBinding()]
     param([switch]$WhatIf, [switch]$Quiet)
 

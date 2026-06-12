@@ -89,6 +89,10 @@ function ConvertTo-LocalLLMPowerShellDoubleQuoted {
 }
 
 function Get-LocalLLMServeClientEnvCommands {
+    # The gateway token is handed to client harnesses through environment
+    # variables, so it must exist as a plain string at this boundary; a
+    # SecureString could not be exported.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'Password')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$BaseUrl,
@@ -532,6 +536,9 @@ function Get-LocalLLMServeAdvertiseHosts {
 }
 
 function Show-LocalLLMServeClientInstructions {
+    # See Get-LocalLLMServeClientEnvCommands: the token crosses an env-var
+    # boundary and cannot be a SecureString.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'Password')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string[]]$BaseUrls,
@@ -837,6 +844,9 @@ function Disable-LlamaCppSpecDecode {
 }
 
 function Start-LocalLLMServeGateway {
+    # See Get-LocalLLMServeClientEnvCommands: the token crosses an env-var
+    # boundary and cannot be a SecureString.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'Password')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,

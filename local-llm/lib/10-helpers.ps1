@@ -35,10 +35,48 @@ function Get-LocalModelPermissionArgs {
     return @()
 }
 
+function Show-LocalBoxSecuritySummary {
+    # One screen turning the repo's invisible security postures into visible
+    # ones: permission-skip status, proxy exposure, and supply-chain pin
+    # status. Shown on the first agent launch (alongside the permission
+    # decision) and callable directly any time.
+    [CmdletBinding()]
+    param()
+
+    $cfg = $script:Cfg
+
+    $permission = if ($cfg -and $cfg.Contains('LocalModelSkipPermissions')) {
+        if ([bool]$cfg.LocalModelSkipPermissions) { 'SKIPPED (agents run without per-action prompts)' } else { 'prompts on (per-action approval)' }
+    } else {
+        'undecided - this launch will ask'
+    }
+
+    $proxyPort = if ($cfg -and $cfg.Contains('NoThinkProxyPort')) { $cfg.NoThinkProxyPort } else { 11435 }
+    $serveAuth = if ([string]::IsNullOrWhiteSpace($env:LOCAL_LLM_SERVE_PASS)) { 'no token set (gateway would be open)' } else { 'token set' }
+
+    $pins = if ($cfg -and $cfg.Contains('LlamaCppDownloadPins') -and $cfg.LlamaCppDownloadPins) { @($cfg.LlamaCppDownloadPins.Keys).Count } else { 0 }
+    $requirePins = $cfg -and $cfg.Contains('LlamaCppRequireDownloadPins') -and [bool]$cfg.LlamaCppRequireDownloadPins
+    $pinnedTag = if ($cfg -and $cfg.Contains('LlamaCppPinnedTag') -and $cfg.LlamaCppPinnedTag) { [string]$cfg.LlamaCppPinnedTag } else { 'none (latest, unpinned)' }
+    $pinLine = if ($requirePins) {
+        "$pins asset pin(s), unpinned downloads blocked, llama.cpp tag $pinnedTag"
+    } else {
+        "$pins asset pin(s), unpinned downloads ALLOWED (trust-on-first-use), llama.cpp tag $pinnedTag"
+    }
+
+    Write-Host ""
+    Write-Host "=== LocalBox security posture ===" -ForegroundColor Cyan
+    Write-Host ("  Agent permission prompts : {0}" -f $permission) -ForegroundColor Gray
+    Write-Host ("  Agent proxy              : 127.0.0.1:{0} (local only)" -f $proxyPort) -ForegroundColor Gray
+    Write-Host ("  Serve gateway (if used)  : listens on 0.0.0.0; auth: {0}" -f $serveAuth) -ForegroundColor Gray
+    Write-Host ("  Binary download pins     : {0}" -f $pinLine) -ForegroundColor Gray
+    Write-Host "  Change via Set-LocalLLMSetting; see README 'Verified binary downloads'." -ForegroundColor DarkGray
+}
+
 function Request-LocalModelPermissionDecision {
     # First agent launch on a machine with no persisted choice: make
     # permission skipping a conscious decision. Returns $true to skip prompts.
     # The answer persists to settings.json, so this asks exactly once.
+    Show-LocalBoxSecuritySummary
     Write-Host ""
     Write-Host "Agent launches can skip the harness's per-action permission prompts" -ForegroundColor Yellow
     Write-Host "(--dangerously-skip-permissions). Keeping the prompts gives you a" -ForegroundColor DarkGray
