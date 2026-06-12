@@ -78,6 +78,7 @@ function Format-LlamaCppOverrides {
 }
 
 function Save-LlamaCppBestConfig {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -174,6 +175,7 @@ function Save-LlamaCppBestConfig {
 }
 
 function Get-BestLlamaCppConfig {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     # Loads a saved best-config entry matching (key, quant, contextKey, mode, vramGB+/-1).
     # Returns $null on miss. The launcher uses this for -AutoBest.
     [CmdletBinding()]
@@ -239,6 +241,7 @@ function Get-BestLlamaCppConfig {
 }
 
 function Get-PreferredLlamaCppBestConfig {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     # For agentic/coding launches, prefer profiles tuned against long prefill
     # and end-to-end scoring. Fall back to short/generation v4 profiles only
     # when no better match exists, so existing installs still launch with a
@@ -286,6 +289,7 @@ function Get-PreferredLlamaCppBestConfig {
 }
 
 function Get-LlamaCppBestConfigCandidates {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -364,7 +368,7 @@ function Remove-LlamaCppBestConfig {
         }
 
         $entryContextKey = try { Resolve-ModelContextKey -Def $def -ContextKey ([string]$entry.contextKey) } catch { [string]$entry.contextKey }
-        $matches = (
+        $entryMatches = (
             $entryContextKey -eq $ContextKey -and
             $entry.mode -eq $Mode -and
             $vramMatches -and
@@ -372,7 +376,7 @@ function Remove-LlamaCppBestConfig {
             ([string]::IsNullOrWhiteSpace($Quant) -or $entry.quant -eq $Quant)
         )
 
-        if ($matches) {
+        if ($entryMatches) {
             $removed++
             if ($entry.localbench_profile_path) {
                 $removedLocalBenchProfiles += [string]$entry.localbench_profile_path
@@ -439,6 +443,7 @@ function Test-LlamaCppBestConfigStale {
 }
 
 function Save-BestLlamaCppConfig {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -464,6 +469,7 @@ function Save-BestLlamaCppConfig {
 }
 
 function Find-BestLlamaCppConfig {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -560,6 +566,7 @@ function Show-LlamaCppTunerHistory {
 }
 
 function findbest {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true, Position = 0)][string]$Key,
@@ -593,6 +600,7 @@ function findbest {
 }
 
 function tunellm {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true, Position = 0)][string]$Key,

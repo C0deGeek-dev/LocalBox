@@ -1,4 +1,4 @@
-﻿# Structured API for Terminal.Gui and other machine clients.
+# Structured API for Terminal.Gui and other machine clients.
 # These functions intentionally return objects only; do not write formatted
 # console output here.
 
@@ -296,6 +296,7 @@ function ConvertTo-LocalBoxTuiPowerShellLiteral {
 }
 
 function New-LocalBoxTuiSelectionCommand {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -374,6 +375,7 @@ function New-LocalBoxTuiSelectionCommand {
 }
 
 function Invoke-LocalBoxTuiFindBest {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -526,6 +528,7 @@ function Invoke-LocalBoxTuiResetBest {
 }
 
 function Invoke-LocalBoxTuiLaunch {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -563,6 +566,7 @@ function Invoke-LocalBoxTuiLaunch {
 }
 
 function New-LocalBoxTuiLaunchPlan {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -622,6 +626,7 @@ function New-LocalBoxTuiLaunchPlan {
 }
 
 function Invoke-LocalBoxTuiLaunchPreview {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,

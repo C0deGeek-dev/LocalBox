@@ -654,7 +654,7 @@ function Start-LocalLLMLlamaCppServeBackend {
         $ggufPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $fileName
     }
     else {
-        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def
+        $ggufPath = Get-ModelGgufPath -Def $def
     }
 
     $defaultPort = if ($script:Cfg.Contains('LlamaCppPort')) { [int]$script:Cfg.LlamaCppPort } else { 8080 }
@@ -1200,10 +1200,10 @@ function ConvertTo-CodexTomlString {
 }
 
 function Get-CodexCommonArgs {
-    $args = @()
+    $commonArgs = @()
 
     if ($script:Cfg.Contains("CodexEnableSearch") -and [bool]$script:Cfg.CodexEnableSearch) {
-        $args += '--search'
+        $commonArgs += '--search'
     }
 
     $bypass = if ($script:Cfg.Contains("CodexBypassApprovalsAndSandbox")) {
@@ -1212,10 +1212,10 @@ function Get-CodexCommonArgs {
         $true
     }
     if ($bypass) {
-        $args += '--dangerously-bypass-approvals-and-sandbox'
+        $commonArgs += '--dangerously-bypass-approvals-and-sandbox'
     }
 
-    return $args
+    return $commonArgs
 }
 
 function Start-CodexCli {
@@ -1231,7 +1231,7 @@ function Start-CodexCli {
         throw "codex is not on PATH. Install with: npm install -g @openai/codex"
     }
 
-    $args = @()
+    $codexArgs = @()
 
     $providerId = 'localbox_llamacpp'
     $idleMs = if ($script:Cfg.Contains("CodexStreamIdleTimeoutMs")) {
@@ -1240,7 +1240,7 @@ function Start-CodexCli {
         10000000
     }
 
-    $args += @(
+    $codexArgs += @(
         '-c', ('model_provider={0}' -f (ConvertTo-CodexTomlString $providerId)),
         '-c', ('model_providers.{0}.name={1}' -f $providerId, (ConvertTo-CodexTomlString 'LocalBox llama.cpp')),
         '-c', ('model_providers.{0}.base_url={1}' -f $providerId, (ConvertTo-CodexTomlString $BaseUrl)),
@@ -1249,14 +1249,14 @@ function Start-CodexCli {
     )
 
     if ($ContextTokens -gt 0) {
-        $args += @('-c', "model_context_window=$ContextTokens")
+        $codexArgs += @('-c', "model_context_window=$ContextTokens")
     }
     if ($MaxOutputTokens -gt 0) {
-        $args += @('-c', "model_max_output_tokens=$MaxOutputTokens")
+        $codexArgs += @('-c', "model_max_output_tokens=$MaxOutputTokens")
     }
 
-    $args += @('--model', $Model)
-    $args += @(Get-CodexCommonArgs)
+    $codexArgs += @('--model', $Model)
+    $codexArgs += @(Get-CodexCommonArgs)
 
     Write-Host ""
     Write-Host "Launching codex with $Model..." -ForegroundColor Cyan
@@ -1264,7 +1264,7 @@ function Start-CodexCli {
     Write-Host "  Model    : $Model" -ForegroundColor DarkGray
     Write-Host ""
 
-    & codex @args
+    & codex @codexArgs
 }
 
 function Get-ClaudeTargetSummary {
@@ -1309,7 +1309,7 @@ function Start-LocalPilot {
         }
     }
     else {
-        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def
+        $ggufPath = Get-ModelGgufPath -Def $def
     }
 
     # Pick a free port.
@@ -1650,7 +1650,7 @@ function Start-ClaudeWithLlamaCppModel {
         }
     }
     else {
-        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def
+        $ggufPath = Get-ModelGgufPath -Def $def
     }
 
     # Pick a free port from the configured default.

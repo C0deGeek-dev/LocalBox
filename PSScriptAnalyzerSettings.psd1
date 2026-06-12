@@ -13,20 +13,17 @@
     #   PSUseOutputTypeCorrectly
     # Excluded as repo policy (files are UTF-8 without BOM; PowerShell 7+):
     #   PSUseBOMForUnicodeEncodedFile
-    # Quarantined legacy debt (tracked for the wizard/launcher extraction
-    # work, where each site gets reviewed):
-    #   PSAvoidAssignmentToAutomaticVariable, PSReviewUnusedParameter
-    # PSAvoidUsingEmptyCatchBlock is now blocking: every catch records its
-    # outcome (assignment, log line, or a narrowly justified per-function
-    # SuppressMessage for presence probes).
+    # The former quarantined-debt rules (PSAvoidUsingEmptyCatchBlock,
+    # PSAvoidAssignmentToAutomaticVariable, PSReviewUnusedParameter) are now
+    # blocking: every legacy site was fixed or carries a narrowly scoped,
+    # justified per-function SuppressMessage (presence probes, the shipped
+    # -Profile parameter name, closure-consumed switches).
     ExcludeRules = @(
         'PSAvoidUsingWriteHost',
         'PSUseShouldProcessForStateChangingFunctions',
         'PSUseSingularNouns',
         'PSUseApprovedVerbs',
         'PSUseOutputTypeCorrectly',
-        'PSUseBOMForUnicodeEncodedFile',
-        'PSAvoidAssignmentToAutomaticVariable',
-        'PSReviewUnusedParameter'
+        'PSUseBOMForUnicodeEncodedFile'
     )
 }

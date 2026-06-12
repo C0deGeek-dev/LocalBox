@@ -176,6 +176,7 @@ function Test-LocalBenchIntegrationAvailable {
 }
 
 function Invoke-LocalBenchLauncherFindBest {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -262,6 +263,7 @@ function Get-LocalBenchTopNCpuMoeValues {
 }
 
 function Get-LocalBenchLauncherBestConfig {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -281,6 +283,7 @@ function Get-LocalBenchLauncherBestConfig {
 }
 
 function Get-LocalBenchLauncherBestConfigCandidates {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,

@@ -66,7 +66,6 @@ function Format-ModelTierBadge {
 function Get-ModelFolder {
     # The folder where this model's GGUF (or downloaded artifacts) live.
     param(
-        [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def
     )
 
@@ -222,11 +221,10 @@ function Get-ModelStrictEnabled {
 
 function Get-ModelGgufPath {
     param(
-        [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def
     )
 
-    $folder = Get-ModelFolder -Key $Key -Def $Def
+    $folder = Get-ModelFolder -Def $Def
     $fileName = Get-ModelFileName -Def $Def
 
     $ggufPath = Download-HuggingFaceFile -Repo $Def.Repo -FileName $fileName -DestinationFolder $folder
@@ -258,7 +256,7 @@ function Get-ModelVisionModulePath {
         $mmprojFile = [string]$Def.VisionModule
         Write-LaunchLog "VisionModule configured: $mmprojFile" 'VISION'
     } else {
-        $folder = Get-ModelFolder -Key $Key -Def $Def
+        $folder = Get-ModelFolder -Def $Def
         Write-LaunchLog "No VisionModule configured — scanning for mmproj*.gguf in $folder" 'VISION'
         $localMmproj = Get-ChildItem -Path $folder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
         if ($localMmproj) {
@@ -284,7 +282,7 @@ function Get-ModelVisionModulePath {
         }
     }
 
-    $folder = Get-ModelFolder -Key $Key -Def $Def
+    $folder = Get-ModelFolder -Def $Def
 
     if ($autoDetected) {
         Write-LaunchLog "Reusing auto-detected mmproj: $mmprojFile" 'VISION'
@@ -337,7 +335,7 @@ function Test-ModelVisionModuleAvailable {
     if ($mmprojFile) {
         $result.Filename = $mmprojFile
     }
-    $folder = Get-ModelFolder -Key $Key -Def $Def
+    $folder = Get-ModelFolder -Def $Def
     Write-LaunchLog "[vision/test] Checking local mmproj for $Key (folder=$folder)"  'VISION'
 
     if ($mmprojFile) {

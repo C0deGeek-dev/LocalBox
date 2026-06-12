@@ -1,4 +1,4 @@
-﻿# Pure argv builder for llama-server. No I/O, no process spawning — accept a
+# Pure argv builder for llama-server. No I/O, no process spawning — accept a
 # resolved model def + GGUF path and emit a [string[]] ready to splat.
 # Validation lives here too: turbo3/turbo4 KV cache types only work with the
 # turboquant Docker image, so we fail early if a native run requests them.
@@ -264,7 +264,7 @@ function Build-LlamaServerArgs {
     if ([string]::IsNullOrWhiteSpace($ThinkingPolicy)) {
         $ThinkingPolicy = if ($Def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($Def.ThinkingPolicy)) { [string]$Def.ThinkingPolicy } else { 'strip' }
     }
-    foreach ($a in (Get-LlamaCppReasoningArgs -ThinkingPolicy $ThinkingPolicy -Parser $parser)) {
+    foreach ($a in (Get-LlamaCppReasoningArgs -ThinkingPolicy $ThinkingPolicy)) {
         $argList.Add($a) | Out-Null
     }
 

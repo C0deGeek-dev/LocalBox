@@ -627,6 +627,11 @@ function Show-LlamaCppStatusInterpretation {
 
 function Invoke-LlamaCppStatus {
     # Public entry point. Runs once unless -Watch is supplied.
+    # Detailed/Json/NoGpuSummary are consumed inside the $runOnce closure;
+    # the analyzer's unused-parameter rule does not track scriptblock captures.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Detailed', Justification = 'used inside the $runOnce closure')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Json', Justification = 'used inside the $runOnce closure')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'NoGpuSummary', Justification = 'used inside the $runOnce closure')]
     [CmdletBinding()]
     param(
         [Alias("Pid")][int[]]$ProcessId,

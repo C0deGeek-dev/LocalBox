@@ -34,7 +34,7 @@ function Remove-ModelFiles {
     param([Parameter(Mandatory = $true)][string]$Key)
 
     $def = Get-ModelDef -Key $Key
-    $folder = Get-ModelFolder -Key $Key -Def $def
+    $folder = Get-ModelFolder -Def $def
     Remove-Item -Recurse -Force $folder -ErrorAction SilentlyContinue
 }
 

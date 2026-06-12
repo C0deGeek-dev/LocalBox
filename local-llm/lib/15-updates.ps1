@@ -310,13 +310,13 @@ function Invoke-LocalBoxInstallFromRoot {
         throw "LocalBox installer not found: $installer"
     }
 
-    $args = @('-SkipToolPrompts')
-    if (Test-LocalBoxSymlinkInstall) { $args += '-Symlink' }
-    if ($InstallTui) { $args += '-InstallTui' }
-    if ($DryRun) { $args += '-DryRun' }
+    $installerArgs = @('-SkipToolPrompts')
+    if (Test-LocalBoxSymlinkInstall) { $installerArgs += '-Symlink' }
+    if ($InstallTui) { $installerArgs += '-InstallTui' }
+    if ($DryRun) { $installerArgs += '-DryRun' }
 
     Write-Host "Reinstalling LocalBox profile files from $Root..." -ForegroundColor Cyan
-    & $installer @args
+    & $installer @installerArgs
 }
 
 function Update-LocalBox {

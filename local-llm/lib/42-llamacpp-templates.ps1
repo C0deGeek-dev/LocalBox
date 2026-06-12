@@ -34,13 +34,12 @@ function Resolve-LlamaCppChatTemplate {
 }
 
 function Get-LlamaCppReasoningArgs {
-    # Maps the catalog ThinkingPolicy + parser to llama-server reasoning flags.
+    # Maps the catalog ThinkingPolicy to llama-server reasoning flags.
     # `strip` must disable reasoning generation, not just hide it on the wire:
     # otherwise Qwen thinking templates can spend minutes generating invisible
     # <think> tokens before producing a user-visible answer.
     param(
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ThinkingPolicy,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Parser
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ThinkingPolicy
     )
 
     $policy = if ([string]::IsNullOrWhiteSpace($ThinkingPolicy)) { 'strip' } else { $ThinkingPolicy }

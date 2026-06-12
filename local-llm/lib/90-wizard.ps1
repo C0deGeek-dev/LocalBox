@@ -103,7 +103,7 @@ function Select-LLMModelKey {
         -Items $keys `
         -ZeroLabel $(if ($All) { "Cancel" } else { "Show all tiers / cancel" }) `
         -Label {
-        param($key, $i)
+        param($key)
         $def = Get-ModelDef -Key $key
         $quant = if ($def.ContainsKey("Quants")) { " | quant: $($def.Quant)" } else { "" }
         $contexts = ($def.Contexts.Keys | ForEach-Object {
@@ -145,7 +145,7 @@ function Select-LLMQuantKey {
         -ZeroLabel "Back" `
         -LetterChoices @{ 'k' = "Keep current: $($def.Quant)" } `
         -Label {
-        param($quantKey, $i)
+        param($quantKey)
         $current = if ($quantKey -eq $def.Quant) { "  [current]" } else { "" }
         $note = Get-ModelQuantNote -Def $def -QuantKey $quantKey
         $badge = Format-QuantFitBadge -FitClass (Get-QuantFitClass -Def $def -QuantKey $quantKey)
@@ -176,7 +176,7 @@ function Select-LLMContextKey {
         -Items $contextKeys `
         -ZeroLabel "Back" `
         -Label {
-        param($contextKey, $i)
+        param($contextKey)
         return (Format-LLMContextLabel -Def $def -ContextKey $contextKey)
     }
 
@@ -204,7 +204,7 @@ function Select-LLMAction {
         -Items $actions `
         -ZeroLabel "Back" `
         -Label {
-        param($action, $i)
+        param($action)
         return "$($action.Label)  -  $($action.Description)"
     }
 
@@ -227,7 +227,7 @@ function Select-LLMDefaultTarget {
         -Items $targets `
         -ZeroLabel "Back" `
         -Label {
-        param($target, $i)
+        param($target)
         return "$($target.Label)  -  $($target.Description)"
     }
 
@@ -249,7 +249,7 @@ function Select-LLMMode {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-        param($item, $i)
+        param($item)
         return "$($item.Label)  -  $($item.Description)"
     }
 
@@ -278,7 +278,7 @@ function Select-LLMKvCache {
         -Items $choices `
         -ZeroLabel "Back" `
         -Label {
-        param($t, $i)
+        param($t)
         $note = switch ($t) {
             'q8_0'    { 'q8_0 — default; fast and memory-efficient' }
             'f16'     { 'f16 — full quality, ~2x KV memory of q8_0' }
@@ -335,7 +335,7 @@ function Read-LLMVisionToggle {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -357,7 +357,7 @@ function Read-LLMStrictToggle {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -391,7 +391,7 @@ function Read-LLMYesNo {
         -Items $items `
         -ZeroLabel $(if ($DefaultYes) { "Default: Yes" } else { "Default: No" }) `
         -Label {
-            param($item, $i)
+            param($item)
             if ([string]::IsNullOrWhiteSpace($item.Description)) {
                 return $item.Label
             }
@@ -416,7 +416,7 @@ function Read-LLMTuneDepth {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -436,7 +436,7 @@ function Read-LLMTuneBudget {
         -Title "Budget (max benchmarks per run)" `
         -Items $items `
         -ZeroLabel "Back" `
-        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+        -Label { param($item) "$($item.Label)  -  $($item.Description)" }
 
     if ($idx -lt 0) { return $null }
     if ($items[$idx].Key -eq 'custom') {
@@ -461,7 +461,7 @@ function Read-LLMTuneRuns {
         -Title "Runs per trial" `
         -Items $items `
         -ZeroLabel "Back" `
-        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+        -Label { param($item) "$($item.Label)  -  $($item.Description)" }
 
     if ($idx -lt 0) { return $null }
     if ($items[$idx].Key -eq 'custom') {
@@ -485,7 +485,7 @@ function Read-LLMTuneSearchStrategy {
         -Title "Search strategy" `
         -Items $items `
         -ZeroLabel "Back" `
-        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+        -Label { param($item) "$($item.Label)  -  $($item.Description)" }
 
     if ($idx -lt 0) { return $null }
     return [string]$items[$idx].Key
@@ -503,7 +503,7 @@ function Read-LLMTuneBeamWidth {
         -Title "Beam width" `
         -Items $items `
         -ZeroLabel "Back" `
-        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+        -Label { param($item) "$($item.Label)  -  $($item.Description)" }
 
     if ($idx -lt 0) { return $null }
     if ($items[$idx].Key -eq 'custom') {
@@ -531,7 +531,7 @@ function Read-LLMTuneRunControls {
         -Title "Tuner run controls" `
         -Items $items `
         -ZeroLabel "Back" `
-        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+        -Label { param($item) "$($item.Label)  -  $($item.Description)" }
 
     if ($idx -lt 0) { return $null }
     switch ($items[$idx].Key) {
@@ -574,7 +574,7 @@ function Read-LLMTuneOptimize {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -598,7 +598,7 @@ function Read-LLMTuneKvVariation {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -618,8 +618,8 @@ function Read-LLMTuneNCpuMoeRange {
     }
 
     $parseRange = {
-        param([string]$input)
-        $trimmed = $input.Trim()
+        param([string]$RangeText)
+        $trimmed = $RangeText.Trim()
         if ($trimmed -match '^(\d+)-(\d+):(\d+)$') {
             $start = [int]$Matches[1]; $end = [int]$Matches[2]; $step = [int]$Matches[3]
             if ($step -lt 1) { $step = 1 }
@@ -642,7 +642,7 @@ function Read-LLMTuneNCpuMoeRange {
         $idx = Read-LLMChoiceIndex `
             -Title "Refine NCpuMoe around previous best?" `
             -Items $items -ZeroLabel "Back" `
-            -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+            -Label { param($item) "$($item.Label)  -  $($item.Description)" }
 
         if ($idx -lt 0) { return $null }
         $choice = $items[$idx].Key
@@ -668,7 +668,7 @@ function Read-LLMTuneNCpuMoeRange {
     $idx = Read-LLMChoiceIndex `
         -Title "NCpuMoe expert offload range" `
         -Items $items -ZeroLabel "Back" `
-        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+        -Label { param($item) "$($item.Label)  -  $($item.Description)" }
 
     if ($idx -lt 0) { return $null }
     if ($items[$idx].Key -eq 'custom') {
@@ -693,7 +693,7 @@ function Read-LLMTuneProfile {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -1053,9 +1053,9 @@ function Read-LLMChoiceIndexNative {
 
         if ($char -match '^\d$') {
             $typed += $char
-            $matches = @($options | Where-Object { $_.Shortcut -like "$typed*" })
-            if ($matches.Count -eq 1 -and $matches[0].Shortcut -eq $typed) {
-                $picked = $matches[0]
+            $shortcutMatches = @($options | Where-Object { $_.Shortcut -like "$typed*" })
+            if ($shortcutMatches.Count -eq 1 -and $shortcutMatches[0].Shortcut -eq $typed) {
+                $picked = $shortcutMatches[0]
                 if ($picked.Kind -eq 'item') { return [int]$picked.Key }
                 if ($picked.Kind -eq 'zero') { return -1 }
                 return [string]$picked.Key
@@ -1213,7 +1213,7 @@ function Select-LlamaCppLaunchSettingsMode {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -1233,7 +1233,7 @@ function Select-LlamaCppPostTuneLaunchAction {
         -Items $items `
         -ZeroLabel "Cancel" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -1261,7 +1261,7 @@ function Select-LlamaCppPostTuneProfile {
         -Items $items `
         -ZeroLabel "Back" `
         -Label {
-            param($item, $i)
+            param($item)
             "$($item.Label)  -  $($item.Description)"
         }
 
@@ -1323,7 +1323,7 @@ function Invoke-LLMSelection {
 
         "setup" {
             # Strict has no effect on the GGUF path — same file regardless.
-            $path = Get-ModelGgufPath -Key $ModelKey -Def $def
+            $path = Get-ModelGgufPath -Def $def
             Write-Host "GGUF cached at: $path" -ForegroundColor Green
         }
 
@@ -1419,7 +1419,7 @@ function Start-LLMWizardClassic {
                 if (-not $visionAvail.Local -and $visionAvail.AvailableOnHF) {
                     Write-Host "Downloading vision module '$($visionAvail.Filename)' from HuggingFace..." -ForegroundColor Yellow
                     try {
-                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def
+                        $visionFolder = Get-ModelFolder -Def $def
                         Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $visionFolder | Out-Null
                         Write-Host "Downloaded '$($visionAvail.Filename)'." -ForegroundColor Green
                         $visionAvail.Local = $true
@@ -1994,8 +1994,8 @@ function Read-LLMTuneNCpuMoeRangeSpectre {
     )
 
     $parseRange = {
-        param([string]$input)
-        $trimmed = $input.Trim()
+        param([string]$RangeText)
+        $trimmed = $RangeText.Trim()
         if ($trimmed -match '^(\d+)-(\d+):(\d+)$') {
             $start = [int]$Matches[1]; $end = [int]$Matches[2]; $step = [int]$Matches[3]
             if ($step -lt 1) { $step = 1 }
@@ -2291,7 +2291,7 @@ function Start-LLMWizardSpectre {
                 if (-not $visionAvail.Local -and $visionAvail.AvailableOnHF) {
                     Write-Host "Downloading vision module '$($visionAvail.Filename)' from HuggingFace..." -ForegroundColor Yellow
                     try {
-                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def
+                        $visionFolder = Get-ModelFolder -Def $def
                         Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $visionFolder | Out-Null
                         Write-Host "Downloaded '$($visionAvail.Filename)'." -ForegroundColor Green
                         $visionAvail.Local = $true
