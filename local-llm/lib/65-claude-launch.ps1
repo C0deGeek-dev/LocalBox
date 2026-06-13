@@ -1159,7 +1159,7 @@ function Install-LocalPilot {
 
 function Update-LocalPilot {
     [CmdletBinding()]
-    param()
+    param([switch]$RefreshInstalled)
 
     $root = if (Get-Command Resolve-LocalPilotRoot -ErrorAction SilentlyContinue) {
         Resolve-LocalPilotRoot
@@ -1174,6 +1174,9 @@ function Update-LocalPilot {
     $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'LocalPilot' -Root $root
     if ($result.Status -in @('failed', 'not-git', 'no-upstream', 'diverged')) {
         throw $result.Reason
+    }
+    if ($result.Updated -or $RefreshInstalled) {
+        Invoke-LocalPilotInstallFromRoot -Root $result.Root
     }
     return $result
 }

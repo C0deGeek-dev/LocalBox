@@ -367,7 +367,7 @@ repo is detected and used first). Use `-SkipToolPrompts` for
 unattended installs. `Show-Diagnostics` also reports on `python`, the
 `localpilot` CLI, `PwshSpectreConsole`, LocalBench, and LocalPilot.
 Installs also record `LocalBoxRoot` in `settings.json`, which lets `llm-update`
-pull this repo and redeploy the profile files later.
+pull this repo and refresh the installed LocalX artifacts later.
 
 ---
 
@@ -396,7 +396,8 @@ llms                              Spectre wizard, explicit alias
 info                              Dashboard
 info -Commands                    Full LocalBox + LocalBench command list
 llmdocs                           Quick reference
-llm-update [-InstallTui]           Update LocalBox + companions; optionally refresh TUI binaries
+llm-update [-InstallTui] [-RefreshInstalled]
+                                  Update LocalBox + companions, then refresh installed artifacts
 ```
 
 | Flag | Effect |
@@ -755,12 +756,16 @@ The main installer can publish TUI binaries too:
 ```powershell
 .\install.ps1 -InstallTui
 llm-update -InstallTui
+llm-update -RefreshInstalled
 ```
 
 Without `-InstallTui`, `install.ps1` offers to publish the TUIs interactively
 unless `-SkipToolPrompts` is set. `llm-update` refreshes already-installed TUI
 binaries after an update, and `-InstallTui` forces a refresh even when the
-checkouts are already current.
+checkouts are already current. When the LocalPilot checkout fast-forwards,
+`llm-update` also reruns LocalPilot's installer so the `localpilot` CLI on
+`PATH` matches the updated source. Use `-RefreshInstalled` to redeploy/rebuild
+installed artifacts from already-current checkouts.
 
 When installed, the launcher runs `~/.local-llm/bin/LocalBox.Tui.exe` and passes
 the active `LocalLLMProfile.ps1` path with `--profile`. From a repo checkout, it

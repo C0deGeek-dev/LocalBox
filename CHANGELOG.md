@@ -2,6 +2,14 @@
 
 Past-tense record of shipped changes.
 
+## Unreleased
+
+- **`llm-update` now refreshes installed artifacts after source updates.**
+  LocalPilot is reinstalled from its updated checkout when it fast-forwards, so
+  the `localpilot` CLI on `PATH` no longer lags behind the repo. Added
+  `-RefreshInstalled` to force redeploy/rebuild from already-current checkouts;
+  `Update-LocalPilot -RefreshInstalled` does the same for the standalone helper.
+
 ## 2026-06-12 - v0.3.0-beta.1 LocalX release train
 
 - Aligned LocalBox with the coordinated LocalX `v0.3.0-beta.1` beta release.

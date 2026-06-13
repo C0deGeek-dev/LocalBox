@@ -799,8 +799,8 @@ function Show-LocalBoxCommandReference {
     Write-CommandRow -Command "Install-LocalBench" -Description "Clone/configure the managed LocalBench checkout."
     Write-CommandRow -Command "Update-LocalBench" -Description "Fast-forward the configured LocalBench checkout."
     Write-CommandRow -Command "Install-LocalPilot" -Description "Clone/configure the managed LocalPilot checkout."
-    Write-CommandRow -Command "Update-LocalPilot" -Description "Fast-forward the configured LocalPilot checkout."
-    Write-CommandRow -Command "llm-update [-InstallTui], llmupdate" -Description "Update LocalBox plus installed companion checkouts; optionally refresh TUI binaries."
+    Write-CommandRow -Command "Update-LocalPilot [-RefreshInstalled]" -Description "Fast-forward LocalPilot and reinstall its CLI when needed."
+    Write-CommandRow -Command "llm-update [-InstallTui] [-RefreshInstalled], llmupdate" -Description "Update LocalBox plus companions, then refresh installed artifacts."
 
     Write-Host ""
     Write-Host "LocalBench commands" -ForegroundColor Green
@@ -969,8 +969,8 @@ Manage
   info <key>            Per-model detail: description, quants table (with fit + size), contexts table
   info -Commands        Full LocalBox and LocalBench command list
   reloadllm             Reload llm-models.json and regenerate commands
-  llm-update [-InstallTui]
-                        Update LocalBox, LocalPilot, and LocalBench; refresh TUI binaries when requested
+  llm-update [-InstallTui] [-RefreshInstalled]
+                        Update LocalBox, LocalPilot, and LocalBench; refresh installed artifacts
   lbtui                 Open LocalBench.Tui when available
   lps, lstop            llama-server: status / stop
   purge                 Stop running llama-server and delete cached GGUF files
@@ -978,7 +978,8 @@ Manage
   Install-LocalBench    Clone/configure the managed LocalBench checkout
   Update-LocalBench     Pull the configured LocalBench checkout
   Install-LocalPilot    Clone/configure the managed LocalPilot checkout
-  Update-LocalPilot     Pull the configured LocalPilot checkout
+  Update-LocalPilot [-RefreshInstalled]
+                        Pull the configured LocalPilot checkout and reinstall its CLI
   obench [-Model name]  Show legacy bench history (~/.local-llm/bench-history.jsonl)
   findbest <key> -ContextKey <ctx> [-Mode native|turboquant|mtpturbo] [-Quick|-Deep] [-Budget 100]
                         Auto-tune llama.cpp launch flags for this box via LocalBench.

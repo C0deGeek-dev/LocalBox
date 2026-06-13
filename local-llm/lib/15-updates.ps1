@@ -83,6 +83,11 @@ function Resolve-LocalPilotRoot {
         $candidates.Add($script:Cfg.LocalPilotRoot) | Out-Null
     }
 
+    $localBoxRoot = Resolve-LocalBoxRoot
+    if (-not [string]::IsNullOrWhiteSpace($localBoxRoot)) {
+        $candidates.Add((Join-Path (Split-Path -Parent $localBoxRoot) 'LocalPilot')) | Out-Null
+    }
+
     $candidates.Add((Join-Path $HOME '.local-llm\tools\localpilot')) | Out-Null
 
     foreach ($candidate in @($candidates)) {
@@ -297,6 +302,30 @@ function Invoke-LocalBenchTuiPublishFromRoot {
     Invoke-LocalLLMTuiPublisher -Name 'LocalBench.Tui' -PublisherScript (Join-Path $Root 'tui\publish-tui.ps1') -DryRun:$DryRun
 }
 
+function Invoke-LocalPilotInstallFromRoot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [switch]$DryRun
+    )
+
+    $installer = Join-Path $Root 'install\install.ps1'
+    if (-not (Test-Path -LiteralPath $installer -PathType Leaf -ErrorAction SilentlyContinue)) {
+        throw "LocalPilot installer not found: $installer"
+    }
+
+    if ($DryRun) {
+        Write-Host "Would reinstall LocalPilot CLI from $installer" -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "Reinstalling LocalPilot CLI from $Root..." -ForegroundColor Cyan
+    & $installer
+    if ($LASTEXITCODE -ne 0) {
+        throw "LocalPilot install failed (exit $LASTEXITCODE)."
+    }
+}
+
 function Invoke-LocalBoxInstallFromRoot {
     [CmdletBinding()]
     param(
@@ -310,10 +339,12 @@ function Invoke-LocalBoxInstallFromRoot {
         throw "LocalBox installer not found: $installer"
     }
 
-    $installerArgs = @('-SkipToolPrompts')
-    if (Test-LocalBoxSymlinkInstall) { $installerArgs += '-Symlink' }
-    if ($InstallTui) { $installerArgs += '-InstallTui' }
-    if ($DryRun) { $installerArgs += '-DryRun' }
+    $installerArgs = @{
+        SkipToolPrompts = $true
+        Symlink = [bool](Test-LocalBoxSymlinkInstall)
+        InstallTui = [bool]$InstallTui
+        DryRun = [bool]$DryRun
+    }
 
     Write-Host "Reinstalling LocalBox profile files from $Root..." -ForegroundColor Cyan
     & $installer @installerArgs
@@ -324,6 +355,7 @@ function Update-LocalBox {
     param(
         [string]$Root,
         [switch]$InstallTui,
+        [switch]$RefreshInstalled,
         [switch]$DryRun
     )
 
@@ -331,7 +363,7 @@ function Update-LocalBox {
     $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'LocalBox' -Root $resolvedRoot -DryRun:$DryRun
     $refreshTui = $InstallTui -or (Test-LocalBoxTuiInstalled)
 
-    if ($result.Updated -or ($DryRun -and $result.Status -eq 'available')) {
+    if ($result.Installed -and ($result.Updated -or $RefreshInstalled -or ($DryRun -and $result.Status -eq 'available'))) {
         Invoke-LocalBoxInstallFromRoot -Root $result.Root -InstallTui:$refreshTui -DryRun:$DryRun
     }
     elseif ($InstallTui -and $result.Installed) {
@@ -366,6 +398,7 @@ function Update-LocalLLMSuite {
     [CmdletBinding()]
     param(
         [switch]$InstallTui,
+        [switch]$RefreshInstalled,
         [switch]$DryRun
     )
 
@@ -374,7 +407,7 @@ function Update-LocalLLMSuite {
     $results = @()
 
     try {
-        $results += Update-LocalBox -InstallTui:$InstallTui -DryRun:$DryRun
+        $results += Update-LocalBox -InstallTui:$InstallTui -RefreshInstalled:$RefreshInstalled -DryRun:$DryRun
     }
     catch {
         $results += [pscustomobject]@{
@@ -399,9 +432,15 @@ function Update-LocalLLMSuite {
             $result = Invoke-LocalLLMGitFastForwardUpdate -Name $companion.Name -Root $companion.Root -DryRun:$DryRun
             $results += $result
 
+            if ($companion.Name -eq 'LocalPilot' -and $result.Installed) {
+                if ($result.Updated -or $RefreshInstalled -or ($DryRun -and $result.Status -eq 'available')) {
+                    Invoke-LocalPilotInstallFromRoot -Root $result.Root -DryRun:$DryRun
+                }
+            }
+
             if ($companion.Name -eq 'LocalBench' -and $result.Installed) {
                 $refreshLocalBenchTui = $InstallTui -or (Test-LocalBenchTuiInstalled)
-                if (($result.Updated -and $refreshLocalBenchTui) -or $InstallTui) {
+                if (($result.Updated -and $refreshLocalBenchTui) -or $InstallTui -or ($RefreshInstalled -and $refreshLocalBenchTui)) {
                     Invoke-LocalBenchTuiPublishFromRoot -Root $result.Root -DryRun:$DryRun
                 }
             }
@@ -437,20 +476,22 @@ function llm-update {
     [CmdletBinding()]
     param(
         [switch]$InstallTui,
+        [switch]$RefreshInstalled,
         [switch]$DryRun
     )
 
-    Update-LocalLLMSuite -InstallTui:$InstallTui -DryRun:$DryRun | Out-Null
+    Update-LocalLLMSuite -InstallTui:$InstallTui -RefreshInstalled:$RefreshInstalled -DryRun:$DryRun | Out-Null
 }
 
 function llmupdate {
     [CmdletBinding()]
     param(
         [switch]$InstallTui,
+        [switch]$RefreshInstalled,
         [switch]$DryRun
     )
 
-    llm-update -InstallTui:$InstallTui -DryRun:$DryRun
+    llm-update -InstallTui:$InstallTui -RefreshInstalled:$RefreshInstalled -DryRun:$DryRun
 }
 
 function Get-LocalLLMDeployedProxyPath {
