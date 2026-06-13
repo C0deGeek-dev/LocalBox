@@ -1525,6 +1525,7 @@ api_key_env = "$apiKeyEnv"
         } else { 4096 }
         if ($maxOutputTokens -gt 0) {
             $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = [string]$maxOutputTokens
+            $tomlContent += "`nmax_tokens = $maxOutputTokens`n"
         }
 
         $contextTokens = Get-ModelContextValue -Def $def -ContextKey $ContextKey
