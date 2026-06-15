@@ -1,4 +1,4 @@
-﻿{
+{
   "key": "q3635ba3b",
   "schema": 1,
   "source": "localbench",
@@ -18,6 +18,7 @@
       "mode": "native",
       "vramGB": 24,
       "prompt_length": "short",
+      "profile": "pure",
       "score": 42.5,
       "scoreUnit": "coding_agent_e2e_tps",
       "args": [],
