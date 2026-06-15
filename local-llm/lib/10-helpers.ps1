@@ -68,6 +68,7 @@ function Show-LocalBoxSecuritySummary {
     Write-Host ("  Agent permission prompts : {0}" -f $permission) -ForegroundColor Gray
     Write-Host ("  Agent proxy              : 127.0.0.1:{0} (local only)" -f $proxyPort) -ForegroundColor Gray
     Write-Host ("  Serve gateway (if used)  : listens on 0.0.0.0; auth: {0}" -f $serveAuth) -ForegroundColor Gray
+    Write-Host "                             LAN/VPN only; HTTPS in front for off-LAN; public no-auth HTTP is refused." -ForegroundColor DarkGray
     Write-Host ("  Binary download pins     : {0}" -f $pinLine) -ForegroundColor Gray
     Write-Host "  Change via Set-LocalLLMSetting; see README 'Verified binary downloads'." -ForegroundColor DarkGray
 }

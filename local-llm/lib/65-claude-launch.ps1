@@ -599,6 +599,11 @@ function Show-LocalLLMServeClientInstructions {
         Write-Host ""
         $authWarn = if ([string]::IsNullOrWhiteSpace($Password)) { "open (no auth)" } else { "password-only" }
         Write-Host "WARNING: this is $authWarn HTTP on a public-looking address. Prompts are not encrypted." -ForegroundColor Yellow
+        Write-Host "Keep the gateway on a LAN or VPN and put HTTPS in front of it (reverse proxy or tunnel)." -ForegroundColor Yellow
+        Write-Host "Do not expose plain HTTP to the public internet. See the LocalX remote-egress policy." -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "  Reachable on your LAN/VPN only; for off-LAN access, tunnel or front it with HTTPS." -ForegroundColor DarkGray
     }
 
     Write-Host ""
