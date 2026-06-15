@@ -2,7 +2,16 @@
 
 Past-tense record of shipped changes.
 
-## Unreleased
+## v0.3.0-beta.2 - 2026-06-15
+
+Coordinated LocalX beta release.
+
+- Serve gateway now discloses its safe operating posture (LAN/VPN-only, HTTPS in
+  front) in the client instructions and the security banner; the guard still
+  refuses open public HTTP.
+- Conformed the bundled tuner best-config fixture to the current
+  `tuner-best-config` schema (added the required `profile` field) so producer and
+  consumer agree on the versioned contract.
 
 - **`llm-update` now refreshes installed artifacts after source updates.**
   LocalPilot is reinstalled from its updated checkout when it fast-forwards, so
