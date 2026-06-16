@@ -16,6 +16,26 @@ $script:LlamaCppTurboKvModes    = @('turboquant', 'mtpturbo')
 # mainline canonical value; we translate at emission time per mode.
 $script:LlamaCppMtpSpecTypes    = @('draft-mtp', 'mtp', 'nextn')
 
+function Get-LlamaCppConstrainedDecoding {
+    # The constrained-decoding capability this runtime supports. Every llama.cpp
+    # mode here launches llama-server, whose completion endpoint accepts a
+    # `json_schema` (and GBNF `grammar`) constraint, so output can be made
+    # schema-valid by construction. Host-neutral: this reports what the runtime
+    # can do, not how any host uses it. Returns 'json_schema' for a llama.cpp
+    # runtime, otherwise 'none'.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Mode
+    )
+
+    $mode = $Mode.ToLowerInvariant()
+    $llamaCppModes = @('native', 'mainline', 'turboquant', 'mtpturbo')
+    if ($llamaCppModes -contains $mode) {
+        return 'json_schema'
+    }
+    return 'none'
+}
+
 function Test-LlamaCppKvType {
     param(
         [Parameter(Mandatory = $true)][string]$Type,
