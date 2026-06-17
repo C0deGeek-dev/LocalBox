@@ -1,20 +1,24 @@
 # LocalBox docs
 
 Documentation index and doc-ownership map. Match a change to its owning doc
-before editing; don't restate the same area in two places. Keep the top-level
-`README.md` a lean overview — deep how-to content belongs here in `docs/`.
+before editing; don't restate the same area in two places. The top-level
+`README.md` is a lean overview — deep content lives here in `docs/`.
 
 | Area | Owning doc |
 |---|---|
-| Project overview, install entry point, ecosystem links | top-level `README.md` |
-| Autobest profile tuning | [`autobest-profile.md`](autobest-profile.md) |
-| Install / prerequisites (planned owned doc) | `install.md` |
-| Model management — catalog, adding a model, quant fit | `model-management.md` (planned) |
-| No-think proxy behaviour | `proxy.md` (planned) |
-| Harness mode — Claude Code / LocalPilot / Codex dispatch | `harness-mode.md` (planned) |
-
-Pages marked *(planned)* are created as the top-level README is slimmed; until
-then those areas live in `README.md`.
+| Project overview, install quickstart, day-to-day cheatsheet | top-level `README.md` |
+| Install, symlink/dev mode, companion checkouts | [`install.md`](install.md) |
+| Harness mode — Claude Code / LocalPilot / Codex / serve / strict | [`harness-mode.md`](harness-mode.md) |
+| llama.cpp modes — native / turboquant / mtpturbo | [`llamacpp-modes.md`](llamacpp-modes.md) |
+| Day-to-day usage, flags, quant keys, 256k recipe | [`usage.md`](usage.md) |
+| Model management — adding a model, VRAM-aware fit | [`model-management.md`](model-management.md) |
+| Per-machine settings (`settings.json`), verified downloads, per-workspace default | [`settings.md`](settings.md) |
+| MCP servers | [`mcp.md`](mcp.md) |
+| Auto-tuner (`findbest`) | [`auto-tuner.md`](auto-tuner.md) |
+| AutoBest profile format | [`autobest-profile.md`](autobest-profile.md) |
+| Wizard & Terminal.Gui TUI | [`wizard-and-tui.md`](wizard-and-tui.md) |
+| Repo layout, architecture, casing convention | [`architecture.md`](architecture.md) |
+| Troubleshooting | [`troubleshooting.md`](troubleshooting.md) |
 
 ## Wiki
 

@@ -2,6 +2,17 @@
 
 Past-tense record of shipped changes.
 
+## 2026-06-17 - Documentation restructure
+
+- Split the long top-level `README.md` into a lean overview plus owned `docs/`
+  pages (install, harness mode, llama.cpp modes, usage, model management,
+  settings, MCP, auto-tuner, wizard/TUI, architecture, troubleshooting), indexed
+  by `docs/README.md`.
+- Fixed the LocalPilot install hint in troubleshooting: the crate is
+  `cargo install localpilot` (not `localpilot-cli`).
+- Added an in-repo wiki source (`docs/wiki/`) that is one-way CI-synced to the
+  GitHub Wiki, plus an offline link check over the docs.
+
 ## v0.3.0-beta.2 - 2026-06-15
 
 Coordinated LocalX beta release.

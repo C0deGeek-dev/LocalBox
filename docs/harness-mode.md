@@ -1,0 +1,126 @@
+# Harness mode
+
+Part of the [LocalBox documentation](README.md).
+
+A **harness** is the agent loop wrapping the model — the thing that turns raw
+generation into "read this file, run that command, edit this code, then ask the
+user". Claude Code is one such harness. LocalPilot is an independent,
+clean-room harness with a similar operating model.
+
+### Claude Code harness (default)
+
+```powershell
+qcoder -Ctx 32k               # qcoder is the per-model function name
+```
+
+What happens:
+
+1. The launcher snapshots and clears any `ANTHROPIC_*` env vars in the current shell.
+2. Resolves the GGUF (downloads from HuggingFace on first use).
+3. Starts `llama-server` on a free port from `LlamaCppPort` (default 8080) with
+   the per-model parser, KV-cache, MoE-offload, and reasoning flags.
+4. Starts the no-think proxy on `127.0.0.1:11435` (Python; ~300 ms cold) in
+   front of `llama-server`.
+5. Sets `ANTHROPIC_BASE_URL=http://localhost:11435`, points
+   `ANTHROPIC_DEFAULT_*_MODEL` at the model's `Root`, disables thinking +
+   prompt caching, bumps `API_TIMEOUT_MS` to 30 min (local prefill is slow on
+   big prompts).
+6. Launches `claude --model <root> [--dangerously-skip-permissions]
+   [--tools <allowlist>] --append-system-prompt <local-tool-rules>`.
+   Whether the permission skip is passed is a first-run decision: the first
+   agent launch asks "skip permission prompts for agent launches? [y/N]" and
+   persists the answer to `settings.json`. The default answer keeps Claude
+   Code's per-action permission prompts — the human-in-the-loop that catches a
+   runaway or injected tool call from a less-aligned local model. Change it
+   any time with `Set-LocalLLMSetting LocalModelSkipPermissions $true|$false`
+   or per-shell with `LOCAL_LLM_SKIP_PERMISSIONS=1|0`.
+7. On exit, restores the original env, stops the proxy, and stops `llama-server`.
+
+The model believes it's Claude. Claude Code believes it's talking to Anthropic.
+The proxy quietly strips Anthropic-only fields the local backend can't parse.
+
+### LocalPilot harness
+
+Same flow, except the launch shells into `localpilot chat --model <model>`
+instead of `claude`. `LocalPilotRoot` points at the Rust checkout used by
+LocalBox update/install flows; when unset, LocalBox discovers a sibling
+`LocalPilot` checkout next to the LocalBox repo and otherwise falls back to
+`~/.local-llm/tools/localpilot`. `LocalPilotRepoUrl` defaults to
+`https://github.com/C0deGeek-dev/LocalPilot`.
+
+```powershell
+qcoder -Ctx 32k -LocalPilot
+```
+
+### Codex harness
+
+Same flow, except the launch shells into `codex` with an OpenAI-compatible
+provider pointed at the running `llama-server`'s `/v1` endpoint.
+
+```powershell
+qcoder -Ctx 32k -Codex
+```
+
+> **Note.** The `codex` CLI itself, when pointed at OpenAI rather than a local
+> endpoint, drives OpenAI's hosted backend. If you use it against the LocalPilot
+> Codex adapter (a reverse-engineered private endpoint), be aware that path may
+> violate OpenAI's Terms of Use. Against a local `llama-server` `/v1` endpoint
+> as shown here, this concern does not apply.
+
+### Serve gateway
+
+Choose `Serve` in `llm`, or use `llmserve`, to serve a model from this
+machine to any agentic client that can use an Anthropic-compatible endpoint.
+The server starts `llama-server` and exposes only the LocalBox no-think
+gateway; `llama-server` itself stays bound to localhost.
+
+```powershell
+$env:LOCAL_LLM_SERVE_PASS = "chosenpass"
+llmserve -Key qcoder30 -ContextKey 32k -LlamaCppMode native
+```
+
+After startup, LocalBox opens a serve monitor with the gateway status and live
+request log. Press `Q` to return to the menu while leaving the server running,
+or `S` to stop the gateway and backend. Use `llmserve -NoMonitor` for scripted
+or detached starts.
+
+On the client, no LocalBox helper is required. Set the Anthropic-compatible
+environment variables for your agentic client. For LocalPilot:
+
+```bash
+export ANTHROPIC_BASE_URL="http://192.168.178.61:11435"
+export ANTHROPIC_AUTH_TOKEN="chosenpass"
+export ANTHROPIC_API_KEY="chosenpass"
+localpilot
+```
+
+Password-only HTTP is convenient for LAN testing. Over a public IP it is not
+encrypted: the password and prompts can be observed in transit unless you put a
+VPN or HTTPS reverse proxy in front of it.
+
+### Strict overlay (engineering mode)
+
+Some models in the catalog have `Strict: true`. Pass `-Strict` and the
+launcher injects a tighter sampler (`temperature 0.2`, `top_p 0.8`, `top_k 20`,
+`min_p 0.05`, `repeat_penalty 1.15`, `repeat_last_n 4096`) plus a
+non-negotiable engineering system prompt:
+
+> Do not create mocks, stubs, fake data, dummy implementations, placeholder
+> services, TODO implementations, temporary bypasses, hardcoded sample
+> responses, or `NotImplementedException`.
+> Do not invent new architecture, schema fields, configuration properties,
+> or abstractions unless they fit existing patterns.
+> Do not make tests pass by weakening, bypassing, deleting, or faking real
+> behavior.
+> Reuse existing architecture and production code paths. If the real
+> implementation is missing, blocked, or ambiguous: stop and explain what
+> is missing instead of inventing a substitute.
+
+The sampler flags are injected directly into the llama-server argv; the strict
+system prompt is appended on the harness side.
+
+> **When to use it.** Strict overlay is for actual engineering work where the
+> model's lazy paths (mock, stub, "// TODO", placeholder JSON) cost real time.
+> Skip it for chat, brainstorming, RAG-style Q&A.
+
+---
