@@ -55,3 +55,4 @@ $RECYCLE.BIN/
 
 # Log files (dev / runtime temp logs)
 *.log
+/.localpilot.toml
