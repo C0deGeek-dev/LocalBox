@@ -48,7 +48,7 @@ q36p -Ctx 128k                   # Qwen 3.6 Plus at 128k, via Claude Code
 
 ## Next steps
 
-- [[How-To/Overview|How-To guides]] — manage models, run the proxy/serve, AutoBest.
-- [[Examples/Overview|Examples]] — copy-pasteable launch recipes.
+- [[How-To|How-To guides]] — manage models, run the proxy/serve, AutoBest.
+- [[Examples]] — copy-pasteable launch recipes.
 - [[Reference]] — the full in-repo documentation index.
 - [[Troubleshooting]] — common problems and fixes.
