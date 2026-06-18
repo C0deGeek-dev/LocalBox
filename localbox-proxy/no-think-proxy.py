@@ -2,6 +2,14 @@
 """
 no-think-proxy
 ==============
+
+DEPRECATED — scheduled for removal. LocalPilot now strips ``<think>`` blocks
+natively on both the Anthropic and OpenAI-compatible response paths (its
+``InlineThinkingFilter``, split-tag safe) and suppresses the thinking request
+shape itself, so this out-of-band proxy is no longer needed for the
+LocalBox -> LocalPilot path. Kept for one release for any non-LocalPilot client
+that still relies on it; prefer running llama-server directly.
+
 HTTP proxy that sits in front of a local llama.cpp llama-server for use with
 Claude Code / LocalPilot.
 

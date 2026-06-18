@@ -2,6 +2,13 @@
 
 Past-tense record of shipped changes.
 
+## 2026-06-18 - Deprecation
+
+- Marked `localbox-proxy/no-think-proxy.py` **deprecated** (scheduled for
+  removal). LocalPilot strips `<think>` blocks natively on both provider paths
+  and suppresses the thinking request shape itself, so the out-of-band proxy is
+  no longer needed for the LocalBox → LocalPilot path.
+
 ## 2026-06-17 - Documentation restructure
 
 - Split the long top-level `README.md` into a lean overview plus owned `docs/`

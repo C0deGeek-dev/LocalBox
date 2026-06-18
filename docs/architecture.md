@@ -43,6 +43,10 @@ local-llm/
 
 localbox-proxy/
   no-think-proxy.py     strips Anthropic thinking/reasoning blocks
+                        (DEPRECATED — LocalPilot strips `<think>` natively on
+                        both the Anthropic and OpenAI paths and suppresses the
+                        thinking request shape itself; the proxy is a legacy
+                        shim, scheduled for removal)
 ```
 
 `LocalLLMProfile.ps1` dot-sources every `lib/*.ps1` in numeric prefix order,
