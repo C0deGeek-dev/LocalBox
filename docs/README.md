@@ -18,6 +18,7 @@ before editing; don't restate the same area in two places. The top-level
 | AutoBest profile format | [`autobest-profile.md`](autobest-profile.md) |
 | Wizard & Terminal.Gui TUI | [`wizard-and-tui.md`](wizard-and-tui.md) |
 | Repo layout, architecture, casing convention | [`architecture.md`](architecture.md) |
+| Versioning policy — when minor/major bumps, pre-1.0 rules | [`versioning.md`](versioning.md) |
 | Troubleshooting | [`troubleshooting.md`](troubleshooting.md) |
 
 ## Wiki
@@ -32,4 +33,5 @@ duplicating them.
 
 Every user-facing change updates the top-level `CHANGELOG.md` in the same
 checkpoint. No doc, README, or wiki page may claim behaviour beyond the current
-`VERSION`.
+`VERSION`. Which number moves — major, minor, or patch — is decided by
+[`versioning.md`](versioning.md) (SemVer, with pre-1.0 rules).
