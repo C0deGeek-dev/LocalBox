@@ -56,3 +56,8 @@ $RECYCLE.BIN/
 # Log files (dev / runtime temp logs)
 *.log
 /.localpilot.toml
+
+# LocalMind / LocalPilot runtime stores (derived; never commit — ADR-0011)
+.localmind/
+.localpilot/
+.localmind.toml
