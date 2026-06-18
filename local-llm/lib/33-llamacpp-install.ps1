@@ -462,7 +462,7 @@ function Find-TurboquantServerExe {
 
 function Get-LlamaCppTurboquantRepo {
     $repo = $script:Cfg.LlamaCppTurboquantRepo
-    if ([string]::IsNullOrWhiteSpace($repo)) { $repo = "TheTom/llama-cpp-turboquant" }
+    if ([string]::IsNullOrWhiteSpace($repo)) { $repo = "C0deGeek-dev/llama-cpp-turboquant" }
     return $repo
 }
 

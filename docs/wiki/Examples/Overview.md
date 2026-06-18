@@ -33,7 +33,7 @@ full 256k context on a single 4090 (weights ~16.5 GB; q4_0 KV @ 256k ~6 GB).
 q36p -Mode turboquant -KvK turbo4 -KvV turbo4
 ```
 
-Uses TheTom's turboquant `llama-server` fork (auto-downloaded on first use) so
+Uses the C0deGeek-dev turboquant `llama-server` fork (auto-downloaded on first use) so
 the `turbo4` KV-cache encodings are available.
 
 ## Serve a model to another machine

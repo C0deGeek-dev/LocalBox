@@ -8,7 +8,7 @@ The launcher supports three flavors of `llama-server`:
   (`q8_0`, `f16`, `q5_1`, `q5_0`, `q4_1`, `q4_0`, `iq4_nl`, `bf16`, `f32`).
   Supports `--spec-type draft-mtp` for native Multi-Token Prediction
   speculative decoding on MTP-capable GGUFs.
-- **`turboquant`** — TheTom's [llama.cpp turboquant fork](https://github.com/TheTom/llama-cpp-turboquant), which
+- **`turboquant`** — the [C0deGeek-dev llama.cpp turboquant fork](https://github.com/C0deGeek-dev/llama-cpp-turboquant), which
   ships `turbo3` and `turbo4` KV cache types (more aggressive than `q4_0` but
   with a quality cliff that's a function of context length). Only available
   through the fork binary. Auto-downloaded from GitHub releases on first use.

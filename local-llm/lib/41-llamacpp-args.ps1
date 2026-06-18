@@ -6,7 +6,7 @@
 $script:LlamaCppMainlineKvTypes = @('f16', 'bf16', 'f32', 'q8_0', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl')
 $script:LlamaCppTurboKvTypes    = @('turbo3', 'turbo4')
 
-# Modes that support turbo3/turbo4 KV cache types. Both TheTom's turboquant
+# Modes that support turbo3/turbo4 KV cache types. Both the C0deGeek-dev turboquant
 # fork and the mtpturbo build (EsmaeelNabil's branch / equivalent) register
 # the turbo* types; only mtpturbo additionally supports MTP spec-types.
 $script:LlamaCppTurboKvModes    = @('turboquant', 'mtpturbo')
@@ -59,7 +59,7 @@ function Test-LlamaCppKvType {
 }
 
 function Test-LlamaCppSpecType {
-    # Rejects MTP-family spec-types in plain turboquant mode (TheTom fork has
+    # Rejects MTP-family spec-types in plain turboquant mode (the turboquant fork has
     # no MTP code path). Mainline native supports draft-mtp; mtpturbo supports
     # mtp/nextn. Returns silently on success.
     param(

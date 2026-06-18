@@ -69,7 +69,7 @@ LocalBench may use fast `llama-bench` probes where supported, but turboquant
 mode uses `llama-server` probes so `turbo3` / `turbo4` are measured through the
 same binary LocalBox will actually launch. Upstream `llama-bench` has KV-cache
 flags (`-ctk` / `-ctv`), but TurboQuant cache types only work in a fork/build
-that registers them; LocalBox's turboquant path uses TheTom's fork.
+that registers them; LocalBox's turboquant path uses the C0deGeek-dev fork.
 
 `-Quant` selects the GGUF model file and stays fixed during a tuner run. `KvK`
 and `KvV` are only runtime KV-cache encodings.

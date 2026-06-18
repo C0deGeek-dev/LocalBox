@@ -169,7 +169,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppPort"))                  { $cfg.LlamaCppPort = 8080 }
     if (-not $cfg.ContainsKey("LlamaCppServerPath"))            { $cfg.LlamaCppServerPath = "%USERPROFILE%\\.local-llm\\llama-cpp\\llama-server.exe" }
     if (-not $cfg.ContainsKey("LlamaCppTurboquantRoot"))        { $cfg.LlamaCppTurboquantRoot = "%USERPROFILE%\\.local-llm\\llama-cpp-turboquant" }
-    if (-not $cfg.ContainsKey("LlamaCppTurboquantRepo"))        { $cfg.LlamaCppTurboquantRepo = "TheTom/llama-cpp-turboquant" }
+    if (-not $cfg.ContainsKey("LlamaCppTurboquantRepo"))        { $cfg.LlamaCppTurboquantRepo = "C0deGeek-dev/llama-cpp-turboquant" }
     if (-not $cfg.ContainsKey("LlamaCppMtpTurboRoot"))          { $cfg.LlamaCppMtpTurboRoot = "%USERPROFILE%\\.local-llm\\llama-cpp-mtpturbo" }
     if (-not $cfg.ContainsKey("LlamaCppGgufRoot"))              { $cfg.LlamaCppGgufRoot = "%USERPROFILE%\\.local-llm\\gguf" }
     if (-not $cfg.ContainsKey("LlamaCppDefaultMode"))           { $cfg.LlamaCppDefaultMode = "native" }
