@@ -17,6 +17,14 @@ Past-tense record of shipped changes.
   launch. See [`docs/settings.md`](docs/settings.md). This restores parity with
   LocalPilot's "bypass is never the default" posture for users who enter through
   LocalBox.
+- **Codex bypass default fully enforced at config load.** `Import-LocalLLMConfig`
+  no longer injects `CodexBypassApprovalsAndSandbox = $true` for an unset key, which
+  had quietly re-enabled the default-on posture for a fresh machine even though the
+  launch path itself never prompted. The key now stays absent when unset — exactly
+  like `LocalPilotBypass` — so the security summary reads "undecided" and the
+  resolver reaches its first-run prompt (interactive) or fails closed
+  (non-interactive). A regression test loads the real merged config (not a stubbed
+  one) to keep this from regressing again.
 - Fixed the LocalPilot install hint thrown by `Start-LocalPilot`: the crate is
   `cargo install localpilot` (not `localpilot-cli`), matching the troubleshooting
   doc.

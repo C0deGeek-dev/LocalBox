@@ -187,7 +187,11 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
     if (-not $cfg.ContainsKey("LocalPilotRoot"))                { $cfg.LocalPilotRoot = "" }
     if (-not $cfg.ContainsKey("CodexEnableSearch"))             { $cfg.CodexEnableSearch = $false }
-    if (-not $cfg.ContainsKey("CodexBypassApprovalsAndSandbox")) { $cfg.CodexBypassApprovalsAndSandbox = $true }
+    # CodexBypassApprovalsAndSandbox is deliberately NOT defaulted here: the
+    # dangerous --dangerously-bypass-approvals-and-sandbox flag must stay a
+    # conscious, persisted decision. Leaving the key absent lets the status text
+    # read "undecided" and the resolver reach its first-run prompt (interactive)
+    # or fail-closed branch (non-interactive), matching the LocalPilotBypass key.
     if (-not $cfg.ContainsKey("CodexStreamIdleTimeoutMs"))       { $cfg.CodexStreamIdleTimeoutMs = 10000000 }
 
     # Drop obsolete settings (docker, old localbench toggles, Ollama-era keys,

@@ -106,6 +106,65 @@ Describe 'Get-CodexCommonArgs bypass routing (default off, not on)' {
     }
 }
 
+Describe 'Codex bypass on the real merged config (fresh machine, no settings)' {
+    # Unlike the blocks above (which assign $script:Cfg = @{} directly), this loads
+    # the *real* merged config through Import-LocalLLMConfig with an empty per-machine
+    # settings file — the exact path a fresh install takes. It pins that an unset
+    # bypass key resolves to off, so config-load can never silently re-enable the
+    # dangerous flag without an explicit decision.
+    BeforeEach {
+        $script:LLMProfileRoot = (Resolve-Path (Join-Path $repoRoot 'local-llm')).Path
+        $script:LocalLLMConfigPath = Join-Path $script:LLMProfileRoot 'llm-models.json'
+        $script:SettingsRoot = New-TempSettingsRoot
+        # A path that does not exist => Import-LocalLLMSettings returns empty (fresh machine).
+        $env:LOCAL_LLM_SETTINGS = Join-Path $script:SettingsRoot 'settings.json'
+        $env:LOCAL_LLM_CODEX_BYPASS = $null
+        $script:Cfg = Import-LocalLLMConfig
+    }
+
+    AfterEach {
+        $env:LOCAL_LLM_CODEX_BYPASS = $null
+        $env:LOCAL_LLM_SETTINGS = $null
+        Remove-Item -Recurse -Force $script:SettingsRoot -ErrorAction SilentlyContinue
+    }
+
+    It 'a non-interactive launch with no persisted choice adds no dangerous bypass flag' {
+        Mock Read-Host { throw [System.Management.Automation.PSInvalidOperationException]::new('non-interactive') }
+        @(Get-CodexCommonArgs) | Should -Not -Contain '--dangerously-bypass-approvals-and-sandbox'
+    }
+
+    It 'reports Codex bypass undecided (not ON) on a fresh merged config' {
+        Get-AgentBypassStatusText -SettingName 'CodexBypassApprovalsAndSandbox' -EnvVar 'LOCAL_LLM_CODEX_BYPASS' |
+            Should -Match 'undecided'
+    }
+
+    It 'leaves the bypass key absent so the resolver reaches the prompt/fail-closed branch' {
+        $script:Cfg.Contains('CodexBypassApprovalsAndSandbox') | Should -BeFalse
+    }
+
+    It 'an explicitly persisted true still adds the flag (decision is honoured)' {
+        Mock Read-Host { throw 'must not prompt when a choice is persisted' }
+        $script:Cfg['CodexBypassApprovalsAndSandbox'] = $true
+        @(Get-CodexCommonArgs) | Should -Contain '--dangerously-bypass-approvals-and-sandbox'
+    }
+
+    It 'an explicitly persisted false still suppresses the flag' {
+        Mock Read-Host { throw 'must not prompt when a choice is persisted' }
+        $script:Cfg['CodexBypassApprovalsAndSandbox'] = $false
+        @(Get-CodexCommonArgs) | Should -Not -Contain '--dangerously-bypass-approvals-and-sandbox'
+    }
+
+    It 'the env override flips the gate decision both ways over the merged config' {
+        Mock Read-Host { throw 'env override must not prompt' }
+        $env:LOCAL_LLM_CODEX_BYPASS = '1'
+        @(Get-CodexCommonArgs) | Should -Contain '--dangerously-bypass-approvals-and-sandbox'
+
+        $env:LOCAL_LLM_CODEX_BYPASS = '0'
+        $script:Cfg['CodexBypassApprovalsAndSandbox'] = $true
+        @(Get-CodexCommonArgs) | Should -Not -Contain '--dangerously-bypass-approvals-and-sandbox'
+    }
+}
+
 Describe 'LocalPilot install hint' {
     It 'points at the cargo install localpilot crate, not localpilot-cli' {
         $content = Get-Content -Raw $script:LaunchScriptPath
