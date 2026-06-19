@@ -1214,12 +1214,11 @@ function Get-CodexCommonArgs {
         $commonArgs += '--search'
     }
 
-    $bypass = if ($script:Cfg.Contains("CodexBypassApprovalsAndSandbox")) {
-        [bool]$script:Cfg.CodexBypassApprovalsAndSandbox
-    } else {
-        $true
-    }
-    if ($bypass) {
+    # Bypass is a conscious, persisted decision (default off in non-interactive
+    # sessions), not a default-on inheritance: --dangerously-bypass-approvals-and-sandbox
+    # gives the local model full command/file authority with no approval gate.
+    if (Resolve-AgentBypassDecision -Label 'Codex' -SettingName 'CodexBypassApprovalsAndSandbox' `
+            -EnvVar 'LOCAL_LLM_CODEX_BYPASS' -FlagSummary '--dangerously-bypass-approvals-and-sandbox') {
         $commonArgs += '--dangerously-bypass-approvals-and-sandbox'
     }
 
@@ -1414,6 +1413,15 @@ function Start-LocalPilot {
 
     if ($DryRun) {
         $title = "localpilot via llama.cpp ($LlamaCppMode)"
+        # Preview resolves the bypass decision read-only (no prompt/persist); a
+        # real launch makes the first-run decision.
+        $bypassArgs = @(Get-LocalPilotBypassArgs -NoPrompt)
+        $notes = @()
+        if ($bypassArgs.Count -eq 0 -and
+            -not ($script:Cfg -and $script:Cfg.Contains('LocalPilotBypass')) -and
+            [string]::IsNullOrEmpty($env:LOCAL_LLM_LOCALPILOT_BYPASS)) {
+            $notes += "LocalPilot bypass is undecided; a real launch will ask once and persist the answer (default off)."
+        }
         $plan = @{
             Title         = $title
             Backend       = 'llamacpp'
@@ -1425,9 +1433,10 @@ function Start-LocalPilot {
             ServerArgs    = $serverArgs
             Port          = $port
             BaseUrl       = $effectiveBaseUrl
+            Bypass        = Get-AgentBypassStatusText -SettingName 'LocalPilotBypass' -EnvVar 'LOCAL_LLM_LOCALPILOT_BYPASS'
             LaunchExe     = 'localpilot'
-            LaunchArgs    = @('chat', '--model', $def.Root, '--bypass') + $extras
-            Notes         = @()
+            LaunchArgs    = @('chat', '--model', $def.Root) + $bypassArgs + $extras
+            Notes         = $notes
         }
         Show-LocalLLMLaunchPlan -Plan $plan
         return
@@ -1571,10 +1580,12 @@ api_key_env = "$apiKeyEnv"
 
         # Launch localpilot chat.
         if (-not (Get-Command localpilot -ErrorAction SilentlyContinue)) {
-            throw "localpilot is not on PATH. Install with: cargo install localpilot-cli"
+            throw "localpilot is not on PATH. Install with: cargo install localpilot"
         }
 
-        $launchArgs = @('chat', '--model', $def.Root, '--bypass') + $extras
+        # Bypass hands the local model full tool/command authority with no
+        # per-action gate; default off, opt-in via a persisted first-run decision.
+        $launchArgs = @('chat', '--model', $def.Root) + @(Get-LocalPilotBypassArgs) + $extras
         & localpilot @launchArgs
     }
     finally {

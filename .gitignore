@@ -36,6 +36,9 @@ local-llm/gguf/
 *.tmp
 *.swp
 
+# Pester -CI test-result output
+testResults.xml
+
 # Python bytecode (proxy script)
 __pycache__/
 *.pyc

@@ -51,6 +51,9 @@ function Show-LocalBoxSecuritySummary {
         'undecided - this launch will ask'
     }
 
+    $localPilotBypass = Get-AgentBypassStatusText -SettingName 'LocalPilotBypass' -EnvVar 'LOCAL_LLM_LOCALPILOT_BYPASS'
+    $codexBypass = Get-AgentBypassStatusText -SettingName 'CodexBypassApprovalsAndSandbox' -EnvVar 'LOCAL_LLM_CODEX_BYPASS'
+
     $proxyPort = if ($cfg -and $cfg.Contains('NoThinkProxyPort')) { $cfg.NoThinkProxyPort } else { 11435 }
     $serveAuth = if ([string]::IsNullOrWhiteSpace($env:LOCAL_LLM_SERVE_PASS)) { 'no token set (gateway would be open)' } else { 'token set' }
 
@@ -66,6 +69,8 @@ function Show-LocalBoxSecuritySummary {
     Write-Host ""
     Write-Host "=== LocalBox security posture ===" -ForegroundColor Cyan
     Write-Host ("  Agent permission prompts : {0}" -f $permission) -ForegroundColor Gray
+    Write-Host ("  LocalPilot bypass        : {0}" -f $localPilotBypass) -ForegroundColor Gray
+    Write-Host ("  Codex bypass             : {0}" -f $codexBypass) -ForegroundColor Gray
     Write-Host ("  Agent proxy              : 127.0.0.1:{0} (local only)" -f $proxyPort) -ForegroundColor Gray
     Write-Host ("  Serve gateway (if used)  : listens on 0.0.0.0; auth: {0}" -f $serveAuth) -ForegroundColor Gray
     Write-Host "                             LAN/VPN only; HTTPS in front for off-LAN; public no-auth HTTP is refused." -ForegroundColor DarkGray
@@ -97,6 +102,97 @@ function Request-LocalModelPermissionDecision {
     Set-LocalLLMSetting LocalModelSkipPermissions $skip
     if ($script:Cfg) { $script:Cfg['LocalModelSkipPermissions'] = $skip }
     return $skip
+}
+
+function Resolve-AgentBypassDecision {
+    # Whether an agent launch requests its bypass / all-permissions mode. Mirrors
+    # Get-LocalModelPermissionArgs resolution: an explicit env override, then the
+    # persisted per-machine config, then a one-time first-run prompt that defaults
+    # OFF. Bypass hands the local model full tool/command authority with no
+    # per-action gate, so — like skip-permissions — it is a conscious decision,
+    # never an inheritance, and a non-interactive session never silently enables
+    # it. With -NoPrompt (preview/dry-run), an undecided machine resolves to the
+    # safe default (off) without prompting or persisting.
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$SettingName,
+        [Parameter(Mandatory = $true)][string]$EnvVar,
+        [Parameter(Mandatory = $true)][string]$FlagSummary,
+        [switch]$NoPrompt
+    )
+    $envVal = [Environment]::GetEnvironmentVariable($EnvVar)
+    if (-not [string]::IsNullOrEmpty($envVal)) {
+        return ($envVal -notin @('0', 'false', 'no', 'off'))
+    }
+    if ($script:Cfg -and $script:Cfg.Contains($SettingName)) {
+        return [bool]$script:Cfg[$SettingName]
+    }
+    if ($NoPrompt) { return $false }
+    return (Request-AgentBypassDecision -Label $Label -SettingName $SettingName -FlagSummary $FlagSummary)
+}
+
+function Request-AgentBypassDecision {
+    # First agent launch on a machine with no persisted bypass choice: make
+    # enabling bypass a conscious, persisted decision. Returns $true to bypass.
+    # Defaults OFF; a non-interactive session keeps bypass off for the launch
+    # without persisting a choice.
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$SettingName,
+        [Parameter(Mandatory = $true)][string]$FlagSummary
+    )
+    Show-LocalBoxSecuritySummary
+    Write-Host ""
+    Write-Host "$Label can launch in bypass mode ($FlagSummary), giving the local" -ForegroundColor Yellow
+    Write-Host "model full tool/command authority with no per-action approval. Keeping" -ForegroundColor DarkGray
+    Write-Host "bypass off preserves the agent's own permission gate against runaway or" -ForegroundColor DarkGray
+    Write-Host "injected tool calls from less-aligned local models. Change later with:" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting $SettingName `$true|`$false" -ForegroundColor DarkGray
+
+    try {
+        $answer = (Read-Host "Enable bypass for $Label launches? [y/N]").Trim().ToLowerInvariant()
+    }
+    catch {
+        Write-Host "Non-interactive session — keeping bypass off for this launch." -ForegroundColor DarkGray
+        return $false
+    }
+
+    $bypass = $answer -in @('y', 'yes')
+    Set-LocalLLMSetting $SettingName $bypass
+    if ($script:Cfg) { $script:Cfg[$SettingName] = $bypass }
+    return $bypass
+}
+
+function Get-LocalPilotBypassArgs {
+    # The LocalPilot launch flags for the resolved bypass decision: '--bypass'
+    # when on, nothing when off. Callers wrap with @(...), so an empty result
+    # injects no stray arg. -NoPrompt resolves read-only for previews.
+    param([switch]$NoPrompt)
+    if (Resolve-AgentBypassDecision -Label 'LocalPilot' -SettingName 'LocalPilotBypass' `
+            -EnvVar 'LOCAL_LLM_LOCALPILOT_BYPASS' -FlagSummary '--bypass' -NoPrompt:$NoPrompt) {
+        return @('--bypass')
+    }
+    return @()
+}
+
+function Get-AgentBypassStatusText {
+    # Human-readable bypass posture for the security summary / launch plan, read
+    # WITHOUT prompting: 'on', 'off', or 'undecided' when neither env nor config
+    # has set it (a real launch will ask). Env overrides config for this launch.
+    param(
+        [Parameter(Mandatory = $true)][string]$SettingName,
+        [Parameter(Mandatory = $true)][string]$EnvVar
+    )
+    $envVal = [Environment]::GetEnvironmentVariable($EnvVar)
+    if (-not [string]::IsNullOrEmpty($envVal)) {
+        if ($envVal -notin @('0', 'false', 'no', 'off')) { return "ON via $EnvVar (bypass — no per-action approval)" }
+        return "off via $EnvVar (agent permission gate on)"
+    }
+    if ($script:Cfg -and $script:Cfg.Contains($SettingName)) {
+        if ([bool]$script:Cfg[$SettingName]) { return 'ON (bypass — no per-action approval)' }
+        return 'off (agent permission gate on)'
+    }
+    return 'undecided - this launch will ask (defaults off)'
 }
 
 function Ensure-Directory {

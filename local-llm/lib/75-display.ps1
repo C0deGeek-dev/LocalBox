@@ -69,6 +69,7 @@ function Show-LocalLLMLaunchPlan {
     & $add 'Server'   $Plan.ServerPath
     & $add 'Port'     $Plan.Port
     & $add 'BaseUrl'  $Plan.BaseUrl
+    & $add 'Bypass'   $Plan.Bypass
     & $add 'Health'   $Plan.HealthCheck
     if ($Plan.Contains('HealthTimeoutSec') -and [int]$Plan.HealthTimeoutSec -gt 0) {
         & $add 'HealthTimeout' ("{0}s" -f [int]$Plan.HealthTimeoutSec)

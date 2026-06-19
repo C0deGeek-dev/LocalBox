@@ -28,11 +28,35 @@ Set-LocalLLMSetting LlamaCppAgentParallel 1          # agent slots (default 1; 0
 Set-LocalLLMSetting LlamaCppAgentCacheReuse 256      # prompt-cache reuse chunk size (default 256; 0 = llama.cpp default)
 Set-LocalLLMSetting LocalModelMaxOutputTokens 4096   # cap local Claude/LocalPilot completions (0 = tool default)
 Set-LocalLLMSetting LocalModelSkipPermissions $false # require Claude Code permission prompts (unset = first launch asks once)
+Set-LocalLLMSetting LocalPilotBypass $false          # LocalPilot --bypass (unset = first launch asks once; default off)
+Set-LocalLLMSetting CodexBypassApprovalsAndSandbox $false # Codex --dangerously-bypass-… (unset = first launch asks once; default off)
 Set-LocalLLMSetting LocalPilotRoot $null             # remove an entry
 ```
 
 The `Models` and `CommandAliases` keys are catalog-only and rejected by
 `Set-LocalLLMSetting`. Everything else is fair game.
+
+### Launch permission and bypass decisions
+
+LocalBox launches other agents (Claude Code, LocalPilot, Codex) against a local
+model. Those agents have a "bypass everything" mode that hands the model full
+command/file authority with no per-action approval. Less-aligned local models
+make that authority riskier, so **LocalBox never enables bypass by default** —
+each is a conscious, persisted decision, and a **non-interactive session always
+fails closed (bypass off)**:
+
+| Setting | Agent / flag | First-run behaviour | Env override (this launch only) |
+|---|---|---|---|
+| `LocalModelSkipPermissions` | Claude Code `--dangerously-skip-permissions` | asks once, defaults off, persists | `LOCAL_LLM_SKIP_PERMISSIONS` |
+| `LocalPilotBypass` | LocalPilot `--bypass` | asks once, defaults off, persists | `LOCAL_LLM_LOCALPILOT_BYPASS` |
+| `CodexBypassApprovalsAndSandbox` | Codex `--dangerously-bypass-approvals-and-sandbox` | asks once, defaults off, persists | `LOCAL_LLM_CODEX_BYPASS` |
+
+The active posture is shown by `Show-LocalBoxSecuritySummary` and in every
+`-DryRun` launch plan. An env override (`0`/`false`/`no`/`off` = off, anything
+else = on) wins for a single launch without changing the persisted answer; clear
+a persisted choice by editing `~/.local-llm/settings.json`. This restores parity
+with LocalPilot's own "bypass is never the default" posture while leaving an
+explicit, persisted opt-in for power users.
 
 ### Verified binary downloads
 

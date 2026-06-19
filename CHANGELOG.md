@@ -4,6 +4,23 @@ Past-tense record of shipped changes.
 
 ## v0.3.0-beta.3 - 2026-06-18
 
+### 2026-06-19 - Launch safety
+
+- **Bypass is no longer a default.** Launching LocalPilot through LocalBox no
+  longer passes `--bypass` unconditionally, and Codex no longer defaults
+  `--dangerously-bypass-approvals-and-sandbox` to on. Each is now a first-run,
+  persisted decision (`LocalPilotBypass` / `CodexBypassApprovalsAndSandbox`) that
+  **defaults off and fails closed in non-interactive sessions**, mirroring the
+  existing `LocalModelSkipPermissions` prompt. The active posture is shown in
+  `Show-LocalBoxSecuritySummary` and every `-DryRun` launch plan, and an env
+  override (`LOCAL_LLM_LOCALPILOT_BYPASS` / `LOCAL_LLM_CODEX_BYPASS`) applies per
+  launch. See [`docs/settings.md`](docs/settings.md). This restores parity with
+  LocalPilot's "bypass is never the default" posture for users who enter through
+  LocalBox.
+- Fixed the LocalPilot install hint thrown by `Start-LocalPilot`: the crate is
+  `cargo install localpilot` (not `localpilot-cli`), matching the troubleshooting
+  doc.
+
 - Repinned the turboquant llama.cpp build to the forked `tqp-v0.2.0` (`b9901`,
   lazy-grammar), fixing the `q3635ba3bapex` 400 `empty grammar stack after
   <think>` failure on constrained-decoding requests. Dropped the stale TheTom
