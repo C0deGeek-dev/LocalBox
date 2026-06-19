@@ -67,3 +67,23 @@ These names are user-visible (the deployed paths). Renaming them would break
 setups, so they stay.
 
 ---
+
+## Carve-as-you-touch policy
+
+Two libs are still large — `65-claude-launch.ps1` (~2.2k lines) and
+`90-wizard.ps1` (~2.5k lines). The policy is **carve-as-you-touch, not a bulk
+rewrite**:
+
+- **Do not drop new feature code into these files.** A new concern gets its own
+  numbered `lib/NN-*.ps1` (dot-sourced in prefix order), not another block in the
+  launcher or the wizard.
+- **Extract only when you are already in the file for a real fix.** As you touch
+  `65-claude-launch.ps1`, lift the seam you are working on — agent-launch policy,
+  the Codex path, the LocalPilot path, the proxy wiring, the installer/env
+  save-restore — into its own function/lib once a cohesive cluster forms. As you
+  touch `90-wizard.ps1`, split along rendering, the interactive UI, and flow-state.
+  Pay the size down along the change you are already making, where a regression test
+  is cheap; do not open a standalone "split the monolith" change with no functional
+  driver.
+
+---
