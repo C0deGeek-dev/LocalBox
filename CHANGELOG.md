@@ -2,6 +2,13 @@
 
 Past-tense record of shipped changes.
 
+## Unreleased
+
+- **Removed the legacy bench history viewer.** The `obench` command and its
+  `70-bench.ps1` module are gone — LocalBench owns benchmarking. The old
+  `~/.local-llm/bench-history.jsonl` (written by the retired `ospeed` helper) is
+  no longer read; use LocalBench for benchmarking and tuning.
+
 ## v0.3.0-beta.3 - 2026-06-18
 
 ### 2026-06-19 - Launch safety

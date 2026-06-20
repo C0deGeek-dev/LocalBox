@@ -32,7 +32,6 @@ local-llm/
     55-huggingface.ps1  HF repo discovery, GGUF download, quant code recognition
     60-catalog.ps1      catalog editor (addllm/updatellm/removellm)
     65-claude-launch.ps1   Claude/LocalPilot/Codex launcher; env save/restore, proxy
-    70-bench.ps1        legacy bench history viewer
     71-localbench-bridge.ps1   LocalBench interop
     72-llamacpp-tuner.ps1      AutoBest config persistence
     75-display.ps1      info dashboard (Spectre + plain-text fallbacks)

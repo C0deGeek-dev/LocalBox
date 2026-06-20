@@ -790,7 +790,6 @@ function Show-LocalBoxCommandReference {
     Write-CommandRow -Command "lps" -Description "Show llama-server status."
     Write-CommandRow -Command "lstop" -Description "Stop every llama-server.exe."
     Write-CommandRow -Command "unloadall, llmstop, llm-stop" -Description "Free local model VRAM by stopping every running llama-server."
-    Write-CommandRow -Command "obench" -Description "Show legacy bench history."
 
     Write-Host ""
     Write-Host "LocalBox companion tools" -ForegroundColor Green
@@ -981,7 +980,6 @@ Manage
   Install-LocalPilot    Clone/configure the managed LocalPilot checkout
   Update-LocalPilot [-RefreshInstalled]
                         Pull the configured LocalPilot checkout and reinstall its CLI
-  obench [-Model name]  Show legacy bench history (~/.local-llm/bench-history.jsonl)
   findbest <key> -ContextKey <ctx> [-Mode native|turboquant|mtpturbo] [-Quick|-Deep] [-Budget 100]
                         Auto-tune llama.cpp launch flags for this box via LocalBench.
                         Saved profiles are picked up by -AutoBest at launch time.
