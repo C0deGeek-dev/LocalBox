@@ -100,33 +100,6 @@ function ConvertFrom-OllamaParameter {
     return @($out)
 }
 
-function Get-LlamaCppStrictSystemPromptPath {
-    # Legacy helper retained for callers that want a rendered strict prompt
-    # file. Build-LlamaServerArgs does not pass this to llama-server because
-    # some supported builds reject --system-prompt-file.
-    $dir = Get-LlamaCppTemplatesDir
-    Ensure-Directory $dir
-
-    $path = Join-Path $dir "strict-system.txt"
-
-    $lines = Get-StrictModelfileLines
-    $body = New-Object System.Collections.Generic.List[string]
-    $inSystem = $false
-
-    foreach ($l in $lines) {
-        $text = [string]$l
-        if ($text -match '^\s*SYSTEM\s+"""') { $inSystem = $true; continue }
-        if ($inSystem -and $text -match '^"""\s*$') { $inSystem = $false; continue }
-        if ($inSystem) { $body.Add($text) | Out-Null }
-    }
-
-    $content = ($body -join [System.Environment]::NewLine)
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
-
-    return $path
-}
-
 function Get-LlamaCppStrictSamplerArgs {
     # The strict overlay's PARAMETER values, translated for llama-server.
     return (ConvertFrom-OllamaParameter -Lines (Get-StrictModelfileLines))
