@@ -30,7 +30,21 @@ if (-not (Test-Path $libDir)) {
 }
 
 foreach ($file in (Get-ChildItem -Path $libDir -Filter '*.ps1' | Sort-Object Name)) {
-    . $file.FullName
+    $sourcePath = $file.FullName
+
+    if ($file.LinkType -eq 'SymbolicLink') {
+        $sourcePath = $file.Target
+        if ($sourcePath -is [array]) {
+            $sourcePath = $sourcePath[0]
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($sourcePath) -or -not (Test-Path -LiteralPath $sourcePath -PathType Leaf -ErrorAction SilentlyContinue)) {
+        Write-Verbose "Skipping unresolved LocalLLM lib file: $($file.FullName)"
+        continue
+    }
+
+    . $sourcePath
 }
 
 # Bootstrap: load config + dependent runtime state, then register per-model

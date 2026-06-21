@@ -145,6 +145,30 @@ function Install-Dir-Files {
     }
 }
 
+function Remove-ObsoleteFiles {
+    param(
+        [string]$TargetDir,
+        [string]$Filter,
+        [string[]]$KeepFiles
+    )
+
+    if (-not (Test-Path $TargetDir)) { return }
+
+    $keep = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($file in $KeepFiles) {
+        [void]$keep.Add($file)
+    }
+
+    foreach ($item in (Get-ChildItem -LiteralPath $TargetDir -Filter $Filter -File -Force)) {
+        if ($keep.Contains($item.Name)) { continue }
+
+        Write-Action "remove obsolete" $item.FullName
+        if (-not $DryRun) {
+            Remove-Item -LiteralPath $item.FullName -Force
+        }
+    }
+}
+
 function Ensure-ProfileDotSource {
     $profilePath = $PROFILE.CurrentUserAllHosts
 
@@ -603,10 +627,12 @@ if ($installFiles) {
     $libSource = Join-Path $RepoRoot "local-llm\lib"
     if (Test-Path $libSource) {
         $libFiles = @(Get-ChildItem -Path $libSource -Filter '*.ps1' | Sort-Object Name | ForEach-Object { $_.Name })
+        $libTarget = Join-Path $DeployedLocalLLM "lib"
+        Remove-ObsoleteFiles -TargetDir $libTarget -Filter '*.ps1' -KeepFiles $libFiles
         if ($libFiles.Count -gt 0) {
             Install-Dir-Files `
                 -SourceDir $libSource `
-                -TargetDir (Join-Path $DeployedLocalLLM "lib") `
+                -TargetDir $libTarget `
                 -Files $libFiles
         }
     }
