@@ -204,6 +204,39 @@ function Resolve-LlamaCppRelease {
     return Get-LlamaCppLatestRelease
 }
 
+function Get-LocalNvidiaDriverCudaVersion {
+    # The highest CUDA runtime the installed *driver* supports, parsed from the
+    # `nvidia-smi` header ("CUDA Version: 13.1"). This is the driver cap, not the
+    # toolkit version. Returns [version] or $null when nvidia-smi is absent or
+    # unparsable. Matters because a llama.cpp build compiled for a CUDA major the
+    # driver doesn't natively match can load yet miscompute (observed: a CUDA
+    # 12.4 build emits a single-token garbage flood on a 13.x driver).
+    if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) { return $null }
+    try {
+        $line = & nvidia-smi 2>$null | Select-String -Pattern 'CUDA Version:\s*([0-9]+\.[0-9]+)' | Select-Object -First 1
+        if ($line -and $line.Matches.Count -gt 0) {
+            return [version]$line.Matches[0].Groups[1].Value
+        }
+    } catch {
+        Write-Verbose "nvidia-smi CUDA version parse failed: $($_.Exception.Message)"
+    }
+    return $null
+}
+
+function Get-LlamaCppCudaMajorOrder {
+    # CUDA major versions in install-preference order. The driver's own CUDA
+    # major comes first (so we pick a build the driver runs correctly), then the
+    # remaining known majors high-to-low. Without nvidia-smi, fall back to the
+    # historical newest-to-oldest order.
+    $known = @(13, 12, 11)
+    $driver = Get-LocalNvidiaDriverCudaVersion
+    if ($driver) {
+        $maj = $driver.Major
+        return @(@($maj) + @($known | Where-Object { $_ -ne $maj }))
+    }
+    return $known
+}
+
 function Select-LlamaCppReleaseAsset {
     param(
         [Parameter(Mandatory = $true)]$Release,
@@ -226,7 +259,7 @@ function Select-LlamaCppReleaseAsset {
     }
 
     $patterns = switch ($Variant) {
-        'cuda'   { @('-cuda-12','-cuda-11','-cuda') }
+        'cuda'   { @(@(Get-LlamaCppCudaMajorOrder | ForEach-Object { "-cuda-$_" }) + '-cuda') }
         'vulkan' { @('-vulkan') }
         # Upstream renamed the CPU asset from per-ISA (-avx2- etc.) to a single
         # -cpu- build; keep the old names first for older pinned tags.
@@ -483,20 +516,36 @@ function Resolve-LlamaCppTurboquantRelease {
 }
 
 function Select-TurboquantReleaseAsset {
-    # Turboquant currently ships Windows-x64-CUDA only on the win side.
-    # Match the windows zip with -cuda in the name; reject the macOS asset.
+    # Turboquant ships Windows-x64-CUDA only on the win side. Prefer a build
+    # whose CUDA major matches the driver (asset names are `...cuda12.4...`, no
+    # dashes, so match `cuda-?<major>`). Fall back to whatever exists, but warn
+    # loudly when the only build won't match the driver -- a CUDA 12.x turboquant
+    # binary loads on a CUDA 13 driver yet emits a garbage token flood.
     param([Parameter(Mandatory = $true)]$Release)
 
-    $hit = $Release.assets | Where-Object {
+    $win = @($Release.assets | Where-Object {
         $_.name -match '\.zip$' -and $_.name -match 'windows' -and $_.name -match 'cuda'
-    } | Select-Object -First 1
+    })
 
-    if (-not $hit) {
+    if ($win.Count -eq 0) {
         $names = (@($Release.assets | ForEach-Object { $_.name })) -join ', '
         throw "No Windows CUDA turboquant asset found in release $($Release.tag_name). Available: $names"
     }
 
-    return $hit
+    $selected = $null
+    foreach ($maj in (Get-LlamaCppCudaMajorOrder)) {
+        $selected = $win | Where-Object { $_.name -match "cuda-?$maj" } | Select-Object -First 1
+        if ($selected) { break }
+    }
+    if (-not $selected) { $selected = $win[0] }
+
+    $driver = Get-LocalNvidiaDriverCudaVersion
+    if ($driver -and $selected.name -notmatch "cuda-?$($driver.Major)") {
+        Write-Warning ("turboquant release has no CUDA $($driver.Major) build matching the driver; selected $($selected.name). " +
+            "A mismatched-CUDA build can emit garbage output. Build a matching binary from source " +
+            "(Build-LlamaServerTurboquant) or roll the driver back to the build's CUDA major.")
+    }
+    return $selected
 }
 
 function Install-LlamaServerTurboquant {
@@ -553,6 +602,114 @@ function Install-LlamaServerTurboquant {
     return $serverPath
 }
 
+function Build-LlamaServerTurboquant {
+    # Source-build fallback for the turboquant (tqp) fork, used when the
+    # published release ships no CUDA build matching the local driver (e.g. a
+    # CUDA 13 driver while the release has only CUDA 12.4 -- that binary loads
+    # but emits a garbage flood). Clones the pinned tag, builds llama-server for
+    # the local GPU + CUDA toolkit, and installs the binaries plus
+    # version-matched CUDA runtime DLLs into the turboquant install root.
+    # Reuses the generic build prereq probe. Throws on any failure.
+    [CmdletBinding()]
+    param()
+
+    $prereqs = Test-LlamaCppMtpTurboBuildPrereqs
+    if (-not $prereqs.Ok) {
+        Write-MtpTurboPrereqGuidance -Missing $prereqs.Missing
+        throw "Cannot build turboquant: missing $($prereqs.Missing -join ', ')"
+    }
+
+    $repo = Get-LlamaCppTurboquantRepo
+    $tag  = Get-LlamaCppPinnedTag -Key 'LlamaCppTurboquantPinnedTag'
+    if ([string]::IsNullOrWhiteSpace($tag)) {
+        throw "LlamaCppTurboquantPinnedTag is not set; refusing to build an unpinned turboquant."
+    }
+
+    $installRoot = Get-LlamaCppTurboquantInstallRoot
+    Ensure-Directory $installRoot
+    # Build outside the install root so Find-TurboquantServerExe (recursive glob)
+    # can't pick up the source tree's build\bin\llama-server.exe.
+    $srcRoot = Join-Path (Split-Path -Parent $installRoot) 'src\turboquant-tqp'
+    Ensure-Directory (Split-Path -Parent $srcRoot)
+
+    Write-Host ""
+    Write-Host "Building turboquant llama.cpp from source." -ForegroundColor Cyan
+    Write-Host "  Repo    : github.com/$repo (tag $tag)" -ForegroundColor DarkGray
+    Write-Host "  Source  : $srcRoot" -ForegroundColor DarkGray
+    Write-Host "  Install : $installRoot" -ForegroundColor DarkGray
+
+    if (Test-Path (Join-Path $srcRoot '.git')) {
+        & git -C $srcRoot fetch --depth 1 origin "refs/tags/$tag" 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git fetch of tag $tag failed" }
+        & git -C $srcRoot checkout -f FETCH_HEAD 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
+    } else {
+        if (Test-Path $srcRoot) { Remove-Item -Recurse -Force $srcRoot }
+        & git clone --depth 1 -b $tag "https://github.com/$repo.git" $srcRoot 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git clone of $repo#$tag failed" }
+    }
+
+    $headSha = (& git -C $srcRoot rev-parse --short HEAD).Trim()
+
+    $cc = Get-LocalNvidiaComputeCapability
+    $cudaArch = if ($cc) { ($cc -replace '\.', '') + '-real' } else { '75-virtual;80-real;86-real;89-real' }
+    $cudaRoot = $prereqs.Found['cuda']
+    $vcvars = (Find-MsvcBuildEnv).VcVars
+    Write-Host "  GPU arch: $cudaArch ; CUDA: $cudaRoot" -ForegroundColor DarkGray
+
+    $buildScript = Join-Path $srcRoot '.localbox-build-turboquant.cmd'
+    $scriptBody = @"
+@echo off
+setlocal enableextensions
+cd /d "%~dp0"
+call "$vcvars"
+if errorlevel 1 exit /b 12
+set "PATH=$cudaRoot\bin;%PATH%"
+if exist build rmdir /s /q build
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DLLAMA_CURL=OFF -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=$cudaArch -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler -DCMAKE_CUDA_COMPILER="$cudaRoot\bin\nvcc.exe"
+if errorlevel 1 exit /b 2
+cmake --build build --config Release --target llama-server -- -j 0
+if errorlevel 1 exit /b 3
+exit /b 0
+"@
+    Set-Content -LiteralPath $buildScript -Value $scriptBody -Encoding ASCII
+
+    Write-Host "Building turboquant (15-30 min; output streaming below)..." -ForegroundColor Cyan
+    & cmd.exe /c "`"$buildScript`"" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "turboquant build failed with exit code $LASTEXITCODE. Inspect $srcRoot\build\ for details."
+    }
+
+    $binDir = Join-Path $srcRoot 'build\bin'
+    if (-not (Test-Path (Join-Path $binDir 'llama-server.exe'))) {
+        throw "Build reported success but llama-server.exe is missing under $binDir."
+    }
+
+    Get-ChildItem -Path $binDir -Include '*.exe', '*.dll' -File -Recurse | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
+    }
+
+    # Version-matched CUDA runtime DLLs. The CUDA 13 toolkit nests these under
+    # bin\ or bin\x64\, so search recursively rather than assume a flat layout.
+    $cudaMajor = if ((Split-Path -Leaf $cudaRoot) -match '(\d+)\.') { $Matches[1] } else { '12' }
+    foreach ($dll in @("cudart64_$cudaMajor.dll", "cublas64_$cudaMajor.dll", "cublasLt64_$cudaMajor.dll")) {
+        $hit = Get-ChildItem -Path (Join-Path $cudaRoot 'bin') -Filter $dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($hit) {
+            Copy-Item -LiteralPath $hit.FullName -Destination $installRoot -Force
+        } else {
+            Write-Warning "CUDA runtime DLL $dll not found under $cudaRoot\bin; the server may fail to start."
+        }
+    }
+
+    Repair-TurboquantOpenSslDeps -InstallDir $installRoot
+    Set-Content -LiteralPath (Join-Path $installRoot '.build-stamp') -Value "$tag-src-$headSha-cuda$cudaMajor" -Encoding utf8
+
+    $serverPath = Join-Path $installRoot 'llama-server.exe'
+    Write-Host "Installed turboquant (source build): $serverPath" -ForegroundColor Green
+    Write-Host "Build stamp: $tag-src-$headSha-cuda$cudaMajor" -ForegroundColor DarkGray
+    return $serverPath
+}
+
 function Repair-TurboquantOpenSslDeps {
     # Some turboquant builds link OpenSSL but ship without libcrypto/libssl/zlib.
     # If the install dir is missing them, copy from common system locations
@@ -602,6 +759,45 @@ function Ensure-LlamaServerTurboquant {
         return $existing
     }
 
+    # A turboquant binary whose CUDA major differs from the driver loads but can
+    # emit garbage. When the pinned release has no driver-matching CUDA build,
+    # prefer a source build (the toolchain permitting) over a broken download.
+    $driver = Get-LocalNvidiaDriverCudaVersion
+    if ($driver) {
+        $releaseMatches = $true
+        try {
+            $asset = Select-TurboquantReleaseAsset -Release (Resolve-LlamaCppTurboquantRelease)
+            $releaseMatches = ($asset.name -match "cuda-?$($driver.Major)")
+        } catch {
+            Write-Verbose "turboquant release probe failed: $($_.Exception.Message)"
+        }
+
+        if (-not $releaseMatches) {
+            $prereqs = Test-LlamaCppMtpTurboBuildPrereqs
+            if (-not $prereqs.Ok) {
+                Write-Warning ("turboquant release has no CUDA $($driver.Major) build and the build toolchain is " +
+                    "incomplete (missing: $($prereqs.Missing -join ', ')). Falling back to the CUDA-mismatched " +
+                    "release binary, which may emit garbage output.")
+            }
+            elseif ($NonInteractive -and -not (Test-LocalBoxAutoBuildEnabled)) {
+                throw ("turboquant release has no CUDA $($driver.Major) build. Re-run interactively to build from " +
+                    "source, set LOCALBOX_AUTO_BUILD=1, or run Build-LlamaServerTurboquant.")
+            }
+            else {
+                Write-Host ""
+                Write-Host "turboquant release has no CUDA $($driver.Major) build; building from source for this driver." -ForegroundColor Yellow
+                if (-not (Test-LocalBoxAutoBuildEnabled)) {
+                    $answer = (Read-Host "Build turboquant from source now (~15-30 min)? [Y/n]").Trim().ToLowerInvariant()
+                    if ($answer -in @('n', 'no')) {
+                        Write-Warning "Declined; downloading the CUDA-mismatched release binary (expect garbage until you build from source)."
+                        return Install-LlamaServerTurboquant
+                    }
+                }
+                return Build-LlamaServerTurboquant
+            }
+        }
+    }
+
     if ($NonInteractive) {
         return Install-LlamaServerTurboquant
     }
@@ -610,7 +806,7 @@ function Ensure-LlamaServerTurboquant {
     Write-Host "turboquant llama-server is not installed." -ForegroundColor Yellow
     Write-Host "  Source: github.com/$(Get-LlamaCppTurboquantRepo)/releases" -ForegroundColor DarkGray
     Write-Host "  Target: $(Get-LlamaCppTurboquantInstallRoot)" -ForegroundColor DarkGray
-    Write-Host "  Note  : ~700 MB download (Windows x64 CUDA 12.4 only)" -ForegroundColor DarkGray
+    Write-Host "  Note  : ~700 MB download (Windows x64 CUDA build)" -ForegroundColor DarkGray
     $answer = (Read-Host "Download and install now? [Y/n]").Trim().ToLowerInvariant()
 
     if ($answer -in @("n", "no")) {
@@ -1067,10 +1263,13 @@ exit /b 0
         Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
     }
 
-    foreach ($dll in @('cudart64_12.dll','cublas64_12.dll','cublasLt64_12.dll')) {
-        $candidate = Join-Path $cudaRoot "bin\$dll"
-        if (Test-Path $candidate) {
-            Copy-Item -LiteralPath $candidate -Destination $installRoot -Force
+    # Version-matched CUDA runtime DLLs (CUDA 13 nests them under bin\ or
+    # bin\x64\, so search recursively rather than assume cudart64_12 in bin\).
+    $cudaMajor = if ((Split-Path -Leaf $cudaRoot) -match '(\d+)\.') { $Matches[1] } else { '12' }
+    foreach ($dll in @("cudart64_$cudaMajor.dll", "cublas64_$cudaMajor.dll", "cublasLt64_$cudaMajor.dll")) {
+        $hit = Get-ChildItem -Path (Join-Path $cudaRoot 'bin') -Filter $dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($hit) {
+            Copy-Item -LiteralPath $hit.FullName -Destination $installRoot -Force
         }
     }
 
