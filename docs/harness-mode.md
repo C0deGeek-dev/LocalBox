@@ -98,6 +98,28 @@ Password-only HTTP is convenient for LAN testing. Over a public IP it is not
 encrypted: the password and prompts can be observed in transit unless you put a
 VPN or HTTPS reverse proxy in front of it.
 
+### Headless local serve
+
+`llmserve` (above) is for serving *off-box* over the LAN. To run the model on
+**this** machine for a separate local agent process — a `localpilot` CLI run, a
+script, CI — use `llmdefaultserve`. It launches the configured default model
+(the same `llmdefault` recipe) as a background `llama-server` plus the loopback
+no-think proxy, runs a visible-response smoke test, prints the endpoint/PID, and
+returns **without attaching an interactive agent**:
+
+```powershell
+llmdefaultserve            # serve the default-recipe model, headless
+llmdefaultserve -WhatIf    # dry-run: print the plan, launch nothing
+llmstop                    # stop the server (and proxy) when done
+```
+
+This exists because the agent-attaching launches (`llmdefault`, `llm` →
+`LocalPilot`/`Claude`) start the server and proxy and then **tear them down when
+the attached agent exits** — fine for an interactive session, but it pulls the
+endpoint out from under a separate CLI you wanted to drive. `llmdefaultserve`
+leaves the endpoint up until `llmstop`. It binds loopback only (no `0.0.0.0`, no
+password); for off-box access use the serve gateway instead.
+
 ### Strict overlay (engineering mode)
 
 Some models in the catalog have `Strict: true`. Pass `-Strict` and the
