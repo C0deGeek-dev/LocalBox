@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`llmdefaultserve` — headless model serve for CLI / agent / CI.** Brings up the
+  DefaultLaunch model as a background llama-server + no-think proxy (loopback) with a
+  visible-response smoke test and does **not** attach an interactive agent or tear the
+  endpoint down on exit — unlike `llmdefault`, whose agent-attach (`Start-LocalPilot`)
+  stops the server and proxy when the attached process exits. For driving the model from
+  a separate `localpilot`/`claude` process. Distinct from the LAN serve gateway
+  `llmserve` (binds 0.0.0.0 with auth); this one is loopback-only. Stop with `llmstop`.
+- **Fixed the `-DryRun` launch-plan "Agent argv" error.** An empty extra-args list
+  arrives as a nested empty array element (helpers return `,$extras`); the real launch
+  splats it away, but the preview's `Format-LocalLLMArgvLine` failed to bind it as a
+  string. The formatter now flattens nested elements, so the preview renders the agent
+  command line cleanly.
+
 - **Removed the legacy bench history viewer.** The `obench` command and its
   `70-bench.ps1` module are gone — LocalBench owns benchmarking. The old
   `~/.local-llm/bench-history.jsonl` (written by the retired `ospeed` helper) is

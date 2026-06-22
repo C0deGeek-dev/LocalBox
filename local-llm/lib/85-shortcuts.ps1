@@ -1,4 +1,4 @@
-﻿# Per-model shortcut function generator. For every catalog entry we bind a
+# Per-model shortcut function generator. For every catalog entry we bind a
 # global function (named after the model's Root or ShortName) that takes
 # -Ctx / -LocalPilot / -Codex / -Strict / -Quant / -Mode flags and dispatches
 # to the llama-server launcher.
@@ -349,6 +349,58 @@ function llmdefault {
         [Alias('WhatIf')][switch]$DryRun
     )
     Invoke-LLMDefaultLaunch -Strict:$Strict -DryRun:$DryRun
+}
+
+function llmdefaultserve {
+    # Headless sibling of `llmdefault`: serve the same DefaultLaunch model as a
+    # background llama-server + no-think proxy (with a smoke test) and DO NOT
+    # attach an interactive agent, so the loopback endpoint stays up for a
+    # separate `localpilot`/`claude` process to drive. For CLI/agent/CI use.
+    # (Distinct from `llmserve`, the LAN serve gateway that binds 0.0.0.0 with
+    # auth — this one is loopback-only and fronts the no-think proxy the agent
+    # wiring expects.) Recipe resolution mirrors Invoke-LLMDefaultLaunch
+    # (workspace `.llm-default`, then the saved DefaultLaunch recipe, then the
+    # configured default model). Stop with `llmstop`.
+    [CmdletBinding()]
+    param(
+        [switch]$Strict,
+        [Alias('WhatIf')][switch]$DryRun
+    )
+
+    if (-not $script:Cfg.Contains('DefaultLaunch') -or -not $script:Cfg.DefaultLaunch) {
+        Start-LocalLLMHeadlessServe -Key (Get-DefaultModelKey) -ContextKey '' -Strict:$Strict -DryRun:$DryRun
+        return
+    }
+
+    $workspace = Find-WorkspaceDefaultModelKey
+    if ($workspace) {
+        Start-LocalLLMHeadlessServe -Key $workspace -ContextKey '' -Strict:$Strict -DryRun:$DryRun
+        return
+    }
+
+    $launch = ConvertTo-LLMDefaultLaunchHashtable -Value $script:Cfg.DefaultLaunch
+    $modelKey = [string]$launch.ModelKey
+    $def = Get-ModelDef -Key $modelKey
+
+    if (-not $DryRun -and $def.ContainsKey('Quants') -and $launch.Contains('Quant') -and -not [string]::IsNullOrWhiteSpace([string]$launch.Quant)) {
+        Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey ([string]$launch.Quant)
+    }
+
+    $contextKey = if ($launch.Contains('ContextKey')) { [string]$launch.ContextKey } else { '' }
+    $llamaCppMode = if ($launch.Contains('LlamaCppMode')) { [string]$launch.LlamaCppMode } else { $null }
+    $kvK = if ($launch.Contains('KvCacheK')) { [string]$launch.KvCacheK } else { $null }
+    $kvV = if ($launch.Contains('KvCacheV')) { [string]$launch.KvCacheV } else { $null }
+    $useStrict = ($launch.Contains('Strict') -and [bool]$launch.Strict) -or [bool]$Strict
+    $useAutoBest = $launch.Contains('UseAutoBest') -and [bool]$launch.UseAutoBest
+    $autoBestProfile = if ($launch.Contains('AutoBestProfile') -and -not [string]::IsNullOrWhiteSpace([string]$launch.AutoBestProfile)) {
+        [string]$launch.AutoBestProfile
+    } else {
+        'auto'
+    }
+
+    Start-LocalLLMHeadlessServe -Key $modelKey -ContextKey $contextKey -Mode $llamaCppMode `
+        -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict `
+        -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -DryRun:$DryRun
 }
 
 function llmdefaultlocalpilot {

@@ -5,11 +5,23 @@
 $script:LocalLLMSpectreState = $null  # $true / $false / $null (unprobed)
 
 function Format-LocalLLMArgvLine {
-    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Argv)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Argv)
+
+    # Flatten one level first: an empty extra-args list arrives as a nested empty
+    # array element (helpers return `,$extras` to preserve array-ness), which the
+    # real launch splats away but which broke the preview's string coercion.
+    $tokens = foreach ($item in $Argv) {
+        if ($item -is [System.Collections.IEnumerable] -and $item -isnot [string]) {
+            foreach ($inner in $item) { [string]$inner }
+        }
+        else {
+            [string]$item
+        }
+    }
 
     # Quote tokens that contain whitespace or quote characters so the preview
     # round-trips back to a usable command line if a user copy-pastes it.
-    $quoted = foreach ($a in $Argv) {
+    $quoted = foreach ($a in $tokens) {
         if ([string]::IsNullOrEmpty($a)) {
             '""'
         }

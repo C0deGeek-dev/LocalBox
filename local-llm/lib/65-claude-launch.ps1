@@ -860,6 +860,100 @@ function Start-LocalLLMLlamaCppServeBackend {
     }
 }
 
+function Start-LocalLLMHeadlessServe {
+    # Headless model launch for CLI / agent / CI use: bring up llama-server and
+    # (for reasoning models) the no-think proxy as background processes, run the
+    # visible-response smoke test, then return — WITHOUT attaching an interactive
+    # agent. Unlike Start-LocalPilot, nothing is torn down on exit, so the
+    # endpoint stays up for a separate `localpilot`/`claude` process to drive.
+    # Reuses Start-LocalLLMLlamaCppServeBackend (server) + Start-NoThinkProxy.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [ValidateSet('native', 'turboquant', 'mtpturbo')][string]$Mode,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [switch]$Strict,
+        [switch]$UseAutoBest,
+        [ValidateSet('auto', 'pure', 'balanced', 'short', 'long')][string]$AutoBestProfile = 'auto',
+        [switch]$DryRun
+    )
+
+    $resolvedMode = Resolve-LlamaCppMode -Mode $Mode
+    $def = Get-ModelDef -Key $Key
+    $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
+    $useNoThinkProxy = ($thinkingPolicy -ne 'keep')
+
+    $backend = Start-LocalLLMLlamaCppServeBackend `
+        -Key $Key -ContextKey $ContextKey -Mode $resolvedMode `
+        -KvCacheK $KvCacheK -KvCacheV $KvCacheV -Strict:$Strict `
+        -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
+
+    if ($DryRun) {
+        $proxyNote = if ($useNoThinkProxy) {
+            "127.0.0.1:$($script:NoThinkProxyPort) -> llama-server:$($backend.TargetPort)"
+        } else {
+            'disabled (ThinkingPolicy=keep)'
+        }
+        $plan = @{
+            Title      = "headless serve: $($def.Root) via llama.cpp ($resolvedMode)"
+            Backend    = 'llamacpp'
+            Mode       = $resolvedMode
+            Key        = $Key
+            Model      = $def.Root
+            ContextKey = $ContextKey
+            ServerPath = $backend.ServerPath
+            ServerArgs = $backend.ServerArgs
+            Port       = $backend.TargetPort
+            BaseUrl    = $backend.TargetBaseUrl
+            Notes      = @(
+                'No agent is attached and nothing is torn down — the server (and proxy) keep running until `llmstop`.',
+                "No-think proxy: $proxyNote"
+            )
+        }
+        Show-LocalLLMLaunchPlan -Plan $plan
+        return
+    }
+
+    $clientBaseUrl = $backend.TargetBaseUrl
+    if ($useNoThinkProxy) {
+        try {
+            Start-NoThinkProxy -ListenHost '127.0.0.1' -ListenPort $script:NoThinkProxyPort -TargetHost '127.0.0.1' -TargetPort $backend.TargetPort -AuthToken ''
+            $clientBaseUrl = "http://127.0.0.1:$($script:NoThinkProxyPort)"
+            Write-Host "  Proxy    : no-think 127.0.0.1:$($script:NoThinkProxyPort) -> llama-server:$($backend.TargetPort)" -ForegroundColor DarkGray
+        }
+        catch {
+            Write-Warning "No-think proxy failed to start ($_); serving the raw OpenAI endpoint at $($backend.TargetBaseUrl)."
+            $useNoThinkProxy = $false
+        }
+    }
+
+    $smoke = Test-ClaudeLocalVisibleResponse -BaseUrl $clientBaseUrl -Model $def.Root
+    if (-not $smoke.Ok) {
+        Write-Warning "Served $($def.Root) on $clientBaseUrl but the visible-response smoke test failed ($(Format-ClaudeLocalSmokeFailure -Smoke $smoke)). Check the server logs."
+    }
+
+    $session = Get-CurrentBackendSession
+    Write-Host ""
+    Write-Host "Headless model server ready (no agent attached)." -ForegroundColor Green
+    Write-Host "  Model    : $($def.Root)" -ForegroundColor Gray
+    Write-Host "  Client   : $clientBaseUrl$(if ($useNoThinkProxy) { '  (Anthropic /v1/messages, think-stripped)' } else { '  (OpenAI /v1)' })" -ForegroundColor Gray
+    Write-Host "  Backend  : $($backend.TargetBaseUrl)  (llama-server pid $($session.Pid), port $($backend.TargetPort))" -ForegroundColor Gray
+    Write-Host "  Smoke    : $(if ($smoke.Ok) { 'ok' } else { 'FAILED (see warning)' })" -ForegroundColor Gray
+    Write-Host "  Stop     : llmstop" -ForegroundColor Gray
+
+    return [pscustomobject]@{
+        Model          = $def.Root
+        ClientBaseUrl  = $clientBaseUrl
+        BackendBaseUrl = $backend.TargetBaseUrl
+        Port           = $backend.TargetPort
+        Pid            = $session.Pid
+        Proxy          = $useNoThinkProxy
+        SmokeOk        = [bool]$smoke.Ok
+    }
+}
+
 function Test-LlamaCppSpecFallbackEligible {
     param(
         [Parameter(Mandatory = $true)]$ErrorRecord,
