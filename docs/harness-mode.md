@@ -120,6 +120,23 @@ endpoint out from under a separate CLI you wanted to drive. `llmdefaultserve`
 leaves the endpoint up until `llmstop`. It binds loopback only (no `0.0.0.0`, no
 password); for off-box access use the serve gateway instead.
 
+The `-WhatIf` / `-DryRun` preview renders the **same** recipe the live launch
+runs, including the selected quant: when the default recipe pins a non-default
+quant, the preview shows that GGUF and its KV-cache/AutoBest args (not the model's
+default quant). The preview commits no session state.
+
+**Troubleshooting a `502 Bad Gateway`.** If a request to the proxy
+(`127.0.0.1:11435`) returns a bare `502`, the proxy is up but its upstream model
+server (`127.0.0.1:8080`) is down — typically a stale proxy left over from a prior
+session. Restart the stack:
+
+```powershell
+llmstop; llmdefaultserve
+```
+
+`llmdefaultserve` surfaces this state automatically if its post-launch smoke test
+fails (a bounded, non-blocking check that never delays the launch).
+
 ### Strict overlay (engineering mode)
 
 Some models in the catalog have `Strict: true`. Pass `-Strict` and the
