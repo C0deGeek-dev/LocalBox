@@ -53,6 +53,46 @@ function Test-NoThinkProxyTarget {
     return $false
 }
 
+function Get-LocalLLMServeHealthState {
+    # Bounded, non-blocking serve-health probe that distinguishes a *stale* no-think
+    # proxy — listening on its port while the upstream model server is down, so
+    # requests return a bare `502 Bad Gateway` — from a fully-down or healthy stack,
+    # and returns an actionable recommendation. Diagnostic only: it never starts,
+    # stops, or blocks anything. Reuses the proxy `/health` probe (1s timeout) and
+    # the loopback port probe.
+    param(
+        [Parameter(Mandatory = $true)][int]$ProxyPort,
+        [Parameter(Mandatory = $true)][int]$UpstreamPort,
+        [string]$AuthToken
+    )
+
+    $proxyUp = [bool](Get-NoThinkProxyHealth -Port $ProxyPort -AuthToken $AuthToken)
+    # Test-LlamaCppPortFree returns $true when the port can be bound (nothing is
+    # listening); a bound/in-use upstream port therefore means the server is up.
+    $upstreamUp = -not (Test-LlamaCppPortFree -Port $UpstreamPort)
+
+    $state = if ($proxyUp -and -not $upstreamUp) { 'stale-proxy' }
+    elseif (-not $proxyUp -and -not $upstreamUp) { 'down' }
+    elseif (-not $proxyUp -and $upstreamUp) { 'proxy-down' }
+    else { 'ok' }
+
+    $recommendation = switch ($state) {
+        'stale-proxy' { "The no-think proxy is up on $ProxyPort but the upstream model server on $UpstreamPort is down, so requests return a bare 502. Restart the stack: llmstop; llmdefaultserve" }
+        'down' { 'Neither the no-think proxy nor the model server is running. Start them with: llmdefaultserve' }
+        'proxy-down' { "The model server on $UpstreamPort is up but the no-think proxy on $ProxyPort is not running. Restart the stack: llmstop; llmdefaultserve" }
+        default { '' }
+    }
+
+    return [pscustomobject]@{
+        State          = $state
+        ProxyUp        = $proxyUp
+        UpstreamUp     = $upstreamUp
+        ProxyPort      = $ProxyPort
+        UpstreamPort   = $UpstreamPort
+        Recommendation = $recommendation
+    }
+}
+
 function Save-ClaudeEnvBackup {
     $script:ClaudeEnvBackup = @{}
 
@@ -932,6 +972,15 @@ function Start-LocalLLMHeadlessServe {
     $smoke = Test-ClaudeLocalVisibleResponse -BaseUrl $clientBaseUrl -Model $def.Root
     if (-not $smoke.Ok) {
         Write-Warning "Served $($def.Root) on $clientBaseUrl but the visible-response smoke test failed ($(Format-ClaudeLocalSmokeFailure -Smoke $smoke)). Check the server logs."
+        # Bounded, non-blocking diagnostic: distinguish a stale proxy (up while the
+        # upstream is down → a bare 502) from a genuine model fault, with the fix to
+        # run. Never blocks the launch — the endpoint is already up.
+        if ($useNoThinkProxy) {
+            $health = Get-LocalLLMServeHealthState -ProxyPort $script:NoThinkProxyPort -UpstreamPort $backend.TargetPort
+            if ($health.State -ne 'ok' -and -not [string]::IsNullOrWhiteSpace($health.Recommendation)) {
+                Write-Warning "Serve health: $($health.State). $($health.Recommendation)"
+            }
+        }
     }
 
     $session = Get-CurrentBackendSession

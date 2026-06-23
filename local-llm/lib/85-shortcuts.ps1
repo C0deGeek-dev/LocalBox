@@ -382,8 +382,16 @@ function llmdefaultserve {
     $modelKey = [string]$launch.ModelKey
     $def = Get-ModelDef -Key $modelKey
 
-    if (-not $DryRun -and $def.ContainsKey('Quants') -and $launch.Contains('Quant') -and -not [string]::IsNullOrWhiteSpace([string]$launch.Quant)) {
-        Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey ([string]$launch.Quant)
+    # Resolve the launch's selected quant for BOTH the dry-run preview and the live
+    # launch, so `-DryRun` renders the same GGUF + AutoBest recipe the live launch
+    # actually consumes. Previously the quant was applied only on the live path, so a
+    # preview showed the model's default quant (and the mismatched KV-cache/runtime
+    # args that follow from it). For a dry run the change is reverted afterwards so a
+    # preview commits no session state.
+    $applyQuant = $def.ContainsKey('Quants') -and $launch.Contains('Quant') -and -not [string]::IsNullOrWhiteSpace([string]$launch.Quant)
+    $restoreQuant = if ($applyQuant -and $DryRun) { [string]$def.Quant } else { $null }
+    if ($applyQuant) {
+        Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey ([string]$launch.Quant) -Quiet:$DryRun
     }
 
     $contextKey = if ($launch.Contains('ContextKey')) { [string]$launch.ContextKey } else { '' }
@@ -398,9 +406,14 @@ function llmdefaultserve {
         'auto'
     }
 
-    Start-LocalLLMHeadlessServe -Key $modelKey -ContextKey $contextKey -Mode $llamaCppMode `
-        -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict `
-        -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -DryRun:$DryRun
+    try {
+        Start-LocalLLMHeadlessServe -Key $modelKey -ContextKey $contextKey -Mode $llamaCppMode `
+            -KvCacheK $kvK -KvCacheV $kvV -Strict:$useStrict `
+            -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -DryRun:$DryRun
+    }
+    finally {
+        if ($null -ne $restoreQuant) { $def.Quant = $restoreQuant }
+    }
 }
 
 function llmdefaultlocalpilot {

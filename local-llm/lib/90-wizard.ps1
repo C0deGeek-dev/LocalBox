@@ -305,7 +305,11 @@ function Select-LLMKvCache {
 function Set-ModelQuantForSelectedLaunch {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
-        [Parameter(Mandatory = $true)][string]$QuantKey
+        [Parameter(Mandatory = $true)][string]$QuantKey,
+        # Suppress the "session quant set" notice. Used when resolving the quant only
+        # to render a dry-run preview, where the change is reverted afterwards and so
+        # is not a real session change.
+        [switch]$Quiet
     )
 
     $def = Get-ModelDef -Key $ModelKey
@@ -321,7 +325,9 @@ function Set-ModelQuantForSelectedLaunch {
     $resolvedQuant = Resolve-ModelQuantKey -Def $def -Quant $QuantKey
     $def.Quant = $resolvedQuant
 
-    Write-Host "$ModelKey session quant set to $resolvedQuant -> $($def.Quants[$resolvedQuant])" -ForegroundColor Green
+    if (-not $Quiet) {
+        Write-Host "$ModelKey session quant set to $resolvedQuant -> $($def.Quants[$resolvedQuant])" -ForegroundColor Green
+    }
 }
 
 function Read-LLMVisionToggle {

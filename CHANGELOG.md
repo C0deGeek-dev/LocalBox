@@ -4,6 +4,20 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`llmdefaultserve -DryRun` now previews the recipe that actually launches.** When the
+  DefaultLaunch recipe selects a non-default quant, the dry run used to show the model's
+  *default* quant (e.g. `APEX-Balanced.gguf` with `q8` KV-cache args) while the live
+  launch ran the selected one (e.g. `APEX-I-Quality.gguf` with `turbo3` args) — the quant
+  was applied only on the live path. The selected quant is now resolved for both paths, so
+  the preview renders the same GGUF + AutoBest/KV-cache recipe the live launch consumes; a
+  dry run reverts the change afterwards, so previewing still commits no session state.
+- **Stale no-think proxy is now diagnosable instead of a bare 502.** When the no-think
+  proxy is up but the upstream model server is down, a request returned only
+  `502 Bad Gateway`. A bounded, non-blocking health probe now distinguishes that stale
+  state from a fully-down or healthy stack and recommends the fix (`llmstop;
+  llmdefaultserve`); it is surfaced when a headless serve's smoke test fails, and never
+  blocks the launch.
+
 - **`llmdefaultserve` — headless model serve for CLI / agent / CI.** Brings up the
   DefaultLaunch model as a background llama-server + no-think proxy (loopback) with a
   visible-response smoke test and does **not** attach an interactive agent or tear the
