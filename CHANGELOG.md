@@ -4,6 +4,14 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Dead-code cleanup: removed 7 unused PowerShell helpers.** No call sites
+  remained for `Convert-ToPosixPath`, `Get-HuggingFaceModelFiles`,
+  `Get-LlamaCppTemplatesDir`, `Set-LocalBoxTuiSetting`, `Invoke-LocalBoxTuiLaunch`,
+  `Get-LocalBenchLauncherBestConfig`, or `Get-LocalBenchLauncherBestConfigCandidates`.
+  Also dropped the stale `local-llm/bench-history.jsonl` `.gitignore` entry
+  (nothing writes it). No behaviour change. (The `Ensure-LlamaBenchExe` /
+  `Ensure-LlamaPerplexityExe` finders/installers were left in place: they are part
+  of the LocalBench launcher contract surface, not dead.)
 - **`llmdefaultserve -DryRun` now previews the recipe that actually launches.** When the
   DefaultLaunch recipe selects a non-default quant, the dry run used to show the model's
   *default* quant (e.g. `APEX-Balanced.gguf` with `q8` KV-cache args) while the live

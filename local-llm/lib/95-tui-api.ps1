@@ -144,27 +144,6 @@ function Get-LocalBoxTuiSettings {
     }
 }
 
-function Set-LocalBoxTuiSetting {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Key,
-        [AllowNull()][AllowEmptyString()][object]$Value
-    )
-
-    $before = Get-LocalBoxTuiSettings
-    Set-LocalLLMSetting -Key $Key -Value $Value *>$null
-    $script:Cfg = Import-LocalLLMConfig
-    $after = Get-LocalBoxTuiSettings
-
-    [pscustomobject]@{
-        key = $Key
-        oldValue = if ($before.values.PSObject.Properties[$Key]) { $before.values.$Key } else { $null }
-        newValue = if ($after.values.PSObject.Properties[$Key]) { $after.values.$Key } else { $null }
-        path = $after.path
-        removed = -not [bool]$after.values.PSObject.Properties[$Key]
-    }
-}
-
 function Get-LocalBoxTuiLocalBenchStatus {
     [CmdletBinding()]
     param()
@@ -525,44 +504,6 @@ function Invoke-LocalBoxTuiResetBest {
     }
 
     Write-Host "No matching saved AutoBest settings found for $Key / $contextLabel / $Mode / $quant." -ForegroundColor DarkGray
-}
-
-function Invoke-LocalBoxTuiLaunch {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Key,
-        [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('claude','codex','localpilot','serve','chat','setup','findbest','resetbest')][string]$Action = 'claude',
-        [ValidateSet('native','turboquant','mtpturbo')][string]$Mode = 'native',
-        [string]$Quant,
-        [switch]$Strict,
-        [switch]$UseVision,
-        [switch]$UseAutoBest,
-        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
-        [int]$Budget = 0,
-        [int]$Runs = 0,
-        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
-        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
-        [ValidateSet('','greedy','beam')][string]$SearchStrategy = '',
-        [int]$BeamWidth = 0,
-        [int[]]$NCpuMoeCandidates
-    )
-
-    $cmd = New-LocalBoxTuiSelectionCommand -Key $Key -ContextKey $ContextKey -Action $Action -Mode $Mode -Quant $Quant -Strict:$Strict -UseVision:$UseVision -UseAutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Budget $Budget -Runs $Runs -Optimize $Optimize -Profile $Profile -SearchStrategy $SearchStrategy -BeamWidth $BeamWidth -NCpuMoeCandidates $NCpuMoeCandidates
-    $started = (Get-Date).ToUniversalTime().ToString('o')
-    $output = (& ([scriptblock]::Create($cmd)) *>&1 | Out-String).Trim()
-
-    [pscustomobject]@{
-        key = $Key
-        contextKey = $ContextKey
-        action = $Action
-        mode = $Mode
-        startedAt = $started
-        completedAt = (Get-Date).ToUniversalTime().ToString('o')
-        command = $cmd
-        output = $output
-    }
 }
 
 function New-LocalBoxTuiLaunchPlan {

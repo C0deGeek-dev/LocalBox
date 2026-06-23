@@ -207,12 +207,6 @@ function Ensure-Directory {
     }
 }
 
-function Convert-ToPosixPath {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    return ($Path -replace '\\', '/')
-}
-
 function Write-Section {
     param([Parameter(Mandatory = $true)][string]$Title)
 

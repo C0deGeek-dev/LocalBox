@@ -74,18 +74,6 @@ function Get-HuggingFaceMmprojFiles {
     }
 }
 
-function Get-HuggingFaceModelFiles {
-    param([Parameter(Mandatory = $true)][string]$Repo)
-
-    $info = Get-HuggingFaceModelInfo -Repo $Repo
-
-    if (-not $info.siblings) {
-        return @()
-    }
-
-    return @($info.siblings | ForEach-Object { $_.rfilename })
-}
-
 function Get-HuggingFaceFileSizesGB {
     # Map of rfilename -> size in GB (1 decimal place). Pulled from siblings[*].size
     # which is bytes when ?blobs=true is set on /api/models/{repo}.

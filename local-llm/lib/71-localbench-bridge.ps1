@@ -262,46 +262,6 @@ function Get-LocalBenchTopNCpuMoeValues {
     return @()
 }
 
-function Get-LocalBenchLauncherBestConfig {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][string]$Mode,
-        [ValidateSet('short','long')][string]$PromptLength = 'short',
-        [string]$Quant,
-        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
-    )
-
-    Import-LocalBenchModule | Out-Null
-    if (-not (Get-Command Get-LocalBenchBestConfig -ErrorAction SilentlyContinue)) {
-        throw "LocalBench is available, but Get-LocalBenchBestConfig is not implemented by this version."
-    }
-
-    Get-LocalBenchBestConfig -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
-}
-
-function Get-LocalBenchLauncherBestConfigCandidates {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile', Justification = 'shipped -Profile parameter name; renaming would break existing callers')]
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][string]$Mode,
-        [ValidateSet('short','long')][string]$PromptLength = 'short',
-        [string]$Quant,
-        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
-    )
-
-    Import-LocalBenchModule | Out-Null
-    if (-not (Get-Command Get-LocalBenchBestConfigCandidates -ErrorAction SilentlyContinue)) {
-        throw "LocalBench is available, but Get-LocalBenchBestConfigCandidates is not implemented by this version."
-    }
-
-    Get-LocalBenchBestConfigCandidates -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
-}
-
 function Show-LocalBenchLauncherHistory {
     [CmdletBinding()]
     param(

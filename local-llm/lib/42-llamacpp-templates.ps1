@@ -4,10 +4,6 @@
 # 2. Translate the PARAMETER lines from Get-ParserLines (40-parsers.ps1) into
 #    the equivalent llama-server CLI flags so sampling stays consistent.
 
-function Get-LlamaCppTemplatesDir {
-    return (Join-Path $HOME ".local-llm\llamacpp-templates")
-}
-
 function Resolve-LlamaCppChatTemplate {
     # Returns a [string[]] of CLI args (empty when the model's GGUF metadata
     # already carries a usable template). Honors a per-model ChatTemplate
