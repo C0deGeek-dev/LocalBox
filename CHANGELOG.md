@@ -2,7 +2,9 @@
 
 Past-tense record of shipped changes.
 
-## Unreleased
+## v1.0.0 - 2026-06-24
+
+Coordinated LocalX 1.0 release. First stable launcher surface.
 
 - **Dead-code cleanup: removed 7 unused PowerShell helpers.** No call sites
   remained for `Convert-ToPosixPath`, `Get-HuggingFaceModelFiles`,
