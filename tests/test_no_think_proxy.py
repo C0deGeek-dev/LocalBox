@@ -248,5 +248,201 @@ class CountersTests(unittest.TestCase):
         self.assertEqual(after, before + 1)
 
 
+class MergeSystemMessagesTests(unittest.TestCase):
+    def test_default_is_on(self):
+        # Regression guard: merging is the default since 0.4.0. A request with a
+        # system message after a user turn breaks qwen-family chat templates
+        # ("System message must be at the beginning"), so the compat proxy must
+        # fix it out of the box.
+        self.assertTrue(proxy.MERGE_SYSTEM_MESSAGES)
+
+    def test_system_after_user_is_hoisted(self):
+        data = {"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "be terse"},
+        ]}
+        new, changed = proxy.merge_system_messages(data)
+        self.assertTrue(changed)
+        self.assertEqual(new["messages"][0], {"role": "system", "content": "be terse"})
+        self.assertEqual(new["messages"][1]["role"], "user")
+
+    def test_multiple_system_messages_merge_into_one_leading(self):
+        data = {"messages": [
+            {"role": "system", "content": "base prompt"},
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "injected block"},
+        ]}
+        new, changed = proxy.merge_system_messages(data)
+        self.assertTrue(changed)
+        roles = [m["role"] for m in new["messages"]]
+        self.assertEqual(roles, ["system", "user"])
+        self.assertEqual(new["messages"][0]["content"], "base prompt\n\ninjected block")
+
+    def test_list_form_system_content_is_flattened(self):
+        data = {"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]},
+        ]}
+        new, changed = proxy.merge_system_messages(data)
+        self.assertTrue(changed)
+        self.assertEqual(new["messages"][0]["content"], "a\nb")
+
+    def test_already_compliant_is_unchanged(self):
+        # System first, then user: nothing to do.
+        data = {"messages": [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "u"},
+        ]}
+        new, changed = proxy.merge_system_messages(data)
+        self.assertFalse(changed)
+        self.assertIs(new, data)
+
+    def test_no_system_message_is_unchanged(self):
+        data = {"messages": [{"role": "user", "content": "u"}]}
+        new, changed = proxy.merge_system_messages(data)
+        self.assertFalse(changed)
+        self.assertIs(new, data)
+
+    def test_clean_request_body_applies_merge_when_enabled(self):
+        original = proxy.MERGE_SYSTEM_MESSAGES
+        proxy.MERGE_SYSTEM_MESSAGES = True
+        try:
+            handler = proxy.ProxyHandler.__new__(proxy.ProxyHandler)
+            handler.headers = {"Content-Type": "application/json"}
+            handler.path = "/v1/messages"
+            body = json.dumps({"messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "be terse"},
+            ]}).encode("utf-8")
+            cleaned = json.loads(handler._clean_request_body(body).decode("utf-8"))
+            self.assertEqual(cleaned["messages"][0]["role"], "system")
+        finally:
+            proxy.MERGE_SYSTEM_MESSAGES = original
+
+
+class MergeSystemAnthropicFormTests(unittest.TestCase):
+    """Anthropic /v1/messages: the system prompt lives in the top-level
+    `system` field. An in-array `role: system` message (e.g. a SessionStart
+    hook) is a SECOND system source that llama.cpp renders after the first, so
+    strict templates raise. It must be folded INTO `system` and removed from
+    `messages`, not left as a leading array message."""
+
+    def test_top_level_system_string_absorbs_array_system(self):
+        data = {
+            "system": "base prompt",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "injected hook"},
+            ],
+        }
+        new, changed = proxy.merge_system_messages(data)
+        self.assertTrue(changed)
+        self.assertEqual(new["system"], "base prompt\n\ninjected hook")
+        # No system role survives in the array.
+        self.assertEqual([m["role"] for m in new["messages"]], ["user"])
+
+    def test_top_level_system_list_preserves_blocks_and_cache_control(self):
+        data = {
+            "system": [
+                {"type": "text", "text": "billing header"},
+                {"type": "text", "text": "main prompt", "cache_control": {"type": "ephemeral"}},
+            ],
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "injected hook"},
+            ],
+        }
+        new, changed = proxy.merge_system_messages(data)
+        self.assertTrue(changed)
+        self.assertEqual(len(new["system"]), 3)
+        # Original blocks (and cache_control) untouched.
+        self.assertEqual(new["system"][1]["cache_control"], {"type": "ephemeral"})
+        # Folded text appended as a trailing text block.
+        self.assertEqual(new["system"][2], {"type": "text", "text": "injected hook"})
+        self.assertEqual([m["role"] for m in new["messages"]], ["user"])
+
+    def test_array_system_at_index_zero_still_folded_when_top_system_present(self):
+        # Even a "compliant-looking" leading array system is a duplicate source
+        # when a top-level `system` exists, so it must be folded.
+        data = {
+            "system": "base",
+            "messages": [
+                {"role": "system", "content": "dup"},
+                {"role": "user", "content": "u"},
+            ],
+        }
+        new, changed = proxy.merge_system_messages(data)
+        self.assertTrue(changed)
+        self.assertEqual(new["system"], "base\n\ndup")
+        self.assertEqual([m["role"] for m in new["messages"]], ["user"])
+
+    def test_top_system_no_array_system_is_unchanged(self):
+        data = {
+            "system": "base",
+            "messages": [{"role": "user", "content": "u"}],
+        }
+        new, changed = proxy.merge_system_messages(data)
+        self.assertFalse(changed)
+        self.assertIs(new, data)
+
+    def test_empty_array_system_still_removed_from_messages(self):
+        data = {
+            "system": "base",
+            "messages": [
+                {"role": "user", "content": "u"},
+                {"role": "system", "content": ""},
+            ],
+        }
+        new, changed = proxy.merge_system_messages(data)
+        self.assertTrue(changed)
+        self.assertEqual(new["system"], "base")  # nothing to append
+        self.assertEqual([m["role"] for m in new["messages"]], ["user"])
+
+    def test_clean_request_body_folds_anthropic_form(self):
+        original = proxy.MERGE_SYSTEM_MESSAGES
+        proxy.MERGE_SYSTEM_MESSAGES = True
+        try:
+            handler = proxy.ProxyHandler.__new__(proxy.ProxyHandler)
+            handler.headers = {"Content-Type": "application/json"}
+            handler.path = "/v1/messages?beta=true"
+            body = json.dumps({
+                "system": [{"type": "text", "text": "base"}],
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                    {"role": "system", "content": "hook"},
+                ],
+            }).encode("utf-8")
+            cleaned = json.loads(handler._clean_request_body(body).decode("utf-8"))
+            self.assertNotIn("system", [m["role"] for m in cleaned["messages"]])
+            self.assertEqual(cleaned["system"][-1], {"type": "text", "text": "hook"})
+        finally:
+            proxy.MERGE_SYSTEM_MESSAGES = original
+
+
+class AppendSystemTextTests(unittest.TestCase):
+    def test_append_to_string(self):
+        self.assertEqual(proxy._append_system_text("a", "b"), "a\n\nb")
+
+    def test_append_to_empty_string_returns_extra(self):
+        self.assertEqual(proxy._append_system_text("", "b"), "b")
+
+    def test_append_to_none_returns_extra(self):
+        self.assertEqual(proxy._append_system_text(None, "b"), "b")
+
+    def test_empty_extra_is_noop(self):
+        self.assertEqual(proxy._append_system_text("a", ""), "a")
+        blocks = [{"type": "text", "text": "a"}]
+        self.assertIs(proxy._append_system_text(blocks, ""), blocks)
+
+    def test_append_to_list_adds_trailing_block(self):
+        blocks = [{"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}}]
+        out = proxy._append_system_text(blocks, "b")
+        self.assertEqual(out, [
+            {"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "b"},
+        ])
+        self.assertIsNot(out, blocks)  # original not mutated
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -60,7 +60,7 @@ LOG = logging.getLogger("no-think-proxy")
 # handling). LocalBox compares this against NoThinkProxyRequiredVersion in
 # defaults.json and warns when the deployed proxy is older than the launcher
 # expects. Format: SemVer.
-__version__ = "0.3.0-beta.1"
+__version__ = "0.4.0"
 
 
 TARGET_HOST = "127.0.0.1"
@@ -68,10 +68,20 @@ TARGET_PORT = 8080
 AUTH_TOKEN = ""
 
 # When True, collapse multiple/misplaced system messages in a request into a
-# single leading system message before forwarding. Off by default (no wire
-# change); enable for models whose chat template requires exactly one system
-# message at the front. Toggled via NO_THINK_PROXY_MERGE_SYSTEM=1.
-MERGE_SYSTEM_MESSAGES = False
+# single leading system message before forwarding.
+#
+# ON by default (since 0.4.0). The proxy's role post-deprecation is non-
+# LocalPilot-client compatibility, and those clients routinely emit a system
+# message *mid-conversation* — e.g. Claude Code carries a SessionStart hook's
+# output as a `{"role":"system"}` entry after the first user turn. Qwen-family
+# chat templates hard-reject that with
+# ``raise_exception('System message must be at the beginning')``, which
+# llama.cpp surfaces as ``400 Unable to generate parser for this template``.
+# Merging is a safe no-op when the request is already compliant (zero system
+# messages, or exactly one at index 0), so defaulting it on costs nothing for
+# well-formed clients and fixes the broken ones. Opt out with
+# NO_THINK_PROXY_MERGE_SYSTEM=0.
+MERGE_SYSTEM_MESSAGES = True
 
 # Maximum request body we will buffer. A /v1/messages request is a few MB at
 # most; anything larger is either a bug or a memory-exhaustion attempt. We read
@@ -256,15 +266,43 @@ def _system_message_text(msg):
     return json.dumps(content)
 
 
-def merge_system_messages(data):
-    """Collapse every system message into a single leading one.
+def _append_system_text(system, extra):
+    """Append `extra` to an Anthropic top-level `system` field, preserving shape.
 
-    Some chat templates allow exactly one system message at index 0 and raise
-    "System message must be at the beginning." otherwise. Agentic OpenAI
-    clients sometimes emit two (base prompt + injected tool/context block) or a
-    system message mid-conversation. We merge all system messages into one,
-    placed first, joining their text with blank lines, and keep the order of
-    the remaining (non-system) messages.
+    `system` may be a plain string or a list of content blocks
+    ([{"type": "text", "text": ...}, ...], optionally carrying cache_control).
+    Existing blocks are left untouched (their cache_control survives); the extra
+    text is appended as a trailing text block / suffix.
+    """
+    if not extra:
+        return system
+    if system is None or system == "":
+        return extra
+    if isinstance(system, str):
+        return system + "\n\n" + extra
+    if isinstance(system, list):
+        return list(system) + [{"type": "text", "text": extra}]
+    # Unknown shape: coerce to a list so we never drop the original content.
+    return [system, {"type": "text", "text": extra}]
+
+
+def merge_system_messages(data):
+    """Ensure exactly one system source, placed first.
+
+    Strict chat templates (qwen-family) allow exactly one system message at the
+    front and raise "System message must be at the beginning." otherwise. There
+    are two request shapes to fix:
+
+    * Anthropic /v1/messages — the system prompt belongs in the TOP-LEVEL
+      `system` field. Some clients ALSO inject a `role: system` message inside
+      `messages` (e.g. a SessionStart hook). llama.cpp renders BOTH as system
+      messages, so the in-array one is no longer first and the template raises.
+      We fold every in-array system message INTO the top-level `system` field
+      and drop them from `messages` — leaving one system source.
+
+    * OpenAI /v1/chat/completions — no top-level `system`; system is a message.
+      Misplaced/duplicate system messages are collapsed into one leading
+      system message.
 
     Returns (data, changed). `data` is only rewritten when a change is needed.
     """
@@ -276,20 +314,31 @@ def merge_system_messages(data):
         i for i, m in enumerate(messages)
         if isinstance(m, dict) and m.get("role") == "system"
     ]
-
-    # Already compliant: zero system messages, or exactly one at the front.
-    if not sys_indices or sys_indices == [0]:
+    if not sys_indices:
         return data, False
 
-    sys_msgs = [messages[i] for i in sys_indices]
     others = [
         m for i, m in enumerate(messages)
         if not (isinstance(m, dict) and m.get("role") == "system")
     ]
+    array_sys_text = "\n\n".join(
+        t for t in (_system_message_text(messages[i]) for i in sys_indices) if t
+    )
 
-    merged_text = "\n\n".join(t for t in (_system_message_text(m) for m in sys_msgs) if t)
-    merged_system = {"role": "system", "content": merged_text}
+    # Anthropic form: a top-level `system` field is present. Any in-array system
+    # message is a SECOND system source — fold it into `system` and remove it
+    # from `messages`, even if it sits at index 0.
+    if "system" in data and data.get("system") is not None:
+        new_data = dict(data)
+        new_data["system"] = _append_system_text(data["system"], array_sys_text)
+        new_data["messages"] = others
+        return new_data, True
 
+    # OpenAI form: already compliant if exactly one system at the front.
+    if sys_indices == [0]:
+        return data, False
+
+    merged_system = {"role": "system", "content": array_sys_text}
     new_data = dict(data)
     new_data["messages"] = [merged_system] + others
     return new_data, True
@@ -1095,7 +1144,16 @@ def main():
 
     TARGET_HOST, TARGET_PORT = _parse_target(target_spec)
 
-    MERGE_SYSTEM_MESSAGES = _env_flag("NO_THINK_PROXY_MERGE_SYSTEM")
+    # Default ON (see MERGE_SYSTEM_MESSAGES above): unset or empty -> on; an
+    # explicit falsey value (0/false/no/off) -> off. This differs from the
+    # plain _env_flag default-off because merging is the desired default for
+    # the client-compat path and only an explicit opt-out should disable it.
+    _merge_env = os.environ.get("NO_THINK_PROXY_MERGE_SYSTEM")
+    MERGE_SYSTEM_MESSAGES = (
+        True
+        if _merge_env is None or _merge_env.strip() == ""
+        else _merge_env.strip().lower() not in ("0", "false", "no", "off")
+    )
 
     log_file = _setup_logging()
 

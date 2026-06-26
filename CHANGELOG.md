@@ -2,6 +2,27 @@
 
 Past-tense record of shipped changes.
 
+## Unreleased
+
+- **no-think proxy v0.4.0 — normalizes system messages so strict (qwen-family)
+  chat templates accept Anthropic agentic clients.** llama.cpp's qwen3 template
+  hard-rejects any system message that is not the first message
+  (`raise_exception('System message must be at the beginning')`), surfacing as
+  `400 Unable to generate parser for this template`. Anthropic clients such as
+  Claude Code put the base prompt in the top-level `system` field **and** can
+  inject a second `role: system` message inside `messages` (e.g. a SessionStart
+  hook); llama.cpp renders both, so the in-array one lands second and the
+  template raises. The proxy now folds any in-array system message **into** the
+  top-level `system` field (preserving existing content blocks and their
+  `cache_control`) and removes it from `messages`; for OpenAI-form requests
+  (no top-level `system`) it collapses misplaced/duplicate system messages into
+  a single leading system message. Default-on; opt out with
+  `NO_THINK_PROXY_MERGE_SYSTEM=0`. `defaults.json`
+  `NoThinkProxyRequiredVersion` bumped to `0.4.0`. This unblocks driving the
+  default local model from Claude Code (and any Anthropic-native harness)
+  through `llmdefaultserve`. (The no-think proxy remains deprecated and kept one
+  release for non-LocalPilot clients.)
+
 ## v1.0.0 - 2026-06-24
 
 Coordinated LocalX 1.0 release. First stable launcher surface.
