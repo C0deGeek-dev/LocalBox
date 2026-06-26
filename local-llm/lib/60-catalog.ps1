@@ -275,16 +275,19 @@ function Add-LocalLLMModel {
 
             $answer = (Read-Host "Download a vision module? [Y/n]").Trim().ToLowerInvariant()
             if ($answer -notin @('n', 'no')) {
-                # Prefer the first available mmproj; fall back to user selection
-                $chosen = $mmprojNames[0]
-                $chosen = Read-Host "Which one? (default: $chosen)"
+                # Prefer the first available mmproj; fall back to user selection.
+                $default = @($mmprojFiles.Keys)[0]
+                $chosen = (Read-Host "Which one? (default: $default)").Trim()
                 if ([string]::IsNullOrWhiteSpace($chosen)) {
-                    $chosen = [string]$mmprojFiles.Keys | Select-Object -First 1
+                    $chosen = $default
                 }
 
-                if ($mmprojFiles.ContainsKey($chosen)) {
+                if ($mmprojFiles.Contains($chosen)) {
                     $entry.VisionModule = $chosen
                     Write-Host "Vision module set to: $chosen" -ForegroundColor DarkGray
+                }
+                else {
+                    Write-Host "No vision module matched '$chosen'; none set." -ForegroundColor Yellow
                 }
             }
         }
