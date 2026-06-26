@@ -13,6 +13,7 @@
 [![install](https://img.shields.io/badge/install-one--liner-555?style=flat-square)](docs/install.md)
 [![stars](https://img.shields.io/github/stars/C0deGeek-dev/LocalBox?style=flat-square&label=stars&color=007ec6)](https://github.com/C0deGeek-dev/LocalBox/stargazers)
 [![issues](https://img.shields.io/github/issues/C0deGeek-dev/LocalBox?style=flat-square&label=issues&color=4c1)](https://github.com/C0deGeek-dev/LocalBox/issues)
+[![version](https://img.shields.io/badge/version-1.0.0-4c1?style=flat-square)](CHANGELOG.md)
 [![runtime](https://img.shields.io/badge/runtime-llama.cpp-555?style=flat-square)](docs/llamacpp-modes.md)
 [![models](https://img.shields.io/badge/models-GGUF%20catalog-orange?style=flat-square)](docs/model-management.md)
 [![harnesses](https://img.shields.io/badge/harnesses-3%20targets-4c1?style=flat-square)](docs/harness-mode.md)
