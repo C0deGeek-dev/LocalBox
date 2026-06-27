@@ -1,156 +1,124 @@
-```
-╔══════════════╗		██╗      ██████╗  ██████╗ █████╗ ██╗     ██████╗  ██████╗ ██╗  ██╗
-║ ╔═══╗        ║		██║     ██╔═══██╗██╔════╝██╔══██╗██║     ██╔══██╗██╔═══██╗╚██╗██╔╝
-║ ║███║  ████  ║║		██║     ██║   ██║██║     ███████║██║     ██████╔╝██║   ██║ ╚███╔╝
-║ ╚═══╝        ║║		██║     ██║   ██║██║     ██╔══██║██║     ██╔══██╗██║   ██║ ██╔██╗
-╚══════════════╝║		███████╗╚██████╔╝╚██████╗██║  ██║███████╗██████╔╝╚██████╔╝██╔╝ ██╗
- ╚══════════════╝		╚══════╝ ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-  Put a local LLM behind the Claude Code / LocalPilot harness
-```
+<div align="center">
+  <h1>LocalBox</h1>
+  <p><strong>Run local GGUF models through a real coding-agent harness.</strong></p>
+  <p>
+    <a href="docs/README.md">Documentation</a> ·
+    <a href="docs/install.md">Install</a> ·
+    <a href="docs/troubleshooting.md">Troubleshooting</a> ·
+    <a href="https://c0degeek-dev.github.io/LocalStack/">LocalX</a>
+  </p>
+  <p>
+    <img alt="version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-38bdae?style=flat-square">
+    <img alt="Windows PowerShell" src="https://img.shields.io/badge/platform-Windows%20PowerShell-4d8df7?style=flat-square">
+    <img alt="llama.cpp runtime" src="https://img.shields.io/badge/runtime-llama.cpp-59636e?style=flat-square">
+    <img alt="GitHub stars" src="https://img.shields.io/github/stars/C0deGeek-dev/LocalBox?style=flat-square&amp;label=stars">
+  </p>
+</div>
 
-# LocalBox
+LocalBox turns a local model into something you can actually use for coding. It
+starts `llama-server`, chooses safe settings for your hardware and model, and
+connects the result to Claude Code, Codex, or
+[LocalPilot](https://github.com/C0deGeek-dev/LocalPilot).
 
-[![install](https://img.shields.io/badge/install-one--liner-555?style=flat-square)](docs/install.md)
-[![stars](https://img.shields.io/github/stars/C0deGeek-dev/LocalBox?style=flat-square&label=stars&color=007ec6)](https://github.com/C0deGeek-dev/LocalBox/stargazers)
-[![issues](https://img.shields.io/github/issues/C0deGeek-dev/LocalBox?style=flat-square&label=issues&color=4c1)](https://github.com/C0deGeek-dev/LocalBox/issues)
-[![version](https://img.shields.io/badge/version-1.0.0-4c1?style=flat-square)](CHANGELOG.md)
-[![runtime](https://img.shields.io/badge/runtime-llama.cpp-555?style=flat-square)](docs/llamacpp-modes.md)
-[![models](https://img.shields.io/badge/models-GGUF%20catalog-orange?style=flat-square)](docs/model-management.md)
-[![harnesses](https://img.shields.io/badge/harnesses-3%20targets-4c1?style=flat-square)](docs/harness-mode.md)
-[![platform](https://img.shields.io/badge/platform-Windows%20PowerShell-007ec6?style=flat-square)](docs/install.md)
-
-A PowerShell-driven launcher that runs [Claude Code](https://claude.com/claude-code)
-or [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) against a
-**local model** served by [llama.cpp](https://github.com/ggerganov/llama.cpp)'s
-`llama-server`, with the right chat template, KV-cache type, sampling, system
-prompt, and tool allowlist for each model family.
-
-> **Ollama support was removed.** Earlier versions also drove Ollama; that path
-> is preserved at the `ollama-classic` git tag (`git checkout ollama-classic`) for
-> anyone who still needs it. Everything below assumes `llama-server`.
-
-> **Windows / PowerShell only.** Does not work in WSL/bash. The launcher
-> manages the `llama-server` lifecycle, drives `Start-Process`, reads
-> `nvidia-smi`, and touches `$PROFILE`. None of that travels cleanly across
-> shells.
-
----
-
-## LocalX Ecosystem
-
-- [LocalStack](https://github.com/C0deGeek-dev/LocalStack) is the umbrella
-  ecosystem for the LocalX tools.
-- [LocalBox](https://github.com/C0deGeek-dev/LocalBox) is this model runtime
-  and launcher: it runs local GGUF models through Claude Code, Codex, or
-  LocalPilot via llama.cpp.
-- [LocalMind](https://github.com/C0deGeek-dev/LocalMind) is the local-first
-  learning engine for reviewed project memory, graph-connected knowledge,
-  reusable skills, and agent context.
-- [LocalBench](https://github.com/C0deGeek-dev/LocalBench) is the benchmarking
-  and evaluation companion that exports recommended launcher profiles.
-- [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) is the local CLI
-  coding agent that LocalBox can target with `-LocalPilot`.
-
----
-
-## What this is
-
-The vendored Anthropic models (Opus, Sonnet, Haiku) are good. They're also
-paid, rate-limited, hosted, and out of your control. A *local* model running
-through the *same agent harness* gets you the Claude Code editing loop,
-tool-calling discipline, and CLI ergonomics — but pointed at weights you
-actually own.
-
-That sounds simple. In practice it isn't:
-
-- **Each model family wants a different chat template, sampler, and stop set.**
-  Qwen3-Coder needs the `qwen3coder` parser; Qwen 3.6 wants `qwen36`; Devstral
-  self-templates and you must pass `Parser: none` or it fights the GGUF.
-- **Anthropic's wire format carries `thinking` / `reasoning` blocks** that
-  `llama-server`'s `/v1/messages` endpoint can't ingest. The launcher routes
-  traffic through a small Python proxy (`no-think-proxy.py`) that strips them
-  on the way in. For strip-mode launches it also passes `--reasoning off` and
-  `--reasoning-budget 0` so hidden thinking tokens are not generated in the
-  first place. Thinking-trained models (`ThinkingPolicy: keep`) bypass the
-  proxy.
-- **VRAM math is non-trivial.** Q8 KV at 256 k tokens OOMs a 4090. Q4_K_M
-  weights leave room for KV but lose precision on coding. The launcher tags
-  every quant with `[fits] / [tight] / [over]` against your actual card and
-  *refuses* combinations that will OOM, telling you what to drop.
-- **Agent launches are single-session by default.** `llama-server` can serve
-  multiple slots, but Claude/LocalPilot side requests compete with the main
-  turn when auto-parallelism is left on. LocalBox launches agent sessions with
-  `--parallel 1` and prompt-cache reuse by default so repeated large prompts
-  stay local to one slot. Both values are configurable in `settings.json`.
-- **Three harnesses, one dispatch path.** Whether you launch Claude Code,
-  LocalPilot, or Codex, the same env stack and proxy are set up through the
-  `-LocalPilot` / `-Codex` switches on every model function.
-
-The end result: one PowerShell function per model, flag-based, with the
-fiddly bits (process bouncing, env restoration, cache types, KV ceilings,
-tool allowlists, system prompts) hidden behind it.
-
-```powershell
-qcoder -Ctx 32k -LocalPilot                Qwen3-Coder @ 32k → LocalPilot
-q36p -Ctx 128k                              Qwen 3.6 Plus @ 128k → Claude Code
-qcoder -Ctx 256 -Quant iq4xs                256k coder context (4090 ceiling)
-q36p -Mode turboquant -KvK turbo4 -KvV turbo4   Turbo KV via the fork binary
-q36p -AutoBest                              Replay the saved tuner profile
-llmdefault                                  whatever the catalog / settings / .llm-default says
-llm                                         interactive wizard (Spectre when available)
-llmc                                        native selectable wizard
-llms                                        Spectre wizard, explicit
-info                                        dashboard: VRAM fit, parser freshness, defaults
-info -Commands                              full LocalBox + LocalBench command list
-```
-
----
-
----
-
-## Install
-
-From the repo root (PowerShell, Windows):
-
-```powershell
-. .\install.ps1                  # copy files to deployed locations + wire $PROFILE
-. .\install.ps1 -DryRun          # preview without changing anything
-```
-
-Then open a fresh PowerShell and run `llm`. Full options (symlink mode,
-companion checkouts, the Terminal.Gui TUI) are in
-**[docs/install.md](docs/install.md)**.
-
-## Day-to-day
-
-```powershell
-qcoder -Ctx 32k -LocalPilot       # code agent (Qwen3-Coder, 32k) via LocalPilot
-q36p -Ctx 128k                    # big context (Qwen 3.6 Plus, 128k) via Claude Code
-qcoder -Ctx 256 -Quant iq4xs      # 256k coder context (4090 ceiling)
-q36p -AutoBest                    # replay the saved tuner profile
-llm                               # interactive wizard
-info                              # dashboard: VRAM fit, defaults, parser freshness
-info -Commands                    # full LocalBox + LocalBench command list
-```
-
-The full flag reference, quant keys, and the 256k-on-24GB recipe are in
-**[docs/usage.md](docs/usage.md)**.
-
-## Documentation
-
-| Topic | Doc |
+| At a glance | |
 |---|---|
-| Install & TUI | [docs/install.md](docs/install.md) |
-| Harness mode (Claude Code / LocalPilot / Codex / serve / strict) | [docs/harness-mode.md](docs/harness-mode.md) |
-| llama.cpp modes (native / turboquant / mtpturbo) | [docs/llamacpp-modes.md](docs/llamacpp-modes.md) |
-| Day-to-day usage & flags | [docs/usage.md](docs/usage.md) |
-| Model management (add / VRAM fit) | [docs/model-management.md](docs/model-management.md) |
-| Per-machine settings & verified downloads | [docs/settings.md](docs/settings.md) |
-| MCP servers | [docs/mcp.md](docs/mcp.md) |
-| Auto-tuner (`findbest`) & AutoBest profiles | [docs/auto-tuner.md](docs/auto-tuner.md) · [docs/autobest-profile.md](docs/autobest-profile.md) |
-| Wizard & Terminal.Gui TUI | [docs/wizard-and-tui.md](docs/wizard-and-tui.md) |
-| Repo layout & casing | [docs/architecture.md](docs/architecture.md) |
-| Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
+| **Use it when** | You have a GGUF model and want an agent-ready local runtime |
+| **It handles** | Server lifecycle, chat templates, parsers, sampling, context, KV cache, VRAM checks, and harness setup |
+| **You control** | Model, quant, context size, runtime mode, and target harness |
+| **Runs on** | Windows PowerShell (not WSL or bash) |
 
-See **[docs/README.md](docs/README.md)** for the full doc-ownership map, and
-`CHANGELOG.md` for what shipped when.
+> [!IMPORTANT]
+> LocalBox uses `llama-server`. Ollama support ended after the
+> [`ollama-classic`](https://github.com/C0deGeek-dev/LocalBox/tree/ollama-classic)
+> tag.
+
+## Quick start
+
+From a PowerShell window in this repository:
+
+```powershell
+. .\install.ps1
+```
+
+Open a new PowerShell window, then launch the guided model picker:
+
+```powershell
+llm
+```
+
+That is the shortest path. The installer wires your profile, deploys the
+launcher, and can connect companion LocalX checkouts. Preview every change first
+with:
+
+```powershell
+. .\install.ps1 -DryRun
+```
+
+See the [installation guide](docs/install.md) for symlink mode, verified
+downloads, companion tools, and the Terminal.Gui interface.
+
+## Everyday commands
+
+| Goal | Command |
+|---|---|
+| Pick a model interactively | `llm` |
+| Use the native selectable wizard | `llmc` |
+| Open the status dashboard | `info` |
+| Show every LocalBox and LocalBench command | `info -Commands` |
+| Run Qwen3-Coder through LocalPilot | `qcoder -Ctx 32k -LocalPilot` |
+| Run Qwen 3.6 Plus through Claude Code | `q36p -Ctx 128k` |
+| Run through Codex | `qcoder -Ctx 32k -Codex` |
+| Replay the best measured profile | `q36p -AutoBest` |
+| Use the configured default | `llmdefault` |
+
+Model aliases come from the catalog, so the exact list on your machine may be
+different. `info -Commands` is the source of truth for the installed command
+surface.
+
+## What LocalBox does for you
+
+- Chooses the correct chat template, parser, sampler, stop set, and reasoning
+  policy for each supported model family.
+- Estimates weight and KV-cache pressure against your actual GPU and blocks
+  combinations likely to run out of VRAM.
+- Keeps agent sessions predictable with single-session defaults and prompt-cache
+  reuse.
+- Sets up one consistent dispatch path for Claude Code, Codex, LocalPilot, and
+  plain server mode.
+- Saves measured [LocalBench](https://github.com/C0deGeek-dev/LocalBench)
+  recommendations as reusable AutoBest profiles.
+
+```text
+GGUF model ──> LocalBox ──> llama-server ──> Claude Code / Codex / LocalPilot
+                    │
+                    └── VRAM guardrails, templates, parsers, cache and sampling
+```
+
+## Choose your next guide
+
+| I want to… | Read |
+|---|---|
+| Install or repair LocalBox | [Install](docs/install.md) |
+| Learn the day-to-day flags | [Usage](docs/usage.md) |
+| Connect a coding-agent harness | [Harness mode](docs/harness-mode.md) |
+| Add or size a model | [Model management](docs/model-management.md) |
+| Tune a model automatically | [Auto-tuner](docs/auto-tuner.md) and [AutoBest profiles](docs/autobest-profile.md) |
+| Configure a machine | [Settings](docs/settings.md) |
+| Choose a llama.cpp runtime mode | [llama.cpp modes](docs/llamacpp-modes.md) |
+| Configure MCP servers | [MCP](docs/mcp.md) |
+| Understand the repository | [Architecture](docs/architecture.md) |
+| Fix a problem | [Troubleshooting](docs/troubleshooting.md) |
+
+## LocalX
+
+LocalBox is the runtime layer in the
+[LocalX toolchain](https://c0degeek-dev.github.io/LocalStack/):
+
+| Project | Role |
+|---|---|
+| **LocalBox** | Run local models |
+| [LocalBench](https://github.com/C0deGeek-dev/LocalBench) | Find fast, stable settings |
+| [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) | Code through the agent harness |
+| [LocalMind](https://github.com/C0deGeek-dev/LocalMind) | Turn reviewed sessions into reusable project memory |
+
+Release history lives in [CHANGELOG.md](CHANGELOG.md).
