@@ -4,6 +4,23 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **A CPU-only embedding server (`llmembedserve`).** A small, self-contained
+  sibling of `llmdefaultserve` that serves a GGUF embedding model through
+  llama-server's OpenAI-compatible `POST /v1/embeddings` on a dedicated loopback
+  port (`8090` by default), forced onto the CPU (`-ngl 0`) so it costs **zero GPU
+  VRAM**. That CPU rule is load-bearing for fair benchmarking: a GPU-resident
+  embedding model would steal VRAM from a chat model running alongside it, so a
+  benchmark pairing the two would see a degraded chat model on the embeddings side
+  only — keeping embeddings on the CPU leaves the chat model byte-identical. The
+  server has its own port, process, and lifecycle (`llmembedstop`), independent of
+  the chat server. Default model: **Qwen3-Embedding-0.6B** (GGUF `Q8_0`,
+  Apache-2.0, 1024-dim, `--pooling last`), acquired on first run into the models
+  dir (never committed) and overridable via `EmbedModelRepo`/`EmbedModelFile`/
+  `EmbedModelRoot`/`EmbedPort`/`EmbedPooling` in `settings.json`. `-WhatIf` renders
+  the exact served command without acquiring a model or launching anything;
+  `Test-LocalLLMEmbedEndpoint` probes a running server and returns the vector
+  dimension. See `docs/harness-mode.md` → "CPU embedding server".
+
 - **no-think proxy v0.4.0 — normalizes system messages so strict (qwen-family)
   chat templates accept Anthropic agentic clients.** llama.cpp's qwen3 template
   hard-rejects any system message that is not the first message

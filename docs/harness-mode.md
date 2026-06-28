@@ -137,6 +137,57 @@ llmstop; llmdefaultserve
 `llmdefaultserve` surfaces this state automatically if its post-launch smoke test
 fails (a bounded, non-blocking check that never delays the launch).
 
+### CPU embedding server
+
+A separate, small server for **embeddings** — distinct from the chat model
+above. Some consumers (e.g. LocalMind's semantic memory dedup and retrieval
+rerank) need an OpenAI-compatible `POST /v1/embeddings` endpoint. `llmembedserve`
+serves a GGUF embedding model for that, **on the CPU** so it costs **zero GPU
+VRAM**:
+
+```powershell
+llmembedserve              # serve the embedding model on 127.0.0.1:8090 (CPU)
+llmembedserve -WhatIf      # dry-run: print the exact llama-server command, launch nothing
+llmembedstop               # stop the embedding server (leaves the chat server alone)
+```
+
+It is deliberately independent of `llmdefaultserve`: its own port (`8090` by
+default), its own process, its own lifecycle state — so `llmstop` /
+`llmembedstop` never touch each other's server. The two pair up: run both, and a
+consumer points its **chat** endpoint at `8080` and its **embedding** endpoint at
+`8090`.
+
+**Why CPU-only (`-ngl 0`).** The chat model already fills most of a 24 GB card.
+A GPU-resident embedding model would steal VRAM **from the chat model only**, so
+any benchmark pairing the two (e.g. the LocalBench warm arm) would silently run a
+degraded chat model on the embeddings side and the comparison would no longer be
+fair. Forcing embeddings onto the CPU keeps the chat model byte-identical whether
+or not embeddings run. Embeddings here are not latency-critical (memory dedup and
+retrieval, not the solve loop), so the CPU cost is irrelevant.
+
+The default model is **Qwen3-Embedding-0.6B** (GGUF `Q8_0`, ~639 MB, Apache-2.0,
+1024-dim, served with `--pooling last`). It is acquired on first run into the
+models dir (`acquire-don't-vendor` — never committed) and reused thereafter. To
+swap in a different embedding model (e.g. the `nomic-embed-text-v1.5` fallback),
+set `EmbedModelRepo` / `EmbedModelFile` / `EmbedModelRoot` (and optionally
+`EmbedPort` / `EmbedPooling`) in `settings.json` — no code change.
+
+The launcher binds **loopback only**. Verify it is up and serving vectors with:
+
+```powershell
+Test-LocalLLMEmbedEndpoint     # POSTs a probe input; returns the vector dimension (0 = down)
+```
+
+**Per-OS note (tier-1 parity).** The served command is the same on every
+platform — only the binary name differs:
+
+```text
+# Windows
+llama-server.exe -m <gguf> --embeddings -ngl 0 --host 127.0.0.1 --port 8090 --pooling last
+# Linux / macOS
+llama-server     -m <gguf> --embeddings -ngl 0 --host 127.0.0.1 --port 8090 --pooling last
+```
+
 ### Strict overlay (engineering mode)
 
 Some models in the catalog have `Strict: true`. Pass `-Strict` and the
