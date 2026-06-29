@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v1.1.0 - 2026-06-29
+
+Coordinated LocalX release.
+
 - **A CPU-only embedding server (`llmembedserve`).** A small, self-contained
   sibling of `llmdefaultserve` that serves a GGUF embedding model through
   llama-server's OpenAI-compatible `POST /v1/embeddings` on a dedicated loopback
