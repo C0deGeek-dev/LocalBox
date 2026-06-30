@@ -1144,11 +1144,12 @@ function Test-LlamaCppWizardAutoBestAvailable {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode,
+        [switch]$UseVision
     )
 
     try {
-        $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
+        $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Vision $UseVision -AllowVisionFallback:$UseVision
         $entry = if ($preferred) { $preferred.Entry } else { $null }
         return [bool]($entry -and $entry.overrides)
     }
@@ -1161,13 +1162,14 @@ function Get-LlamaCppWizardAutoBestChoices {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode,
+        [switch]$UseVision
     )
 
     $choices = @()
     foreach ($profileName in @('balanced', 'pure')) {
         try {
-            $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Profile $profileName
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Profile $profileName -Vision $UseVision -AllowVisionFallback:$UseVision
             if (-not $preferred -or -not $preferred.Entry -or -not $preferred.Entry.overrides) { continue }
             $entry = $preferred.Entry
             $score = if ($entry.score) {
@@ -1200,10 +1202,11 @@ function Select-LlamaCppLaunchSettingsMode {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode,
+        [switch]$UseVision
     )
 
-    $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode)
+    $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode -UseVision:$UseVision)
     if ($bestChoices.Count -eq 0) {
         return 'manual'
     }
@@ -1381,7 +1384,9 @@ function Start-LLMWizardClassic {
                 $useAutoBest = $false
                 $autoBestProfile = 'auto'
                 $saveAsDefault = $false
-                $useVisionFlag = $false
+                # Re-seed from the CLI -UseVision flag (not hard $false) so `llm -UseVision`
+                # carries through; the vision step can still toggle it per model.
+                $useVisionFlag = [bool]$UseVision
                 $visionAvail = $null
                 $step = 'quant'
             }
@@ -1476,7 +1481,7 @@ function Start-LLMWizardClassic {
                 }
 
                 if ($action -in @("localpilot", "claude", "codex", "serve")) {
-                    $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
+                    $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode -UseVision:$useVisionFlag) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false
                     $autoBestProfile = 'auto'
@@ -1485,7 +1490,7 @@ function Start-LLMWizardClassic {
             }
 
             'llamacppsettings' {
-                $modeChoice = Select-LlamaCppLaunchSettingsMode -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode
+                $modeChoice = Select-LlamaCppLaunchSettingsMode -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode -UseVision:$useVisionFlag
                 if ($null -eq $modeChoice) { $step = 'action'; break }
                 if ($modeChoice -like 'best:*') {
                     $kvK = $null
@@ -1687,10 +1692,11 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant','mtpturbo')][string]$Mode,
+        [switch]$UseVision
     )
 
-    $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode)
+    $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode -UseVision:$UseVision)
     if ($bestChoices.Count -eq 0) {
         return 'manual'
     }
@@ -2358,7 +2364,7 @@ function Start-LLMWizardSpectre {
                 }
 
                 if ($action -in @("localpilot", "claude", "codex", "serve")) {
-                    $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
+                    $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode -UseVision:$useVisionFlag) { 'llamacppsettings' } else { 'kvcache' }
                 } else {
                     $useAutoBest = $false
                     $autoBestProfile = 'auto'
@@ -2370,8 +2376,9 @@ function Start-LLMWizardSpectre {
                 $capturedModel = $modelKey
                 $capturedContext = $contextKey
                 $capturedMode = $llamaCppMode
+                $capturedVision = $useVisionFlag
                 $modeChoice = Invoke-LLMWizardStep -Context "llamacpp-settings ($modelKey/$contextKey/$llamaCppMode)" -Default $null -Action {
-                    Select-LlamaCppLaunchSettingsModeSpectre -ModelKey $capturedModel -ContextKey $capturedContext -Mode $capturedMode
+                    Select-LlamaCppLaunchSettingsModeSpectre -ModelKey $capturedModel -ContextKey $capturedContext -Mode $capturedMode -UseVision:$capturedVision
                 }
                 if ($null -eq $modeChoice) { $step = 'action'; break }
                 if ($modeChoice -like 'best:*') {

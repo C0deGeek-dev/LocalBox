@@ -192,14 +192,25 @@ function Get-BestLlamaCppConfig {
     )
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
-    if (-not (Test-Path $path)) { return $null }
+    Write-Verbose "AutoBest: looking for tuner file '$path'"
+    if (-not (Test-Path $path)) {
+        Write-Verbose "AutoBest: tuner file not found at '$path'"
+        return $null
+    }
 
     $data = $null
     try { $data = Get-Content -Raw -Path $path | ConvertFrom-Json -AsHashtable }
-    catch { return $null }
+    catch {
+        Write-Verbose "AutoBest: tuner file '$path' could not be parsed as JSON"
+        return $null
+    }
 
-    if (-not $data -or -not $data.Contains('entries')) { return $null }
+    if (-not $data -or -not $data.Contains('entries')) {
+        Write-Verbose "AutoBest: tuner file '$path' has no 'entries'"
+        return $null
+    }
     if ([int]($data.tuner_version) -gt 0 -and [int]$data.tuner_version -ne $script:LlamaCppTunerVersion) {
+        Write-Verbose ("AutoBest: tuner file version {0} != expected {1}; ignoring" -f [int]$data.tuner_version, $script:LlamaCppTunerVersion)
         return $null
     }
 
@@ -210,6 +221,8 @@ function Get-BestLlamaCppConfig {
     if ([string]::IsNullOrWhiteSpace($Quant)) {
         if ($def.Contains('Quant')) { $Quant = [string]$def.Quant }
     }
+
+    Write-Verbose ("AutoBest: tuner file found ({0} entries); filtering on contextKey={1} mode={2} promptLength={3} profile={4} quant={5} vramGB={6} (+/-1) vision={7}" -f @($data.entries).Count, $ContextKey, $Mode, $PromptLength, $Profile, $Quant, $VramGB, $Vision)
 
     $fallbackEntry = $null
     foreach ($entry in $data.entries) {
@@ -228,7 +241,10 @@ function Get-BestLlamaCppConfig {
         # Vision and text-only profiles are not interchangeable (mmproj changes VRAM
         # + behaviour). Missing 'vision' on legacy entries reads as text-only.
         $entryVision = [bool]$entry.vision
-        if ($entryVision -eq $Vision) { return $entry }
+        if ($entryVision -eq $Vision) {
+            Write-Verbose ("AutoBest: matched entry quant={0} vramGB={1} score={2} {3} (trials={4})" -f [string]$entry.quant, [string]$entry.vramGB, [string]$entry.score, [string]$entry.scoreUnit, [string]$entry.trial_count)
+            return $entry
+        }
         # No vision-tuned entry yet: when allowed, remember the first otherwise-matching
         # text-only entry as a fallback for a vision launch, but keep scanning in case a
         # genuine vision match appears later (which takes precedence via the return above).
@@ -237,6 +253,11 @@ function Get-BestLlamaCppConfig {
         }
     }
 
+    if ($fallbackEntry) {
+        Write-Verbose "AutoBest: no exact vision match; using text-only entry as a vision fallback"
+    } else {
+        Write-Verbose "AutoBest: no entry matched the filter"
+    }
     return $fallbackEntry
 }
 
