@@ -56,9 +56,13 @@ function ConvertFrom-OllamaParameter {
     # equivalent llama-server CLI flags. Unknown PARAMETER names are skipped
     # silently. Name retained from the Modelfile-era parser format the
     # PARAMETER lines still use.
-    param([Parameter(Mandatory = $true)][System.Collections.IEnumerable]$Lines)
+    param([AllowNull()][System.Collections.IEnumerable]$Lines)
 
     $out = New-Object System.Collections.Generic.List[string]
+
+    # $Lines is null when the parser contributes no PARAMETER lines (e.g. 'none'):
+    # an empty Get-ParserLines list unrolls to $null through the pipeline.
+    if ($null -eq $Lines) { return $out }
 
     foreach ($line in $Lines) {
         $text = [string]$line
