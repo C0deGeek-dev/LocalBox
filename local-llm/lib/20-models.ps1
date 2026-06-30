@@ -368,7 +368,7 @@ function Test-ModelVisionModuleAvailable {
             if (-not $mmprojFile) {
                 $mmprojFile = @($mmprojFiles.Keys)[0]
                 $result.Filename = $mmprojFile
-            } elseif ($mmprojFiles.ContainsKey($mmprojFile)) {
+            } elseif ($mmprojFiles.Contains($mmprojFile)) {
                 $result.AvailableOnHF = $true
             }
         } else {
