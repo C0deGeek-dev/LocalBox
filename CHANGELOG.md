@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v1.2.0 - 2026-06-30
+
+Coordinated LocalX release.
+
 - **`Start-LocalPilot -UseVision` now actually loads the vision projector, and
   auto-declares it to LocalPilot.** The LocalPilot agent launch previously
   hardcoded an empty projector path, so `-UseVision` set the AutoBest profile but
