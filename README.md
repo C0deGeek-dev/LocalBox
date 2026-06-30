@@ -37,6 +37,21 @@ connects the result to Claude Code, Codex, or
 | **You control** | Model, quant, context size, runtime mode, and target harness |
 | **Runs on** | Windows PowerShell (not WSL or bash) |
 
+## Privacy by design
+
+LocalBox runs your model on hardware you control and keeps the normal inference
+path local.
+
+- **No usage telemetry is sent.** LocalBox does not report your prompts, code,
+  models, hardware measurements, or usage to us.
+- **Your runtime data stays yours.** Models, profiles, logs, and generated
+  configuration remain on the machine and paths you choose.
+- **Network access is deliberate.** Model or runtime downloads happen only when
+  you request them; exposing a server beyond loopback is an explicit, guarded
+  action.
+- **You remain in control.** The configuration is readable, portable, and yours
+  to inspect, back up, move, or delete.
+
 > [!IMPORTANT]
 > LocalBox uses `llama-server`. Ollama support ended after the
 > [`ollama-classic`](https://github.com/C0deGeek-dev/LocalBox/tree/ollama-classic)
