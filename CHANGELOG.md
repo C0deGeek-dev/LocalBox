@@ -4,6 +4,20 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`Start-LocalPilot -UseVision` now actually loads the vision projector, and
+  auto-declares it to LocalPilot.** The LocalPilot agent launch previously
+  hardcoded an empty projector path, so `-UseVision` set the AutoBest profile but
+  never passed `--mmproj` to `llama-server` — an image-capable model ran text-only.
+  It now resolves the model's `mmproj.gguf` (mirroring the Claude Code launch),
+  guarded by an availability check so a missing projector gives a clear message
+  and a text-only launch rather than a broken `--mmproj`. A real launch downloads
+  the projector on demand; a `-DryRun` preview resolves the expected path without
+  downloading. On that vision launch LocalBox also writes `supports_vision = true`
+  into the `[providers.local]` block of the generated `.localpilot.toml`, so
+  LocalPilot accepts image input zero-config. The default (no `-UseVision`) path
+  loads no projector and declares nothing — unchanged. See `docs/harness-mode.md`
+  → "LocalPilot harness".
+
 ## v1.1.0 - 2026-06-29
 
 Coordinated LocalX release.

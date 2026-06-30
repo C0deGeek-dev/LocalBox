@@ -52,6 +52,16 @@ LocalBox update/install flows; when unset, LocalBox discovers a sibling
 qcoder -Ctx 32k -LocalPilot
 ```
 
+Add `-UseVision` to load the model's multimodal projector (`--mmproj`) for an
+image-capable model. On that launch LocalBox also writes `supports_vision = true`
+into the `[providers.local]` block of the generated `.localpilot.toml`, so
+LocalPilot accepts image input with no hand edit. Without `-UseVision` the
+projector is not loaded and nothing is declared, so the launch is unchanged.
+
+```powershell
+qcoder -Ctx 32k -LocalPilot -UseVision
+```
+
 ### Codex harness
 
 Same flow, except the launch shells into `codex` with an OpenAI-compatible

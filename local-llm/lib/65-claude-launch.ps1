@@ -1425,6 +1425,76 @@ function Get-ClaudeTargetSummary {
     return "Default (Anthropic API)"
 }
 
+function Resolve-LocalPilotVisionModule {
+    # Resolve the multimodal projector (mmproj) path for a LocalPilot vision launch.
+    # Returns '' when vision is not opted in or no projector is available (the
+    # launch then proceeds text-only). A real launch downloads the projector on
+    # demand; a DryRun resolves the expected local path WITHOUT downloading, so a
+    # preview never pulls gigabytes. Guarded by Test-ModelVisionModuleAvailable so a
+    # missing projector gives a clear message rather than a broken --mmproj.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [switch]$UseVision,
+        [switch]$DryRun
+    )
+
+    if (-not $UseVision) { return '' }
+
+    $avail = Test-ModelVisionModuleAvailable -Key $Key -Def $Def
+    if (-not ($avail.Local -or $avail.AvailableOnHF)) {
+        Write-Warning "Vision requested but no mmproj is available locally or on HuggingFace for $Key; launching text-only."
+        return ''
+    }
+
+    if ($DryRun) {
+        # Preview only: resolve the expected on-disk path without downloading.
+        $folder = Get-ModelFolder -Def $Def
+        return [string](Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $avail.Filename)
+    }
+
+    $resolved = Get-ModelVisionModulePath -Key $Key -Def $Def
+    if ($resolved) {
+        Write-Host "Vision: loaded mmproj $([System.IO.Path]::GetFileName($resolved))" -ForegroundColor DarkCyan
+        return [string]$resolved
+    }
+
+    Write-Warning "Vision requested but no mmproj found for $Key; launching text-only."
+    return ''
+}
+
+function New-LocalPilotBaseConfigToml {
+    # Build the [provider] + [providers.local] head of the generated .localpilot.toml.
+    # When -SupportsVision is set (LocalBox loaded the projector for this launch), it
+    # auto-declares supports_vision = true so LocalPilot honours image input without a
+    # hand edit. The default (no vision) path writes nothing extra. The result has no
+    # trailing newline, matching the caller's incremental ` `n`-prefixed appends.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderKind,
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$ApiKeyEnv,
+        [switch]$SupportsVision
+    )
+
+    $toml = @"
+[provider]
+default = "local"
+
+[providers.local]
+kind = "$ProviderKind"
+base_url = "$BaseUrl"
+api_key_env = "$ApiKeyEnv"
+"@
+
+    if ($SupportsVision) {
+        $toml += "`nsupports_vision = true"
+    }
+
+    return $toml
+}
+
 function Start-LocalPilot {
     [CmdletBinding()]
     param(
@@ -1481,6 +1551,12 @@ function Start-LocalPilot {
     $providerKind = 'openai-compatible'
     $effectiveBaseUrl = "http://127.0.0.1:$port"
 
+    # Resolve the multimodal projector when vision is opted in (mirrors
+    # Start-ClaudeWithLlamaCppModel); '' when off or unavailable, so the default
+    # agent-launch path is unchanged. A real launch downloads on demand; DryRun
+    # resolves the expected path without downloading.
+    $visionModulePath = Resolve-LocalPilotVisionModule -Key $Key -Def $def -UseVision:$UseVision -DryRun:$DryRun
+
     # Build llama-server args and start server.
     $buildParams = @{
         Def              = $def
@@ -1489,7 +1565,7 @@ function Start-LocalPilot {
         ModelArgPath     = $ggufPath
         Port             = $port
         ThinkingPolicy   = $thinkingPolicy
-        VisionModulePath = ''
+        VisionModulePath = $visionModulePath
     }
     if ($agentParallel -gt 0) { $buildParams.Parallel = $agentParallel }
     if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
@@ -1648,15 +1724,10 @@ function Start-LocalPilot {
     # adapter normalizes a base_url ending in /v1 to /v1/messages; the
     # OpenAI-compatible one to /v1/chat/completions.
     $apiKeyEnv = if ($providerKind -eq 'anthropic') { 'ANTHROPIC_AUTH_TOKEN' } else { 'LOCALPILOT_LOCAL_API_KEY' }
-    $tomlContent = @"
-[provider]
-default = "local"
-
-[providers.local]
-kind = "$providerKind"
-base_url = "$effectiveBaseUrl/v1"
-api_key_env = "$apiKeyEnv"
-"@
+    # When the projector loaded for this launch, LocalBox is the authoritative
+    # declarer that the provider accepts image input, so auto-declare it.
+    $declareVision = ($UseVision -and -not [string]::IsNullOrWhiteSpace($visionModulePath))
+    $tomlContent = New-LocalPilotBaseConfigToml -ProviderKind $providerKind -BaseUrl "$effectiveBaseUrl/v1" -ApiKeyEnv $apiKeyEnv -SupportsVision:$declareVision
 
     Write-Host ""
     Write-Host "Launching localpilot with $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
