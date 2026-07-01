@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Security posture + serve guard in Rust (`localbox-launcher::posture`).**
+  The one-screen posture (permission/bypass gate status without prompting, the
+  loopback-only agent proxy, serve-gateway exposure and auth, and the download
+  pin posture incl. the trust-on-first-use spelling), the public-HTTP
+  classifier that spares loopback/RFC-1918/link-local/localhost while flagging
+  public addresses and DNS names on plain HTTP, and the serve guard: open
+  no-auth HTTP on a public-looking address is refused with the remedy unless
+  explicitly opted into; password-protected public HTTP stays allowed and
+  visible. Discovery defaults derive from the home directory — never a
+  hardcoded machine path.
+
 - **Launch planning in Rust (`localbox-launcher::orchestrate`).** One
   read-only resolution — model → context → expected GGUF path (no download) →
   vision projector (opt-in AND actually resolved) → free server port → full
