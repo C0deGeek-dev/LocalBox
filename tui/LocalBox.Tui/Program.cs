@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Text;
@@ -58,7 +58,7 @@ var pickerStep = WizardStep.Context;
 var pickerIndex = 0;
 var pickerChoices = new List<PickerChoice>();
 var renderVersion = 0;
-var actions = new[] { "claude", "codex", "localpilot", "serve", "chat", "setup", "findbest", "resetbest" };
+var actions = new[] { "localpilot", "claude", "codex", "serve", "chat", "setup", "findbest", "resetbest" };
 var modes = new[] { "native", "turboquant", "mtpturbo" };
 var autoBestChoices = new[] { "off", "auto", "balanced", "pure" };
 var autoBestCache = new Dictionary<string, List<AutoBestProfile>>(StringComparer.OrdinalIgnoreCase);
@@ -296,7 +296,7 @@ void RenderFooter()
     var search = searchMode ? $"search:{searchTerm}_" : $"search:{(string.IsNullOrWhiteSpace(searchTerm) ? "-" : searchTerm)}";
     footer.Text = activePane switch
     {
-        ActivePane.Models => $"pane:models Up/Down model Enter/Right wizard  F10 {filter} / {search} Esc quit",
+        ActivePane.Models => $"pane:models Up/Down model  Enter launch  Right customize  F10 {filter} / {search} Esc quit",
         ActivePane.Wizard => $"pane:wizard Up/Down field Enter choices Right next Left models  P preview L launch S strict:{strict} Esc quit",
         _ => $"pane:{activePane} Enter select Right next Left back  F10 {filter} / {search} Esc quit"
     };
@@ -674,7 +674,9 @@ void HandleKey(dynamic key)
 
     if (activePane == ActivePane.Models)
     {
-        if (key.KeyCode == KeyCode.Enter || key.KeyCode == KeyCode.CursorRight)
+        // Right customizes (drops into the wizard); Enter launches (handled by the
+        // list's Accepting event) so the fast path is a single keystroke.
+        if (key.KeyCode == KeyCode.CursorRight)
         {
             step = WizardStep.Context;
             FocusPane(ActivePane.Wizard);
@@ -889,17 +891,18 @@ void HandleKey(dynamic key)
 
 list.ValueChanged += (_, args) =>
 {
+    // Re-resolve per-model context/quant defaults, but do NOT reset the wizard step:
+    // browsing models must not throw away where the user was.
     pickerOpen = false;
     pickerChoices = [];
     selectedContextIndex = 0;
     selectedQuantIndex = DefaultQuantIndex(CurrentModel());
-    step = WizardStep.Model;
     RenderModel(args.NewValue);
 };
 list.Accepting += (_, _) =>
 {
-    step = WizardStep.Context;
-    FocusPane(ActivePane.Wizard);
+    // Enter on the model list launches the highlighted model with its current plan.
+    LaunchSelected();
 };
 
 app.Keyboard.KeyDown += (_, key) => HandleKey(key);
@@ -917,7 +920,9 @@ else
 }
 
 app.Run(window);
-Console.Clear();
+// Terminal.Gui restores the primary screen buffer on shutdown; do NOT Console.Clear()
+// here — that wiped the user's scrollback (build output, notes, the launch context).
+// Leaving it intact keeps a durable record above the launch line.
 if (!string.IsNullOrWhiteSpace(pendingLaunchCommand))
 {
     Console.WriteLine($"Launching: {pendingLaunchCommand}");
