@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Guided-launcher core in Rust (`localbox-tui`: vocabulary + plan).** The
+  plain-language vocabulary (Run with / Quality / Memory / Speed / Images
+  friendly names, memory-as-words at tokens×0.75, quality-as-hint+GB, the
+  glossary) and the recommended-plan summary with the no-jargon contract as a
+  test (`quant`/`AutoBest`/`turboquant` must not appear; the friendly labels
+  must). The plan resolver pins the precedence: explicit overrides > the saved
+  DefaultLaunch's cross-model preferences (target/engine/auto-tune) > the
+  per-model definition > hard defaults, with quant/context applying from the
+  recipe only for the model it was saved for; a returning user's plan IS their
+  last-good plan, previews are non-committing by construction, and the
+  `.llm-default` workspace override resolves by walk-up with nearer markers
+  shadowing outer ones.
+
 - **Security posture + serve guard in Rust (`localbox-launcher::posture`).**
   The one-screen posture (permission/bypass gate status without prompting, the
   loopback-only agent proxy, serve-gateway exposure and auth, and the download

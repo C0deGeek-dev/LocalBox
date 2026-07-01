@@ -5,13 +5,18 @@
 #   - localbox-launcher   the launcher-contract implementation: model catalog
 #                         resolution, hardware/binary resolution, and server
 #                         lifecycle over the shared localx-llama crate tier
+#   - localbox-tui        the friendly launcher UI: plain-language vocabulary,
+#                         the guided plan resolver, and the ratatui widgets
 #
 # Shared primitives come from the public localx-llama crate tier via a
 # rev-pinned git dependency. MSRV 1.82 / edition 2021, exact-pinned deps.
 
 [workspace]
 resolver = "2"
-members = ["crates/localbox-launcher"]
+members = [
+    "crates/localbox-launcher",
+    "crates/localbox-tui",
+]
 
 [workspace.package]
 edition = "2021"
