@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v1.2.1 - 2026-07-01
+
+Coordinated LocalX release.
+
 - **New default `llm` experience: a guided, plain-language launcher.** When
   Spectre is available, `llm` now walks you through launching in plain words —
   pick a model, then **Launch now (recommended)** or **Customize** (Run with /
