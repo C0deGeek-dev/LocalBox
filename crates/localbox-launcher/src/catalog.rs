@@ -55,17 +55,23 @@ fn read_layer(path: &Path) -> Result<Map<String, Value>, CatalogError> {
 impl Catalog {
     /// Load and merge the three layers from a `local-llm`-style directory.
     ///
+    /// The catalog is per-user: `llm-models.json` when seeded, falling back to
+    /// the shipped `llm-models.example.json` template on an unseeded checkout.
+    ///
     /// # Errors
-    /// [`CatalogError::CatalogMissing`] when `llm-models.json` is absent (the
-    /// example must be copied first), a parse error for a corrupt layer, or a
-    /// model entry that no longer deserializes.
+    /// [`CatalogError::CatalogMissing`] when neither the seeded catalog nor
+    /// the template exists, a parse error for a corrupt layer, or a model
+    /// entry that no longer deserializes.
     pub fn load(local_llm_dir: &Path) -> Result<Self, CatalogError> {
-        let catalog_path = local_llm_dir.join("llm-models.json");
-        if !catalog_path.is_file() {
-            return Err(CatalogError::CatalogMissing(
-                catalog_path.display().to_string(),
-            ));
-        }
+        let seeded = local_llm_dir.join("llm-models.json");
+        let template = local_llm_dir.join("llm-models.example.json");
+        let catalog_path = if seeded.is_file() {
+            seeded
+        } else if template.is_file() {
+            template
+        } else {
+            return Err(CatalogError::CatalogMissing(seeded.display().to_string()));
+        };
         let defaults = read_layer(&local_llm_dir.join("defaults.json"))?;
         let catalog = read_layer(&catalog_path)?;
         let settings = read_layer(&local_llm_dir.join("settings.json"))?;
@@ -217,6 +223,23 @@ mod tests {
         assert_eq!(catalog.no_think_proxy_port(), Some(11434));
         assert_eq!(catalog.gguf_root(), Some(PathBuf::from("E:/models")));
         assert!(catalog.model("q36apex").is_some());
+    }
+
+    #[test]
+    fn an_unseeded_checkout_falls_back_to_the_template() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("llm-models.example.json"), CATALOG).unwrap();
+        let catalog = Catalog::load(dir.path()).unwrap();
+        assert!(catalog.model("q36apex").is_some());
+        // A seeded per-user catalog wins over the template.
+        std::fs::write(
+            dir.path().join("llm-models.json"),
+            r#"{ "Models": { "mine": { "Repo": "me/mine", "Contexts": { "": 4096 } } } }"#,
+        )
+        .unwrap();
+        let catalog = Catalog::load(dir.path()).unwrap();
+        assert!(catalog.model("mine").is_some());
+        assert!(catalog.model("q36apex").is_none());
     }
 
     #[test]
