@@ -14,6 +14,7 @@
 //!   confirm menu) with `TestBackend` snapshot tests and the fit-aware
 //!   traffic-light colors.
 
+pub mod customize;
 pub mod plan;
 pub mod ui;
 pub mod vocab;

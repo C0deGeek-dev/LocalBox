@@ -4,6 +4,15 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The Customize path (`localbox-tui::customize`).** Progressive disclosure
+  over the resolved plan: every row shows its current value and choosing one
+  merges the delta back into the overrides. Auto-tune owns Engine + KV — with
+  it on, those rows lock with a plain explanation (never a silent block) and
+  any manual KV override is dropped so it cannot strand against the tuner's
+  choice; turning it off restores manual control. Save is target-gated:
+  `serve` cannot be saved as the default launch, refused with the friendly
+  name in the reason.
+
 - **Guided-launcher widgets (`localbox-tui::ui`).** The model picker
   (`key · DisplayName`, dim `[strict]`, `[Show all tiers]`/`[Cancel]`
   footers), the recommended-plan summary panel, and the exact five-item
