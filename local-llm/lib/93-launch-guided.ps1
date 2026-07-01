@@ -68,7 +68,9 @@ function Format-GuidedPlanSummary {
     )
     $name = if ($Def.Contains('DisplayName')) { [string]$Def['DisplayName'] } else { $Plan.ModelKey }
     $speed = if ($Plan.UseAutoBest) { '{0} · auto-tuned' -f (Get-GuidedEngineLabel -Value $Plan.Mode) } else { Get-GuidedEngineLabel -Value $Plan.Mode }
-    $kv = if ($Plan.KvCacheK) { if ($Plan.KvCacheK -eq $Plan.KvCacheV) { $Plan.KvCacheK } else { '{0}/{1}' -f $Plan.KvCacheK, $Plan.KvCacheV } } else { 'auto' }
+    $kv = if ($Plan.KvCacheK) { if ($Plan.KvCacheK -eq $Plan.KvCacheV) { $Plan.KvCacheK } else { '{0}/{1}' -f $Plan.KvCacheK, $Plan.KvCacheV } }
+    elseif ($Plan.UseAutoBest) { 'chosen by auto-tune' }
+    else { 'auto (default)' }
     @(
         ('Model:     {0}' -f $name)
         ('Run with:  {0}' -f (Get-GuidedTargetLabel -Value $Plan.Target))
@@ -94,6 +96,10 @@ What these mean:
   Speed     – the engine. "Turbo (auto-tuned)" is tuned to your GPU and is the
               recommended default; "Standard" is the plain engine.
   Images    – turn on if you want the model to look at pictures you paste.
+
+Auto-tune  – "Auto-tune this model (run a benchmark)" measures your GPU once and
+             saves the fastest safe settings (engine + KV cache). After that,
+             leaving Auto-tune "on" uses those saved results automatically.
 
 Tip: pick a model and choose "Launch now" — the recommended settings already
 fit your machine. Use "Customize" only if you want to change something.
@@ -131,16 +137,28 @@ function Invoke-GuidedCustomize {
     while ($true) {
         $plan = Resolve-LaunchPlan -ModelKey $ModelKey -Def $Def -Defaults $Defaults -Overrides $overrides
         $autoLabel = if ($plan.UseAutoBest) { '{0} (on)' -f $plan.AutoBestProfile } else { 'off (manual)' }
-        $kvLabel = if ($plan.KvCacheK) { if ($plan.KvCacheK -eq $plan.KvCacheV) { $plan.KvCacheK } else { '{0}/{1}' -f $plan.KvCacheK, $plan.KvCacheV } } else { 'auto' }
         $ctxLabel = if ($plan.ContextKey) { $plan.ContextKey } else { 'default' }
 
         $menu = [ordered]@{}
         $menu[('Run with:         {0}' -f (Get-GuidedTargetLabel -Value $plan.Target))] = 'target'
         if ($Def.Contains('Quants')) { $menu[('Quality (quant):  {0}' -f $plan.Quant)] = 'quant' }
         $menu[('Memory (context): {0}' -f $ctxLabel)] = 'context'
-        $menu[('Engine (mode):    {0}' -f $plan.Mode)] = 'mode'
+        # Engine and KV cache are only user choices in manual mode; when auto-tune is
+        # on it selects/tunes them, so they show as auto-tuned and aren't editable here.
+        if (-not $plan.UseAutoBest) {
+            $menu[('Engine (mode):    {0}' -f $plan.Mode)] = 'mode'
+        }
+        else {
+            $menu[('Engine (mode):    {0}  (auto-tuned)' -f $plan.Mode)] = 'mode-locked'
+        }
         $menu[('Auto-tune:        {0}' -f $autoLabel)] = 'autobest'
-        $menu[('KV cache:         {0}' -f $kvLabel)] = 'kv'
+        if (-not $plan.UseAutoBest) {
+            $kvLabel = if ($plan.KvCacheK) { if ($plan.KvCacheK -eq $plan.KvCacheV) { $plan.KvCacheK } else { '{0}/{1}' -f $plan.KvCacheK, $plan.KvCacheV } } else { 'auto (default)' }
+            $menu[('KV cache:         {0}' -f $kvLabel)] = 'kv'
+        }
+        else {
+            $menu['KV cache:         (chosen by auto-tune)'] = 'kv-locked'
+        }
         $menu[('Images (vision):  {0}' -f $(if ($plan.Vision) { 'on' } else { 'off' }))] = 'vision'
         $menu[('Strict output:    {0}' -f $(if ($plan.Strict) { 'on' } else { 'off' }))] = 'strict'
         $menu['— Save these as my default —'] = 'save'
@@ -152,13 +170,20 @@ function Invoke-GuidedCustomize {
             'quant' { $v = Select-LLMQuantKeySpectre -ModelKey $ModelKey; if ($v -and $v -ne '__keep__') { $overrides.Quant = $v } }
             'context' { $v = Select-LLMContextKeySpectre -ModelKey $ModelKey; if ($null -ne $v) { $overrides.ContextKey = $v } }
             'mode' { $v = Select-LLMModeSpectre; if ($v) { $overrides.Mode = $v } }
+            'mode-locked' { Write-Host 'Auto-tune selects and tunes the engine for you. Turn Auto-tune off to choose it yourself.' -ForegroundColor DarkGray }
             'autobest' {
                 $abMap = [ordered]@{ 'Off — I will set things manually' = 'off'; 'Auto' = 'auto'; 'Balanced (recommended)' = 'balanced'; 'Pure — max speed' = 'pure' }
                 $ab = Read-GuidedChoice -Message 'Auto-tune settings for your GPU?' -Map $abMap -PageSize 6
                 if ($ab -eq 'off') { $overrides.UseAutoBest = $false }
-                elseif ($ab) { $overrides.UseAutoBest = $true; $overrides.AutoBestProfile = $ab }
+                elseif ($ab) {
+                    $overrides.UseAutoBest = $true
+                    $overrides.AutoBestProfile = $ab
+                    # Auto-tune owns the KV cache — drop any manual override so it isn't stranded.
+                    $overrides.Remove('KvCacheK'); $overrides.Remove('KvCacheV')
+                }
             }
             'kv' { $kv = Select-LLMKvCacheSpectre -Mode $plan.Mode; if ($kv) { $overrides.KvCacheK = $kv.K; $overrides.KvCacheV = $kv.V } }
+            'kv-locked' { Write-Host 'Auto-tune chooses the KV cache for you. Turn Auto-tune off to set it yourself.' -ForegroundColor DarkGray }
             'vision' { $overrides.Vision = (-not $plan.Vision) }
             'strict' { $overrides.Strict = (-not $plan.Strict) }
             'save' {
@@ -214,10 +239,11 @@ function Start-LaunchGuided {
             Write-Host ""
 
             $menu = [ordered]@{
-                '▶  Launch now (recommended settings)' = 'launch'
-                '⚙  Customize settings'                 = 'customize'
-                'ℹ  What do these mean?'                = 'help'
-                '←  Back to models'                     = 'back'
+                '▶  Launch now (recommended settings)'          = 'launch'
+                '⚙  Customize settings'                          = 'customize'
+                '🔧  Auto-tune this model (run a benchmark)'      = 'tune'
+                'ℹ  What do these mean?'                         = 'help'
+                '←  Back to models'                              = 'back'
             }
             $choice = Read-GuidedChoice -Message "Ready to launch $modelKey?" -Map $menu -PageSize 6
             switch ($choice) {
@@ -229,6 +255,15 @@ function Start-LaunchGuided {
                 'customize' {
                     $delta = Invoke-GuidedCustomize -ModelKey $modelKey -Def $def -Defaults $defaults
                     foreach ($k in $delta.Keys) { $overrides[$k] = $delta[$k] }
+                }
+                'tune' {
+                    # Run the tuner (benchmark) for this model + engine + memory; it saves
+                    # the best settings, which Auto-tune then uses on the next launch.
+                    Write-Host "`nRunning a benchmark to auto-tune $modelKey for your GPU — this can take a few minutes." -ForegroundColor Cyan
+                    try {
+                        Invoke-LLMSelection -Action findbest -ModelKey $modelKey -ContextKey $plan.ContextKey -LlamaCppMode $plan.Mode
+                    }
+                    catch { Write-Warning "Auto-tune failed: $($_.Exception.Message)" }
                 }
                 'help' {
                     Write-Host ""
