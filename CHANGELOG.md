@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Agent env envelope in Rust (`localbox-launcher::env`).** One plan function
+  computes the launch's environment variables — it is both the DryRun snapshot
+  and the live setter's source, so the two can never drift (the PowerShell
+  version hand-mirrored the list in two places). The envelope saves every
+  canonical variable before mutating and restores after: values present before
+  come back, values absent before are removed. The canonical set carries its
+  reasons in place (the 1800000ms SDK timeout for slow local prefill, the
+  auto-memory and experimental-betas/ToolSearch disables, the no-think trio
+  skipped under keep-thinking, the paired context/auto-compact caps, the
+  conditional per-model image ceiling, and the LOCALBOX_* telemetry exports),
+  and a test pins that every setter variable is inside the envelope. All over
+  a store seam so tests never race the real process environment.
+
 - **No-think proxy lifecycle in Rust (`localbox-launcher::proxy`).** The
   launch-time proxy orchestration over the shared tri-state machine, with
   every effect behind a mockable seam: reap-before-probe (a dead-upstream

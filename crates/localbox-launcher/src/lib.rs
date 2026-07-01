@@ -16,6 +16,11 @@
 //!   repoint-on-mismatch / kill-stale-listener orchestration over the shared
 //!   tri-state target check, socket→PID resolution, and owned-vs-any teardown.
 
+//! - [`env`] — the agent env envelope: one plan is both the DryRun snapshot
+//!   and the live setter; save → mutate → finally-restore over a testable
+//!   store seam.
+
 pub mod catalog;
+pub mod env;
 pub mod launcher;
 pub mod proxy;
