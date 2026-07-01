@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Launch planning in Rust (`localbox-launcher::orchestrate`).** One
+  read-only resolution — model → context → expected GGUF path (no download) →
+  vision projector (opt-in AND actually resolved) → free server port → full
+  llama-server argv → proxy config → provider TOML → agent env plan — produces
+  the inspectable plan that serves both DryRun (print it; commits no session
+  state, creates no files) and the live launch. Vision is honest end to end:
+  `--mmproj` enters the argv and `supports_vision` is declared only when a
+  projector resolved; a present projector stays unused unless requested. The
+  smoke-fallback rule is pinned: a non-native fork failing the smoke retries
+  on native llama.cpp; native failing is a hard stop.
+
 - **Launch smoke test in Rust (`localbox-launcher::smoke`).** The
   degenerate-output detectors with thinking stripped FIRST (a reasoning model
   may legitimately fill its budget with `<think>` before a short answer): the

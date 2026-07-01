@@ -57,6 +57,21 @@ impl LlamaLauncher {
         self.session.lock().ok().and_then(|s| s.clone())
     }
 
+    /// The GGUF's expected on-disk path — pure path math, no download, no
+    /// existence requirement (the DryRun resolution).
+    ///
+    /// # Errors
+    /// [`LauncherError::Unavailable`] when the catalog cannot name a file.
+    pub fn expected_gguf_path(
+        &self,
+        def: &ModelDef,
+        quant: Option<&str>,
+    ) -> Result<PathBuf, LauncherError> {
+        let folder = self.model_folder(def, "")?;
+        let file = Self::model_file_name(def, quant)?;
+        Ok(folder.join(file))
+    }
+
     /// The model folder under the GGUF root (`<root>/<Def.Root or key>`).
     fn model_folder(&self, def: &ModelDef, key_fallback: &str) -> Result<PathBuf, LauncherError> {
         let root = self.catalog.gguf_root().ok_or_else(|| {
@@ -141,9 +156,7 @@ impl Launcher for LlamaLauncher {
     }
 
     fn gguf_path(&self, def: &ModelDef, quant: Option<&str>) -> Result<PathBuf, LauncherError> {
-        let folder = self.model_folder(def, "")?;
-        let file = Self::model_file_name(def, quant)?;
-        let path = folder.join(&file);
+        let path = self.expected_gguf_path(def, quant)?;
         if path.is_file() {
             Ok(path)
         } else {
