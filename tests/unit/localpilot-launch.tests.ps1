@@ -114,7 +114,8 @@ Describe 'Codex bypass on the real merged config (fresh machine, no settings)' {
     # dangerous flag without an explicit decision.
     BeforeEach {
         $script:LLMProfileRoot = (Resolve-Path (Join-Path $repoRoot 'local-llm')).Path
-        $script:LocalLLMConfigPath = Join-Path $script:LLMProfileRoot 'llm-models.json'
+        # The per-user catalog is gitignored; the repo ships the template.
+        $script:LocalLLMConfigPath = Join-Path $script:LLMProfileRoot 'llm-models.example.json'
         $script:SettingsRoot = New-TempSettingsRoot
         # A path that does not exist => Import-LocalLLMSettings returns empty (fresh machine).
         $env:LOCAL_LLM_SETTINGS = Join-Path $script:SettingsRoot 'settings.json'

@@ -239,7 +239,8 @@ function Set-InstallSetting {
 
 function Get-InstallCatalog {
     $deployedCatalog = Join-Path $DeployedLocalLLM "llm-models.json"
-    $sourceCatalog = Join-Path $RepoRoot "local-llm\llm-models.json"
+    # The repo ships only the template; a real catalog is the user's deployed one.
+    $sourceCatalog = Join-Path $RepoRoot "local-llm\llm-models.example.json"
     $path = if (Test-Path $deployedCatalog) { $deployedCatalog } else { $sourceCatalog }
     return Read-JsonHashtable -Path $path
 }
@@ -619,7 +620,24 @@ if ($installFiles) {
     Install-Dir-Files `
         -SourceDir (Join-Path $RepoRoot "local-llm") `
         -TargetDir $DeployedLocalLLM `
-        -Files @("LocalLLMProfile.ps1", "llm-models.json", "defaults.json")
+        -Files @("LocalLLMProfile.ps1", "llm-models.example.json", "defaults.json")
+
+    # The model catalog is per-user, not shipped: seed it from the template on
+    # first install, but NEVER symlink it or overwrite an existing catalog — a
+    # user's models are theirs to keep and edit locally.
+    $userCatalog = Join-Path $DeployedLocalLLM "llm-models.json"
+    if (-not (Test-Path -LiteralPath $userCatalog)) {
+        $template = Join-Path $RepoRoot "local-llm\llm-models.example.json"
+        if (Test-Path -LiteralPath $template) {
+            if ($DryRun) {
+                Write-Host "  Would seed per-user catalog: $userCatalog (from llm-models.example.json)" -ForegroundColor DarkGray
+            }
+            else {
+                Copy-Item -LiteralPath $template -Destination $userCatalog
+                Write-Host "  Seeded per-user catalog: $userCatalog (from llm-models.example.json)" -ForegroundColor DarkGray
+            }
+        }
+    }
 
     # lib/ is the modular code tree dot-sourced by LocalLLMProfile.ps1.
     # Install every *.ps1 in there, mirroring the source order so a fresh

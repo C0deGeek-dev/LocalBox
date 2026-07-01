@@ -18,7 +18,16 @@
 # Do not enable top-level StrictMode in a profile.
 
 $script:LLMProfileRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PROFILE }
-$script:LocalLLMConfigPath = if ($env:LOCAL_LLM_CONFIG) { $env:LOCAL_LLM_CONFIG } else { Join-Path $script:LLMProfileRoot "llm-models.json" }
+$script:LocalLLMConfigPath = if ($env:LOCAL_LLM_CONFIG) {
+    $env:LOCAL_LLM_CONFIG
+}
+else {
+    # The model catalog is per-user (gitignored; install.ps1 seeds it). Fall back to
+    # the shipped template when running from a checkout that has no seeded catalog,
+    # so a fresh clone is still runnable.
+    $userCatalog = Join-Path $script:LLMProfileRoot "llm-models.json"
+    if (Test-Path -LiteralPath $userCatalog) { $userCatalog } else { Join-Path $script:LLMProfileRoot "llm-models.example.json" }
+}
 
 # Dot-source every lib file in numeric prefix order. Dot-sourcing pulls
 # functions and $script: variables into THIS file's scope, which is what the

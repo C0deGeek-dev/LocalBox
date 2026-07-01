@@ -1,0 +1,91 @@
+{
+  "Models": {
+  "q3635ba3bapex": {
+    "DisplayName": "Qwen 3.6 35B A3B uncensored heretic APEX GGUF",
+    "Root": "q3635ba3bapex",
+    "SourceType": "gguf",
+    "Repo": "mudler/Qwen3.6-35B-A3B-uncensored-heretic-APEX-GGUF",
+    "Quants": {
+    "apex-balanced": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-Balanced.gguf",
+    "apex-compact": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-Compact.gguf",
+    "apex-i-balanced": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Balanced.gguf",
+    "apex-i-compact": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact.gguf",
+    "apex-i-mini": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Mini.gguf",
+    "apex-i-quality": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Quality.gguf",
+    "apex-quality": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-Quality.gguf"
+    },
+    "Quant": "apex-balanced",
+    "Parser": "qwen36",
+    "LimitTools": true,
+    "Tier": "experimental",
+    "Contexts": {
+    "": 65536,
+    "32k": 32768,
+    "64k": 65536,
+    "128k": 131072,
+    "256k": 262144
+    },
+    "Strict": true,
+    "Description": "<div style=\"background-color: #ff4444; color: white; padding: 20px; border-radius: 10px; text-align: center; margin: 20px 0;\"> <h2 style=\"color: white; margin: 0 0 10px 0;\">🚨⚠️ I HAVE REACHED HUGGING FACE'S FREE STORAGE LIMIT ⚠️🚨</h2> <p style=\"font-size: 18px; margin: 0 0 15px 0;\">I can no longer upload new models unless I can cover the cost of additional storage.<br>I host <b>70+ free model...",
+    "QuantSizesGB": {
+    "apex-balanced": 25.6,
+    "apex-compact": 17.3,
+    "apex-i-balanced": 25.6,
+    "apex-i-compact": 17.3,
+    "apex-i-mini": 14.3,
+    "apex-i-quality": 22.8,
+    "apex-quality": 22.8
+    },
+    "QuantNotes": {
+    "apex-balanced": "APEX-BALANCED · ~25.6 GB",
+    "apex-compact": "APEX-COMPACT · ~17.3 GB",
+    "apex-i-balanced": "APEX-I-BALANCED · ~25.6 GB",
+    "apex-i-compact": "APEX-I-COMPACT · ~17.3 GB",
+    "apex-i-mini": "APEX-I-MINI · ~14.3 GB",
+    "apex-i-quality": "APEX-I-QUALITY · ~22.8 GB",
+    "apex-quality": "APEX-QUALITY · ~22.8 GB"
+    }
+  },
+  "ornith35hapex": {
+    "DisplayName": "Ornith 1.0 35B heretic APEX GGUF",
+    "Root": "ornith35hapex",
+    "SourceType": "gguf",
+    "Repo": "C0deGeek/Ornith-1.0-35B-heretic-APEX-GGUF",
+    "Quants": {
+    "apex-quality": "Ornith-1.0-35B-heretic-Q6_K-APEX-Quality.gguf",
+    "apex-compact": "Ornith-1.0-35B-heretic-Q4_K_M-APEX-Compact.gguf",
+    "apex-i-quality": "Ornith-1.0-35B-heretic-Q6_K-APEX-I-Quality.gguf",
+    "apex-i-compact": "Ornith-1.0-35B-heretic-Q4_K_M-APEX-I-Compact.gguf"
+    },
+    "Quant": "apex-i-quality",
+    "Parser": "qwen36",
+    "LimitTools": true,
+    "Tier": "experimental",
+    "Contexts": {
+    "": 16384,
+    "8k": 8192,
+    "16k": 16384,
+    "32k": 32768,
+    "64k": 65536,
+    "128k": 131072,
+    "256k": 262144
+    },
+    "Strict": true,
+    "Description": "Ornith-1.0-35B decensored (Heretic) + APEX I-Quality, built locally with LocalWorkshop. Trunk-only (no MTP draft head). Vision via mmproj. Native window 256k (max_position_embeddings 262144) — no rope scaling needed for 64k/128k/256k. On a 24 GB GPU keep context <= 16k when the projector is loaded; 32k is text-only; 64k+ does not fit a single 24 GB card (needs more VRAM or heavy KV-cache quant).",
+    "QuantSizesGB": {
+    "apex-quality": 22.8,
+    "apex-compact": 16.5,
+    "apex-i-quality": 22.8,
+    "apex-i-compact": 16.5
+    },
+    "QuantNotes": {
+    "apex-quality": "APEX-QUALITY · ~22.8 GB · plain-APEX control",
+    "apex-compact": "APEX-COMPACT · ~16.5 GB · headroom",
+    "apex-i-quality": "APEX-I-QUALITY · ~22.8 GB · imatrix · 24 GB 4090 primary (ctx <=16k with vision)",
+    "apex-i-compact": "APEX-I-COMPACT · ~16.5 GB · imatrix · long-context headroom"
+    },
+    "VisionModule": "mmproj-Ornith-1.0-35B-heretic-f16.gguf"
+  }
+  },
+  "CommandAliases": {}
+}

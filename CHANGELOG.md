@@ -4,6 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The model catalog is now per-user, not shipped.** `llm-models.json` is your
+  own list (gitignored); the repo ships `llm-models.example.json` as the template.
+  `install.ps1` seeds `~/.local-llm/llm-models.json` from it on first run and never
+  overwrites an existing catalog, so your models stay yours and aren't published
+  for everyone. Existing installs are unaffected; a fresh checkout falls back to
+  the template. Add models with `addllm` or by editing your local catalog.
+
 ## v1.2.1 - 2026-07-01
 
 Coordinated LocalX release.
