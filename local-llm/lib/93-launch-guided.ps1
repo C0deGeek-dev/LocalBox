@@ -164,6 +164,15 @@ function Start-LaunchGuided {
         return
     }
 
+    # Non-dev users shouldn't have to edit $PROFILE for Spectre's box-drawing to
+    # render — ensure UTF-8 console output for this session before the first render.
+    try {
+        if ([Console]::OutputEncoding.CodePage -ne 65001) {
+            [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+        }
+    }
+    catch { Write-Verbose $_.Exception.Message }
+
     $defaults = if ($script:Cfg -and $script:Cfg.Contains('DefaultLaunch')) { $script:Cfg['DefaultLaunch'] } else { @{} }
 
     while ($true) {
