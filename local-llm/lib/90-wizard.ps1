@@ -2513,11 +2513,17 @@ function Start-LLMWizard {
         [switch]$UseVision
     )
 
-    # The inline launch board is opt-in (LOCALBOX_BOARD=1) while a friendlier TUI is
-    # built; the default stays the classic/Spectre wizard so `llm` is unchanged for
-    # everyone else. llmc/llms remain the explicit classic/Spectre entrypoints.
+    # Opt-in inline launch board (developer-facing) via LOCALBOX_BOARD=1.
     if ($env:LOCALBOX_BOARD -eq '1' -and (Get-Command Start-LaunchBoard -ErrorAction SilentlyContinue)) {
         Start-LaunchBoard -UseVision:$UseVision
+        return
+    }
+
+    # Friendly default: the guided, plain-language Spectre launcher. LOCALBOX_LEGACY_WIZARD=1
+    # forces the old step wizard; llmc/llms remain the explicit classic/Spectre entrypoints.
+    if ($env:LOCALBOX_LEGACY_WIZARD -ne '1' -and (Test-LocalLLMWizardSpectreEnabled) -and
+        (Get-Command Start-LaunchGuided -ErrorAction SilentlyContinue)) {
+        Start-LaunchGuided -UseVision:$UseVision
         return
     }
 

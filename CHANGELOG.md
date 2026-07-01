@@ -4,13 +4,15 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
-- **New default `llm` experience: an inline launch board.** `llm` now shows a
-  single-screen board — the model list beside a live, pre-resolved launch plan —
-  that launches on one `Enter`, lets single letters edit any field, and returns to
-  the board after the agent exits. It renders in place (no alternate screen, no
-  screen-clear) so your terminal scrollback survives, and falls back to a plan-card
-  menu on terminals that can't host it. `LOCALBOX_LEGACY_WIZARD=1` restores the old
-  step wizard; `llmc`/`llms` remain the explicit classic/Spectre entrypoints.
+- **New default `llm` experience: a guided, plain-language launcher.** When
+  Spectre is available, `llm` now walks you through launching in plain words —
+  pick a model, then **Launch now (recommended)** or **Customize** (Run with /
+  Quality / Memory / Speed / Images), with a **What do these mean?** help screen —
+  and returns to the model list when the agent exits. Recommended settings are
+  pre-filled to fit your machine, so the common path is model → Launch now. The
+  developer-oriented inline board is opt-in via `LOCALBOX_BOARD=1`;
+  `LOCALBOX_LEGACY_WIZARD=1` restores the old step wizard; `llmc`/`llms` remain the
+  explicit classic/Spectre entrypoints.
 - **Registered `ornith35hapex`** in the model catalog — a decensored (Heretic) + APEX
   GGUF of Ornith-1.0-35B (4 tiers: Quality/Compact/I-Quality/I-Compact + vision `mmproj`,
   Parser `qwen36`, contexts capped for a 24 GB GPU, `experimental`, **not** the default).
