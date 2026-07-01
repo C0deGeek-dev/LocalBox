@@ -12,5 +12,10 @@
 
 #![forbid(unsafe_code)]
 
+//! - [`proxy`] — no-think proxy lifecycle: the reap-before-probe /
+//!   repoint-on-mismatch / kill-stale-listener orchestration over the shared
+//!   tri-state target check, socket→PID resolution, and owned-vs-any teardown.
+
 pub mod catalog;
 pub mod launcher;
+pub mod proxy;

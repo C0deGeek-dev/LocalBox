@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **No-think proxy lifecycle in Rust (`localbox-launcher::proxy`).** The
+  launch-time proxy orchestration over the shared tri-state machine, with
+  every effect behind a mockable seam: reap-before-probe (a dead-upstream
+  orphan still answers `/health` and must never read as a live match),
+  reuse-on-match with the gateway-logs rule (an owned proxy restarts so logs
+  are captured; a foreign matching one is refused with the llm-stop remedy),
+  repoint-on-mismatch (tear down and restart at the wanted target, never fail
+  into a silent direct route), kill-stale-listener-first before binding
+  (Windows SO_REUSEADDR), bounded readiness polling that tears down a
+  never-ready start, owned-vs-any teardown (llm-stop reaps every owner on the
+  port), and the netstat/lsof socket→PID parsers. The shared health state now
+  distinguishes proxy-down (upstream up, proxy missing) from fully-down.
+
 - **Native Rust workspace seeded (`crates/localbox-launcher`).** The launcher
   contract now has its Rust implementation alongside the shipping PowerShell
   module (which stays authoritative until each piece is retired): the
