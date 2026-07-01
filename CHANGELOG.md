@@ -4,12 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
-- **Registered `ornith35hapex`** in the model catalog — a locally-built, decensored
-  (Heretic) + APEX **I-Quality** GGUF of Ornith-1.0-35B (vision via `mmproj`, Parser
-  `qwen36`, contexts capped for a 24 GB GPU, `experimental`, **not** the default). It
-  reuses the existing serving glue (proxy 11435→8080, `--mmproj`). On held-out
+- **Registered `ornith35hapex`** in the model catalog — a decensored (Heretic) + APEX
+  GGUF of Ornith-1.0-35B (4 tiers: Quality/Compact/I-Quality/I-Compact + vision `mmproj`,
+  Parser `qwen36`, contexts capped for a 24 GB GPU, `experimental`, **not** the default).
+  It reuses the existing serving glue (proxy 11435→8080, `--mmproj`). On held-out
   perplexity it edges out the `q3635ba3bapex` baseline (2.639 vs 2.718) at comparable
-  throughput and VRAM; trunk-only (no MTP draft head). Serve with
+  throughput and VRAM; trunk-only (no MTP draft head). `Repo` points at the public
+  HuggingFace release `C0deGeek/Ornith-1.0-35B-heretic-APEX-GGUF`. Serve with
   `llmdefaultserve ornith35hapex`.
 
 ## v1.2.0 - 2026-06-30
