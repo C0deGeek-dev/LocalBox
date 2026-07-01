@@ -62,7 +62,10 @@ function Get-LaunchBoardModels {
             DisplayName = if ($def.ContainsKey('DisplayName')) { [string]$def.DisplayName } else { $key }
         }
     }
-    return , $models
+    # Stream the rows (no unary-comma wrap): callers collect with @(...), and a
+    # `, $models` return double-wraps under @() so the first element becomes the
+    # whole inner array (its .Key then reads empty).
+    return $models
 }
 
 function Write-LaunchBoardFrame {

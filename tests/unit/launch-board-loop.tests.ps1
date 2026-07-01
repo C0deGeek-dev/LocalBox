@@ -1,6 +1,9 @@
 BeforeAll {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
     function Write-Section { param([string]$Title) }
+    # Stubs so Pester can mock the model-source helpers (defined in other libs).
+    function Get-FilteredModelKeys { param([switch]$IncludeAll) @() }
+    function Get-ModelDef { param([string]$Key) @{} }
     . (Join-Path $repoRoot 'local-llm\lib\91-launch-board.ps1')
     . (Join-Path $repoRoot 'local-llm\lib\92-launch-board-loop.ps1')
     $script:LoopLib = Join-Path $repoRoot 'local-llm\lib\92-launch-board-loop.ps1'
@@ -45,6 +48,27 @@ Describe 'Build-LaunchSelectionArgs' {
         $a.ContainsKey('UseVision') | Should -BeFalse
         $a.ContainsKey('UseAutoBest') | Should -BeFalse
         $a.ContainsKey('AutoBestProfile') | Should -BeFalse
+    }
+}
+
+Describe 'Get-LaunchBoardModels' {
+    It 'returns flat hashtable rows with non-empty Key (no array double-wrap)' {
+        Mock Get-FilteredModelKeys { @('ornith35hapex', 'q3635ba3bapex') }
+        Mock Get-ModelDef { @{ Tier = 'exp'; DisplayName = "name-$Key" } }
+
+        $models = @(Get-LaunchBoardModels)
+        $models.Count | Should -Be 2
+        $models[0].Key | Should -Be 'ornith35hapex'
+        $models[0].DisplayName | Should -Be 'name-ornith35hapex'
+        [string]$models[1].Key | Should -Not -BeNullOrEmpty
+    }
+
+    It 'survives a single-model list without collapsing' {
+        Mock Get-FilteredModelKeys { @('solo') }
+        Mock Get-ModelDef { @{ Tier = 't'; DisplayName = 'Solo' } }
+        $models = @(Get-LaunchBoardModels)
+        $models.Count | Should -Be 1
+        $models[0].Key | Should -Be 'solo'
     }
 }
 
