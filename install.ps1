@@ -626,7 +626,24 @@ if ($installFiles) {
     # first install, but NEVER symlink it or overwrite an existing catalog — a
     # user's models are theirs to keep and edit locally.
     $userCatalog = Join-Path $DeployedLocalLLM "llm-models.json"
-    if (-not (Test-Path -LiteralPath $userCatalog)) {
+    $catalogItem = Get-Item -LiteralPath $userCatalog -Force -ErrorAction SilentlyContinue
+
+    # Old installs symlinked the catalog into the repo checkout. That file is gone
+    # now (the catalog is a per-user copy), so any leftover symlink is stale — often
+    # dangling, which Test-Path still reports as existing. Remove it and reseed. A
+    # real, non-symlink catalog is the user's own and is left untouched.
+    if ($catalogItem -and $catalogItem.LinkType -eq 'SymbolicLink') {
+        if ($DryRun) {
+            Write-Host "  Would replace legacy catalog symlink with a per-user copy: $userCatalog" -ForegroundColor DarkGray
+        }
+        else {
+            Remove-Item -LiteralPath $userCatalog -Force
+            Write-Host "  Removed legacy catalog symlink: $userCatalog" -ForegroundColor DarkGray
+        }
+        $catalogItem = $null
+    }
+
+    if (-not $catalogItem) {
         $template = Join-Path $RepoRoot "local-llm\llm-models.example.json"
         if (Test-Path -LiteralPath $template) {
             if ($DryRun) {
