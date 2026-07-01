@@ -188,6 +188,34 @@
     "apex-quality": "APEX-QUALITY · ~22.8 GB"
     },
     "VisionModule": "mmproj.gguf"
+  },
+  "ornith35hapex": {
+    "DisplayName": "Ornith 1.0 35B heretic APEX I-Quality GGUF",
+    "Root": "ornith35hapex",
+    "SourceType": "gguf",
+    "Repo": "",
+    "Quants": {
+    "apex-i-quality": "Ornith-1.0-35B-heretic-APEX-I-Quality.gguf"
+    },
+    "Quant": "apex-i-quality",
+    "Parser": "qwen36",
+    "LimitTools": true,
+    "Tier": "experimental",
+    "Contexts": {
+    "": 16384,
+    "8k": 8192,
+    "16k": 16384,
+    "32k": 32768
+    },
+    "Strict": true,
+    "Description": "Ornith-1.0-35B decensored (Heretic) + APEX I-Quality, built locally with LocalWorkshop. Trunk-only (no MTP draft head). Vision via mmproj. On a 24 GB GPU keep context <= 16k when the projector is loaded; 32k is text-only.",
+    "QuantSizesGB": {
+    "apex-i-quality": 22.8
+    },
+    "QuantNotes": {
+    "apex-i-quality": "APEX-I-QUALITY · ~22.8 GB · imatrix · 24 GB 4090 primary (ctx <=16k with vision)"
+    },
+    "VisionModule": "mmproj.gguf"
   }
   },
   "CommandAliases": {}
