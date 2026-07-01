@@ -189,9 +189,9 @@ function Select-LLMContextKey {
 
 function Select-LLMAction {
     $actions = @(
+        [pscustomobject]@{ Key = "localpilot"; Label = "LocalPilot"; Description = "Local agent via LocalPilot" },
         [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
         [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-        [pscustomobject]@{ Key = "localpilot"; Label = "LocalPilot"; Description = "Local agent via LocalPilot" },
         [pscustomobject]@{ Key = "serve"; Label = "Serve"; Description = "Serve this model to any agentic client" },
         [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
         [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
@@ -217,9 +217,9 @@ function Select-LLMAction {
 
 function Select-LLMDefaultTarget {
     $targets = @(
+        [pscustomobject]@{ Key = "localpilot"; Label = "LocalPilot"; Description = "Local agent via LocalPilot" },
         [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-        [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
-        [pscustomobject]@{ Key = "localpilot"; Label = "LocalPilot"; Description = "Local agent via LocalPilot" }
+        [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -1232,9 +1232,9 @@ function Select-LlamaCppLaunchSettingsMode {
 
 function Select-LlamaCppPostTuneLaunchAction {
     $items = @(
+        [pscustomobject]@{ Key = 'localpilot'; Label = 'LocalPilot';   Description = 'Local agent via LocalPilot' },
         [pscustomobject]@{ Key = 'claude'; Label = 'Claude Code'; Description = 'Local model behind Claude Code' },
-        [pscustomobject]@{ Key = 'codex'; Label = 'Codex'; Description = 'Local model behind OpenAI Codex' },
-        [pscustomobject]@{ Key = 'localpilot'; Label = 'LocalPilot';   Description = 'Local agent via LocalPilot' }
+        [pscustomobject]@{ Key = 'codex'; Label = 'Codex'; Description = 'Local model behind OpenAI Codex' }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -1653,9 +1653,9 @@ function Select-LLMContextKeySpectre {
 
 function Select-LLMActionSpectre {
     $labelMap = [ordered]@{
+        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "Serve       -  Serve this model to any agentic client" = 'serve'
         "Set llmdefault - Save this model/profile/target" = 'setdefault'
         "Find best settings - Auto-tune for this machine" = 'findbest'
@@ -1674,9 +1674,9 @@ function Select-LLMActionSpectre {
 
 function Select-LLMDefaultTargetSpectre {
     $labelMap = [ordered]@{
+        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "[[Back]]"                                      = '__back__'
     }
 
@@ -1720,9 +1720,9 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
 
 function Select-LlamaCppPostTuneLaunchActionSpectre {
     $choices = [ordered]@{
+        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "Claude Code  -  Local model behind Claude Code" = 'claude'
         "Codex       -  Local model behind OpenAI Codex"  = 'codex'
-        "LocalPilot    -  Local agent via LocalPilot" = 'localpilot'
         "[[Cancel]]"                                    = '__cancel__'
     }
 

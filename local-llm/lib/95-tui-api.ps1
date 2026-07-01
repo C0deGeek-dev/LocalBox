@@ -221,9 +221,9 @@ function Get-LocalBoxTuiLaunchOptions {
         quants = $summary.quants
         backendModes = $summary.backendModes
         actions = @(
+            [pscustomobject]@{ key = 'localpilot'; label = 'LocalPilot' }
             [pscustomobject]@{ key = 'claude'; label = 'Claude Code' }
             [pscustomobject]@{ key = 'codex'; label = 'Codex' }
-            [pscustomobject]@{ key = 'localpilot'; label = 'LocalPilot' }
             [pscustomobject]@{ key = 'serve'; label = 'Serve' }
             [pscustomobject]@{ key = 'chat'; label = 'Ollama chat' }
             [pscustomobject]@{ key = 'setup'; label = 'Setup/download only' }

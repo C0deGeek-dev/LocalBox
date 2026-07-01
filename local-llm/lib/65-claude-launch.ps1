@@ -93,6 +93,44 @@ function Get-LocalLLMServeHealthState {
     }
 }
 
+function Clear-StaleNoThinkProxy {
+    # Reap an orphaned no-think proxy whose upstream model server is dead. Such a
+    # proxy (typically left over from an earlier session that exited without
+    # tearing it down) still answers /health, so Test-NoThinkProxyTarget would
+    # either treat it as a live match (and hand the launch a 502 upstream) or as a
+    # live mismatch. Left in place it strands every request behind a bare 502.
+    # This kills it so the caller can start a fresh proxy pointed at the current
+    # server. No-op when the port is free, unverifiable, or the upstream is alive.
+    # Returns $true only when it actually reaped a stale proxy.
+    [CmdletBinding()]
+    param(
+        [int]$ListenPort = $script:NoThinkProxyPort,
+        [string]$AuthToken
+    )
+
+    $health = Get-NoThinkProxyHealth -Port $ListenPort -AuthToken $AuthToken
+    if (-not $health) { return $false }
+
+    $upstreamPort = if ($health.Contains('target_port')) { try { [int]$health.target_port } catch { 0 } } else { 0 }
+    if ($upstreamPort -le 0) { return $false }
+
+    # Test-LlamaCppPortFree returns $true when the port can be bound (nothing is
+    # listening); a free upstream port therefore means the model server is down.
+    if (-not (Test-LlamaCppPortFree -Port $upstreamPort)) { return $false }
+
+    $conn = Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue
+    if (-not $conn) { return $false }
+
+    $stalePid = @($conn)[0].OwningProcess
+    Write-LaunchLog "Reaping stale no-think proxy on $ListenPort (PID=$stalePid): upstream 127.0.0.1:$upstreamPort is down." 'PROXY'
+    Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue
+    if ($script:NoThinkProxyProcess -and $script:NoThinkProxyProcess.Id -eq $stalePid) {
+        $script:NoThinkProxyProcess = $null
+    }
+    Start-Sleep -Milliseconds 300
+    return $true
+}
+
 function Save-ClaudeEnvBackup {
     $script:ClaudeEnvBackup = @{}
 
@@ -344,6 +382,11 @@ function Start-NoThinkProxy {
     $authLabel = if ([string]::IsNullOrWhiteSpace($AuthToken)) { 'off' } else { 'on' }
     $logsRequested = (-not [string]::IsNullOrWhiteSpace($OutLogPath)) -or (-not [string]::IsNullOrWhiteSpace($ErrLogPath))
     Write-LaunchLog "No-think proxy: listen=$ListenHost`:$ListenPort target=$target auth=$authLabel" 'PROXY'
+
+    # (C) Reap an orphaned proxy whose upstream is dead before probing target
+    # match, so a session-leftover can't force a mismatch or a dead-upstream reuse.
+    Clear-StaleNoThinkProxy -ListenPort $ListenPort -AuthToken $AuthToken | Out-Null
+
     $targetMatches = Test-NoThinkProxyTarget -ListenPort $ListenPort -TargetHost $TargetHost -TargetPort $TargetPort -AuthToken $AuthToken
     if ($targetMatches -eq $true) {
         if ($logsRequested) {
@@ -361,7 +404,14 @@ function Start-NoThinkProxy {
         }
     }
     if ($targetMatches -eq $false) {
-        throw "No-think proxy port $ListenPort is already in use by a proxy for a different or unverifiable target. Stop that process or change NoThinkProxyPort."
+        # (A) A proxy is listening on $ListenPort but pointed at a DIFFERENT target
+        # (the model server moved to a new port, or a stale proxy lingered). Repoint
+        # it — tear down the mismatched proxy and fall through to start a fresh one
+        # aimed at the current target — instead of failing the launch and forcing a
+        # silent fallback onto an off-nominal direct route.
+        Write-LaunchLog "No-think proxy on $ListenPort points at a different target; repointing to $target." 'PROXY'
+        Stop-NoThinkProxy
+        $targetMatches = $null
     }
 
     # $targetMatches is $null: port is free OR something is listening but we cannot
