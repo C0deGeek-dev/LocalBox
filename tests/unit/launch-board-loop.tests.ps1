@@ -37,6 +37,17 @@ Describe 'Build-LaunchSelectionArgs' {
         $a.UseVision | Should -BeTrue
     }
 
+    It 'includes KV cache args when set' {
+        $plan = [pscustomobject]@{
+            ModelKey = 'm'; Target = 'localpilot'; Quant = ''; ContextKey = ''; Mode = 'turboquant'
+            AutoBestProfile = 'auto'; UseAutoBest = $false; Vision = $false; Strict = $false
+            KvCacheK = 'turbo3'; KvCacheV = 'turbo4'
+        }
+        $a = Build-LaunchSelectionArgs -Plan $plan
+        $a.KvCacheK | Should -Be 'turbo3'
+        $a.KvCacheV | Should -Be 'turbo4'
+    }
+
     It 'omits switch args and autobest profile when off' {
         $plan = [pscustomobject]@{
             ModelKey = 'm'; Target = 'claude'; Quant = ''; ContextKey = ''

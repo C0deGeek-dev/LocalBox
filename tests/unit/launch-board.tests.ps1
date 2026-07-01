@@ -49,6 +49,13 @@ Describe 'Resolve-LaunchPlan' {
         $plan.Vision | Should -BeTrue
     }
 
+    It 'resolves KV cache from overrides/defaults, empty by default' {
+        (Resolve-LaunchPlan -ModelKey 'ornith35hapex' -Def $script:OrnithDef).KvCacheK | Should -Be ''
+        $p = Resolve-LaunchPlan -ModelKey 'ornith35hapex' -Def $script:OrnithDef -Overrides @{ KvCacheK = 'turbo3'; KvCacheV = 'turbo4' }
+        $p.KvCacheK | Should -Be 'turbo3'
+        $p.KvCacheV | Should -Be 'turbo4'
+    }
+
     It 'falls back to hard defaults with no preferences' {
         $plan = Resolve-LaunchPlan -ModelKey 'ornith35hapex' -Def $script:OrnithDef
         $plan.Target | Should -Be 'localpilot'

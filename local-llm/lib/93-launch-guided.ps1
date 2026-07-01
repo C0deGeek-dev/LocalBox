@@ -68,13 +68,15 @@ function Format-GuidedPlanSummary {
     )
     $name = if ($Def.Contains('DisplayName')) { [string]$Def['DisplayName'] } else { $Plan.ModelKey }
     $speed = if ($Plan.UseAutoBest) { '{0} · auto-tuned' -f (Get-GuidedEngineLabel -Value $Plan.Mode) } else { Get-GuidedEngineLabel -Value $Plan.Mode }
+    $kv = if ($Plan.KvCacheK) { if ($Plan.KvCacheK -eq $Plan.KvCacheV) { $Plan.KvCacheK } else { '{0}/{1}' -f $Plan.KvCacheK, $Plan.KvCacheV } } else { 'auto' }
     @(
         ('Model:     {0}' -f $name)
         ('Run with:  {0}' -f (Get-GuidedTargetLabel -Value $Plan.Target))
-        ('Quality:   {0}' -f (Get-GuidedQualityLabel -Def $Def -Quant $Plan.Quant))
+        ('Quality:   {0} · {1}' -f (Get-GuidedQualityLabel -Def $Def -Quant $Plan.Quant), $Plan.Quant)
         ('Memory:    {0}' -f (Get-GuidedMemoryLabel -Def $Def -ContextKey $Plan.ContextKey))
         ('Speed:     {0}' -f $speed)
-        ('Images:    {0}' -f $(if ($Plan.Vision) { 'on' } else { 'off' }))
+        ('KV cache:  {0}' -f $kv)
+        ('Images:    {0}   ·   Strict: {1}' -f $(if ($Plan.Vision) { 'on' } else { 'off' }), $(if ($Plan.Strict) { 'on' } else { 'off' }))
     ) -join "`n"
 }
 
@@ -113,44 +115,66 @@ function Read-GuidedChoice {
 }
 
 function Invoke-GuidedCustomize {
-    # Guided per-field editing in plain words. Returns the accumulated overrides
-    # hashtable. The current value is shown on each "keep" option so the user always
-    # sees what they have now.
+    # Full settings editor: a menu of every setting with its current value; choosing
+    # one opens the detailed Spectre picker (quant with fit badges, KV cache, engine,
+    # context, …); "Save these as my default" persists the choices; "Done" returns.
+    # Returns the accumulated overrides. Reuses the existing Spectre pickers so nothing
+    # is hidden from a power user.
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
-        [Parameter(Mandatory = $true)][pscustomobject]$Plan
+        [System.Collections.IDictionary]$Defaults = @{}
     )
 
     $overrides = @{}
+    while ($true) {
+        $plan = Resolve-LaunchPlan -ModelKey $ModelKey -Def $Def -Defaults $Defaults -Overrides $overrides
+        $autoLabel = if ($plan.UseAutoBest) { '{0} (on)' -f $plan.AutoBestProfile } else { 'off (manual)' }
+        $kvLabel = if ($plan.KvCacheK) { if ($plan.KvCacheK -eq $plan.KvCacheV) { $plan.KvCacheK } else { '{0}/{1}' -f $plan.KvCacheK, $plan.KvCacheV } } else { 'auto' }
+        $ctxLabel = if ($plan.ContextKey) { $plan.ContextKey } else { 'default' }
 
-    $targetMap = [ordered]@{}
-    foreach ($t in @('localpilot', 'claude', 'codex', 'serve')) { $targetMap[(Get-GuidedTargetLabel -Value $t)] = $t }
-    $targetMap["← keep current ($(Get-GuidedTargetLabel -Value $Plan.Target))"] = '__keep__'
-    $t = Read-GuidedChoice -Message 'Run with which assistant?' -Map $targetMap
-    if ($t -and $t -ne '__keep__') { $overrides.Target = $t }
+        $menu = [ordered]@{}
+        $menu[('Run with:         {0}' -f (Get-GuidedTargetLabel -Value $plan.Target))] = 'target'
+        if ($Def.Contains('Quants')) { $menu[('Quality (quant):  {0}' -f $plan.Quant)] = 'quant' }
+        $menu[('Memory (context): {0}' -f $ctxLabel)] = 'context'
+        $menu[('Engine (mode):    {0}' -f $plan.Mode)] = 'mode'
+        $menu[('Auto-tune:        {0}' -f $autoLabel)] = 'autobest'
+        $menu[('KV cache:         {0}' -f $kvLabel)] = 'kv'
+        $menu[('Images (vision):  {0}' -f $(if ($plan.Vision) { 'on' } else { 'off' }))] = 'vision'
+        $menu[('Strict output:    {0}' -f $(if ($plan.Strict) { 'on' } else { 'off' }))] = 'strict'
+        $menu['— Save these as my default —'] = 'save'
+        $menu['✓  Done — back to launch'] = 'done'
 
-    if ($Def.Contains('Quants')) {
-        $qualityMap = [ordered]@{}
-        foreach ($q in @($Def['Quants'].Keys | Sort-Object)) { $qualityMap[(Get-GuidedQualityLabel -Def $Def -Quant $q)] = $q }
-        $qualityMap["← keep current ($(Get-GuidedQualityLabel -Def $Def -Quant $Plan.Quant))"] = '__keep__'
-        $q = Read-GuidedChoice -Message 'Quality vs size?' -Map $qualityMap
-        if ($q -and $q -ne '__keep__') { $overrides.Quant = $q }
+        $choice = Read-GuidedChoice -Message "Settings — $ModelKey" -Map $menu -PageSize 14
+        switch ($choice) {
+            'target' { $v = Select-LLMActionSpectre; if ($v -in @('localpilot', 'claude', 'codex', 'serve')) { $overrides.Target = $v } }
+            'quant' { $v = Select-LLMQuantKeySpectre -ModelKey $ModelKey; if ($v -and $v -ne '__keep__') { $overrides.Quant = $v } }
+            'context' { $v = Select-LLMContextKeySpectre -ModelKey $ModelKey; if ($null -ne $v) { $overrides.ContextKey = $v } }
+            'mode' { $v = Select-LLMModeSpectre; if ($v) { $overrides.Mode = $v } }
+            'autobest' {
+                $abMap = [ordered]@{ 'Off — I will set things manually' = 'off'; 'Auto' = 'auto'; 'Balanced (recommended)' = 'balanced'; 'Pure — max speed' = 'pure' }
+                $ab = Read-GuidedChoice -Message 'Auto-tune settings for your GPU?' -Map $abMap -PageSize 6
+                if ($ab -eq 'off') { $overrides.UseAutoBest = $false }
+                elseif ($ab) { $overrides.UseAutoBest = $true; $overrides.AutoBestProfile = $ab }
+            }
+            'kv' { $kv = Select-LLMKvCacheSpectre -Mode $plan.Mode; if ($kv) { $overrides.KvCacheK = $kv.K; $overrides.KvCacheV = $kv.V } }
+            'vision' { $overrides.Vision = (-not $plan.Vision) }
+            'strict' { $overrides.Strict = (-not $plan.Strict) }
+            'save' {
+                if ($plan.Target -in @('localpilot', 'claude', 'codex')) {
+                    Save-LLMDefaultLaunch -ModelKey $ModelKey -ContextKey $plan.ContextKey -Action $plan.Target `
+                        -LlamaCppMode $plan.Mode -KvCacheK $plan.KvCacheK -KvCacheV $plan.KvCacheV `
+                        -Strict:$plan.Strict -UseAutoBest:$plan.UseAutoBest -AutoBestProfile $plan.AutoBestProfile
+                }
+                else {
+                    Write-Host "'$(Get-GuidedTargetLabel -Value $plan.Target)' can't be saved as a default launch target." -ForegroundColor Yellow
+                }
+            }
+            'done' { return $overrides }
+            default { return $overrides }
+        }
     }
-
-    if ($Def.Contains('Contexts')) {
-        $memMap = [ordered]@{}
-        foreach ($c in @($Def['Contexts'].Keys)) { $memMap[(Get-GuidedMemoryLabel -Def $Def -ContextKey $c)] = $c }
-        $memMap["← keep current ($(Get-GuidedMemoryLabel -Def $Def -ContextKey $Plan.ContextKey))"] = '__keep__'
-        $c = Read-GuidedChoice -Message 'How much memory (context)?' -Map $memMap
-        if ($c -and $c -ne '__keep__') { $overrides.ContextKey = $c }
-    }
-
-    $imgMap = [ordered]@{ 'Off' = 'off'; 'On — understand images' = 'on'; '← keep current' = '__keep__' }
-    $img = Read-GuidedChoice -Message 'Look at images?' -Map $imgMap
-    if ($img -eq 'on') { $overrides.Vision = $true } elseif ($img -eq 'off') { $overrides.Vision = $false }
-
-    return $overrides
 }
 
 function Start-LaunchGuided {
@@ -203,7 +227,7 @@ function Start-LaunchGuided {
                     $launched = $true
                 }
                 'customize' {
-                    $delta = Invoke-GuidedCustomize -Def $def -Plan $plan
+                    $delta = Invoke-GuidedCustomize -ModelKey $modelKey -Def $def -Defaults $defaults
                     foreach ($k in $delta.Keys) { $overrides[$k] = $delta[$k] }
                 }
                 'help' {

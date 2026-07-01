@@ -36,6 +36,8 @@ function Build-LaunchSelectionArgs {
         LlamaCppMode = $Plan.Mode
     }
     if (-not [string]::IsNullOrWhiteSpace($Plan.Quant)) { $selectionArgs.Quant = $Plan.Quant }
+    if (-not [string]::IsNullOrWhiteSpace($Plan.KvCacheK)) { $selectionArgs.KvCacheK = $Plan.KvCacheK }
+    if (-not [string]::IsNullOrWhiteSpace($Plan.KvCacheV)) { $selectionArgs.KvCacheV = $Plan.KvCacheV }
     if ($Plan.Strict) { $selectionArgs.Strict = $true }
     if ($Plan.Vision) { $selectionArgs.UseVision = $true }
     if ($Plan.UseAutoBest) {

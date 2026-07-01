@@ -49,6 +49,8 @@ function Resolve-LaunchPlan {
 
     $vision = if ($Overrides.Contains('Vision')) { [bool]$Overrides['Vision'] } else { $false }
     $strict = if ($Overrides.Contains('Strict')) { [bool]$Overrides['Strict'] } else { $defStrict }
+    $kvK = [string](Select-BoardValue -Candidates @($Overrides['KvCacheK'], $Defaults['KvCacheK'], ''))
+    $kvV = [string](Select-BoardValue -Candidates @($Overrides['KvCacheV'], $Defaults['KvCacheV'], ''))
 
     [pscustomobject]@{
         ModelKey        = $ModelKey
@@ -60,6 +62,8 @@ function Resolve-LaunchPlan {
         UseAutoBest     = $useAutoBest
         Vision          = $vision
         Strict          = $strict
+        KvCacheK        = $kvK
+        KvCacheV        = $kvV
     }
 }
 
