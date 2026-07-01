@@ -1516,15 +1516,19 @@ function Resolve-LocalPilotVisionModule {
 
 function New-LocalPilotBaseConfigToml {
     # Build the [provider] + [providers.local] head of the generated .localpilot.toml.
-    # When -SupportsVision is set (LocalBox loaded the projector for this launch), it
-    # auto-declares supports_vision = true so LocalPilot honours image input without a
-    # hand edit. The default (no vision) path writes nothing extra. The result has no
-    # trailing newline, matching the caller's incremental ` `n`-prefixed appends.
+    # -Model pins the provider's default model: the LocalPilot REPL is the default
+    # (no-arg) command and resolves its model from config (there is no `chat --model`
+    # flag any more), so without this the REPL finds no model and falls back to a
+    # doctor dump instead of starting. When -SupportsVision is set (LocalBox loaded
+    # the projector for this launch), it auto-declares supports_vision = true so
+    # LocalPilot honours image input without a hand edit. The result has no trailing
+    # newline, matching the caller's incremental ` `n`-prefixed appends.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$ProviderKind,
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][string]$ApiKeyEnv,
+        [string]$Model,
         [switch]$SupportsVision
     )
 
@@ -1538,6 +1542,9 @@ base_url = "$BaseUrl"
 api_key_env = "$ApiKeyEnv"
 "@
 
+    if (-not [string]::IsNullOrWhiteSpace($Model)) {
+        $toml += "`nmodel = `"$Model`""
+    }
     if ($SupportsVision) {
         $toml += "`nsupports_vision = true"
     }
@@ -1704,7 +1711,7 @@ function Start-LocalPilot {
             BaseUrl       = $effectiveBaseUrl
             Bypass        = Get-AgentBypassStatusText -SettingName 'LocalPilotBypass' -EnvVar 'LOCAL_LLM_LOCALPILOT_BYPASS'
             LaunchExe     = 'localpilot'
-            LaunchArgs    = @('chat', '--model', $def.Root) + $bypassArgs + $extras
+            LaunchArgs    = @($extras)
             Notes         = $notes
         }
         Show-LocalLLMLaunchPlan -Plan $plan
@@ -1777,7 +1784,7 @@ function Start-LocalPilot {
     # When the projector loaded for this launch, LocalBox is the authoritative
     # declarer that the provider accepts image input, so auto-declare it.
     $declareVision = ($UseVision -and -not [string]::IsNullOrWhiteSpace($visionModulePath))
-    $tomlContent = New-LocalPilotBaseConfigToml -ProviderKind $providerKind -BaseUrl "$effectiveBaseUrl/v1" -ApiKeyEnv $apiKeyEnv -SupportsVision:$declareVision
+    $tomlContent = New-LocalPilotBaseConfigToml -ProviderKind $providerKind -BaseUrl "$effectiveBaseUrl/v1" -ApiKeyEnv $apiKeyEnv -Model $def.Root -SupportsVision:$declareVision
 
     Write-Host ""
     Write-Host "Launching localpilot with $($def.Root) via llama.cpp ($LlamaCppMode)..." -ForegroundColor Cyan
@@ -1837,19 +1844,32 @@ function Start-LocalPilot {
             $tomlContent += "`n[harness]`ncontext_token_limit = $contextTokens`n"
         }
 
+        # Bypass hands the local model full tool/command authority with no
+        # per-action gate; default off, opt-in via a persisted first-run decision.
+        # The LocalPilot REPL takes no `--bypass` flag (clap rejects it and aborts
+        # the launch), so the decision is written into the config's [permissions]
+        # profile instead of the command line.
+        $localpilotBypass = (@(Get-LocalPilotBypassArgs).Count -gt 0)
+        if ($localpilotBypass) {
+            $tomlContent += "`n[permissions]`nprofile = `"bypass`"`n"
+        }
+
         # Write .localpilot.toml to cwd.
         $tomlPath = Join-Path (Get-Location) '.localpilot.toml'
         Set-Content -Path $tomlPath -Value $tomlContent -Encoding UTF8
         Write-Host "  Config   : $tomlPath" -ForegroundColor DarkGray
 
-        # Launch localpilot chat.
+        # Launch the LocalPilot REPL. The interactive REPL is the DEFAULT (no-arg)
+        # command in current LocalPilot — the old `chat` subcommand is gone, and the
+        # REPL resolves its model and permission profile from the .localpilot.toml
+        # written above (with ANTHROPIC_MODEL as a fallback on the anthropic route),
+        # not from argv. Passing `chat --model <m>` or `--bypass` makes clap error out
+        # and the launch fall straight back to the model-selection menu.
         if (-not (Get-Command localpilot -ErrorAction SilentlyContinue)) {
             throw "localpilot is not on PATH. Install with: cargo install localpilot"
         }
 
-        # Bypass hands the local model full tool/command authority with no
-        # per-action gate; default off, opt-in via a persisted first-run decision.
-        $launchArgs = @('chat', '--model', $def.Root) + @(Get-LocalPilotBypassArgs) + $extras
+        $launchArgs = @($extras)
         & localpilot @launchArgs
     }
     finally {

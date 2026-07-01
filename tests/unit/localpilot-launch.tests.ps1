@@ -172,3 +172,29 @@ Describe 'LocalPilot install hint' {
         $content | Should -Not -Match 'cargo install localpilot-cli'
     }
 }
+
+Describe 'New-LocalPilotBaseConfigToml' {
+    It 'pins the model so the default REPL can resolve it from config' {
+        # The REPL is the default (no-arg) command and reads its model from config;
+        # without a model line it falls back to a doctor dump instead of starting.
+        $toml = New-LocalPilotBaseConfigToml -ProviderKind 'anthropic' `
+            -BaseUrl 'http://127.0.0.1:11435/v1' -ApiKeyEnv 'ANTHROPIC_AUTH_TOKEN' `
+            -Model 'ornith35hapex'
+        $toml | Should -Match '(?m)^model = "ornith35hapex"$'
+    }
+
+    It 'omits the model line when no model is given' {
+        $toml = New-LocalPilotBaseConfigToml -ProviderKind 'anthropic' `
+            -BaseUrl 'http://127.0.0.1:11435/v1' -ApiKeyEnv 'ANTHROPIC_AUTH_TOKEN'
+        $toml | Should -Not -Match '(?m)^model = '
+    }
+}
+
+Describe 'Start-LocalPilot invocation (no dead chat subcommand)' {
+    It 'never invokes the removed `localpilot chat --model` form' {
+        # Current LocalPilot has no `chat` subcommand; the REPL is the default
+        # command and takes model/permissions from config, not argv.
+        $content = Get-Content -Raw $script:LaunchScriptPath
+        $content | Should -Not -Match "'chat', '--model'"
+    }
+}
