@@ -1,0 +1,39 @@
+# LocalBox — native Rust workspace.
+#
+# The launcher is being rebuilt as Rust crates alongside the shipping
+# PowerShell module (which stays authoritative until each piece is retired):
+#   - localbox-launcher   the launcher-contract implementation: model catalog
+#                         resolution, hardware/binary resolution, and server
+#                         lifecycle over the shared localx-llama crate tier
+#
+# Shared primitives come from the public localx-llama crate tier via a
+# rev-pinned git dependency. MSRV 1.82 / edition 2021, exact-pinned deps.
+
+[workspace]
+resolver = "2"
+members = ["crates/localbox-launcher"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["David <David@c0degeek.dev>", "Bram (C0deGeek.dev)"]
+repository = "https://github.com/C0deGeek-dev/LocalBox"
+rust-version = "1.82"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+dbg_macro = "deny"
+
+[workspace.dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+thiserror = "=2.0.9"
+sysinfo = "=0.32.1"
+tempfile = "=3.14.0"
+localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "c0777866d06eb2a65651f2b6c5b916b3362e850c" }
+localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "c0777866d06eb2a65651f2b6c5b916b3362e850c" }

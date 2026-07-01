@@ -67,3 +67,6 @@ $RECYCLE.BIN/
 .localmind/
 .localpilot/
 .localmind.toml
+
+# Rust build output
+/target/

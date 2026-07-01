@@ -1,0 +1,23 @@
+[package]
+name = "localbox-launcher"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "LocalBox's launcher-contract implementation: catalog-backed model resolution, llama.cpp binary resolution, and server lifecycle over the shared localx-llama crate tier."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sysinfo = { workspace = true }
+localx-llama-core = { workspace = true }
+localx-llama-runtime = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

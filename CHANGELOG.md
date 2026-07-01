@@ -4,6 +4,20 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Native Rust workspace seeded (`crates/localbox-launcher`).** The launcher
+  contract now has its Rust implementation alongside the shipping PowerShell
+  module (which stays authoritative until each piece is retired): the
+  three-layer config load (`defaults.json` < `llm-models.json` < per-machine
+  `settings.json`) over the shared precedence engine with catalog-only keys
+  locked, and `LlamaLauncher` implementing the shared `Launcher` trait —
+  catalog-backed model/quant/context resolution delegating to the shared
+  domain crate, on-disk GGUF and mmproj resolution (configured module wins,
+  deterministic auto-detect otherwise; a missing GGUF fails with the install
+  remedy), per-mode install roots and llama-server binary resolution, KV-type
+  capability per fork, free-port/wait/stop lifecycle with a recorded backend
+  session, and `~`/`%VAR%` path expansion. The version envelope passes the
+  shared compatibility gate (api 1 / export 1, LocalBox/llamacpp declared).
+
 - **The model catalog is now per-user, not shipped.** `llm-models.json` is your
   own list (gitignored); the repo ships `llm-models.example.json` as the template.
   `install.ps1` seeds `~/.local-llm/llm-models.json` from it on first run and never
