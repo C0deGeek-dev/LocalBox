@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Permission/bypass gating in Rust (`localbox-launcher::permissions`).** The
+  three agent gates (Claude skip-permissions, LocalPilot bypass, Codex bypass)
+  resolve fail-closed: env override → persisted per-machine setting → a
+  one-time first-run prompt that defaults OFF. A non-interactive session never
+  silently enables anything and never persists; a preview/DryRun resolve is
+  read-only; an explicit "no" persists a literal false (decided-no, not
+  never-asked); Codex bypass is never defaulted; LocalPilot bypass is written
+  to `.localpilot.toml` as `[permissions] profile = "bypass"`, never argv. The
+  tests build from a REAL empty settings file and assert the observable gate
+  decision, and the settings store refuses catalog-only keys.
+
 - **Agent env envelope in Rust (`localbox-launcher::env`).** One plan function
   computes the launch's environment variables — it is both the DryRun snapshot
   and the live setter's source, so the two can never drift (the PowerShell

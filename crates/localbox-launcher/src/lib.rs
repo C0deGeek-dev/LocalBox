@@ -23,4 +23,5 @@
 pub mod catalog;
 pub mod env;
 pub mod launcher;
+pub mod permissions;
 pub mod proxy;
