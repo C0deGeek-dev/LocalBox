@@ -23,5 +23,6 @@
 pub mod catalog;
 pub mod env;
 pub mod launcher;
+pub mod localpilot_config;
 pub mod permissions;
 pub mod proxy;

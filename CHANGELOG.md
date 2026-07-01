@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`.localpilot.toml` provider wiring in Rust
+  (`localbox-launcher::localpilot_config`).** The generated provider block
+  pins the coupling rules by test: provider kind and endpoint move together
+  (anthropic behind the no-think proxy, openai-compatible direct; base_url
+  always ends in `/v1`), `api_key_env` follows the kind, the model's context
+  is declared as `providers.local.context_window` — never a `[harness]`
+  `context_token_limit` key — `supports_vision` is auto-declared only when the
+  launch actually loaded a projector, `max_tokens`/`context_window` are
+  omitted at zero, and bypass is a `[permissions] profile = "bypass"` config
+  block, never argv.
+
 - **Permission/bypass gating in Rust (`localbox-launcher::permissions`).** The
   three agent gates (Claude skip-permissions, LocalPilot bypass, Codex bypass)
   resolve fail-closed: env override → persisted per-machine setting → a
