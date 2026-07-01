@@ -72,6 +72,26 @@ Describe 'Get-LaunchBoardModels' {
     }
 }
 
+Describe 'Resolve-BoardModelList' {
+    It 'falls back to all tiers when no models are recommended' {
+        Mock Get-FilteredModelKeys { if ($IncludeAll) { @('a', 'b') } else { @() } }
+        Mock Get-ModelDef { @{ Tier = 'experimental'; DisplayName = $Key } }
+
+        $r = Resolve-BoardModelList
+        $r.ShowAll | Should -BeTrue
+        @($r.Models).Count | Should -Be 2
+    }
+
+    It 'uses recommended models when present, without the all-tier fallback' {
+        Mock Get-FilteredModelKeys { if ($IncludeAll) { @('a', 'b', 'c') } else { @('a') } }
+        Mock Get-ModelDef { @{ Tier = 'quality'; DisplayName = $Key } }
+
+        $r = Resolve-BoardModelList
+        $r.ShowAll | Should -BeFalse
+        @($r.Models).Count | Should -Be 1
+    }
+}
+
 Describe 'Launch board loop layer' {
     It 'never clears the screen or enters the alternate buffer' {
         $content = Get-Content -Raw $script:LoopLib

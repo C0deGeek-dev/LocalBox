@@ -68,6 +68,21 @@ function Get-LaunchBoardModels {
     return $models
 }
 
+function Resolve-BoardModelList {
+    # The board's initial model list: recommended models, or all tiers when
+    # recommended is empty (mirrors Select-LLMModelKey's fallback so a repo whose
+    # models are all experimental still shows a list instead of "No models"). Returns
+    # the list plus whether the all-tier fallback was taken.
+    [CmdletBinding()]
+    param()
+
+    $models = @(Get-LaunchBoardModels)
+    if ($models.Count -eq 0) {
+        return [pscustomobject]@{ Models = @(Get-LaunchBoardModels -All); ShowAll = $true }
+    }
+    return [pscustomobject]@{ Models = $models; ShowAll = $false }
+}
+
 function Write-LaunchBoardFrame {
     # Repaint the board in place: home the cursor to the captured origin row and
     # overwrite each line padded to the window width (clearing the previous frame),
@@ -145,8 +160,9 @@ function Invoke-LaunchBoard {
     [CmdletBinding()]
     param([System.Collections.IDictionary]$Defaults = @{})
 
-    $showAll = $false
-    $models = @(Get-LaunchBoardModels -All:$showAll)
+    $resolved = Resolve-BoardModelList
+    $models = @($resolved.Models)
+    $showAll = [bool]$resolved.ShowAll
     if ($models.Count -eq 0) {
         Write-Host "No models configured. Use 'addllm <hf-url> -Key <key>' to add one." -ForegroundColor Yellow
         return $null
