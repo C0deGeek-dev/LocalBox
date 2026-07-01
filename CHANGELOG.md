@@ -4,6 +4,15 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Launch smoke test in Rust (`localbox-launcher::smoke`).** The
+  degenerate-output detectors with thinking stripped FIRST (a reasoning model
+  may legitimately fill its budget with `<think>` before a short answer): the
+  `[no output]` marker, 8+ runs of flood punctuation (the GPU/driver-mismatch
+  `//////` signature), and 10+ consecutive identical tokens; verdicts name
+  their failure mode (no response / think-only / degenerate), the Anthropic
+  reply body parses fail-closed, and failure rendering is collapsed and
+  bounded for the operator.
+
 - **`.localpilot.toml` provider wiring in Rust
   (`localbox-launcher::localpilot_config`).** The generated provider block
   pins the coupling rules by test: provider kind and endpoint move together

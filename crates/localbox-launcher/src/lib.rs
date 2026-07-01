@@ -26,3 +26,4 @@ pub mod launcher;
 pub mod localpilot_config;
 pub mod permissions;
 pub mod proxy;
+pub mod smoke;
