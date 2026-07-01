@@ -504,6 +504,26 @@ function Stop-NoThinkProxy {
     $script:NoThinkProxyProcess = $null
 }
 
+function Stop-NoThinkProxyOnPort {
+    # Kill whatever process listens on the no-think proxy port, regardless of which
+    # shell started it. Unlike Stop-NoThinkProxy (which only kills this shell's owned
+    # handle), this reaps an orphan left by a dead or different session — the case
+    # llm-stop must cover so a proxy never outlives a full teardown. Returns $true
+    # only when it killed something.
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][int]$ListenPort)
+
+    $conn = Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue
+    if (-not $conn) { return $false }
+
+    foreach ($ownerPid in (@($conn) | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)) {
+        Write-LaunchLog "llm-stop: killing no-think proxy on port $ListenPort (PID=$ownerPid)." 'PROXY'
+        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+    }
+    $script:NoThinkProxyProcess = $null
+    return $true
+}
+
 function New-LocalLLMServeGatewayLogPaths {
     $dir = Join-Path $HOME ".local-llm\logs"
     if (-not (Test-Path -LiteralPath $dir)) {

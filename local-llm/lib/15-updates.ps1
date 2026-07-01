@@ -326,6 +326,41 @@ function Invoke-LocalPilotInstallFromRoot {
     }
 }
 
+function Test-LocalPilotBinaryStale {
+    # True when the installed `localpilot` binary was built from a different commit
+    # than the repo's current HEAD — so `llm-update` should rebuild it even when the
+    # repo git-state is already current (a fast-forward-only check leaves a binary
+    # installed from an older commit stuck at its old version). Best-effort: any probe
+    # failure returns $false so it never forces a spurious rebuild.
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    if (-not (Get-Command localpilot -ErrorAction SilentlyContinue)) { return $false }
+
+    $headSha = ''
+    try { $headSha = [string](& git -C $Root rev-parse --short HEAD 2>$null | Select-Object -First 1) }
+    catch { return $false }
+    if ([string]::IsNullOrWhiteSpace($headSha)) { return $false }
+
+    $binVersion = ''
+    try {
+        $doc = & localpilot doctor --json 2>$null | ConvertFrom-Json
+        $binVersion = [string]$doc.version
+    }
+    catch { return $false }
+    if ([string]::IsNullOrWhiteSpace($binVersion)) { return $false }
+
+    # `doctor` version looks like "v1.2.0-7-g363798f"; the trailing g<sha> is the
+    # build commit. Compare it to repo HEAD (short shas, either-length prefix match).
+    if ($binVersion -match 'g([0-9a-f]{7,})') {
+        $binSha = $Matches[1]
+        return -not ($binSha.StartsWith($headSha) -or $headSha.StartsWith($binSha))
+    }
+    # A clean tagged-release build carries no g<sha>; without a commit to compare we
+    # don't guess — an explicit -RefreshInstalled still forces a rebuild.
+    return $false
+}
+
 function Invoke-LocalBoxInstallFromRoot {
     [CmdletBinding()]
     param(
@@ -433,7 +468,15 @@ function Update-LocalLLMSuite {
             $results += $result
 
             if ($companion.Name -eq 'LocalPilot' -and $result.Installed) {
-                if ($result.Updated -or $RefreshInstalled -or ($DryRun -and $result.Status -eq 'available')) {
+                $rebuildLocalPilot = $result.Updated -or $RefreshInstalled -or ($DryRun -and $result.Status -eq 'available')
+                # Auto-heal a stale binary: even when the repo is already current, the
+                # cargo-installed localpilot.exe can lag the repo (installed from an older
+                # commit). Rebuild when the binary's build commit differs from repo HEAD.
+                if (-not $rebuildLocalPilot -and -not $DryRun -and (Test-LocalPilotBinaryStale -Root $result.Root)) {
+                    Write-Host 'LocalPilot: installed binary is older than the repo HEAD; rebuilding.' -ForegroundColor Yellow
+                    $rebuildLocalPilot = $true
+                }
+                if ($rebuildLocalPilot) {
                     Invoke-LocalPilotInstallFromRoot -Root $result.Root -DryRun:$DryRun
                 }
             }

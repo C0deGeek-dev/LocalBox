@@ -91,10 +91,14 @@ function Update-LlamaCppBinaries {
             $installed = ((Get-LlamaCppInstalledBuildStamp -Mode $m) -split "\r?\n" | Select-Object -First 1)
             $latest = ''
             try {
-                $latest = if ($m -eq 'turboquant') { [string](Get-LlamaCppTurboquantLatestRelease).tag_name } else { [string](Get-LlamaCppLatestRelease).tag_name }
+                # Compare against the release the installer actually targets. For native
+                # that is the RESOLVED tag (LlamaCppPinnedTag when set), not the moving
+                # `latest` — otherwise a pinned build reads as perpetually stale (pinned
+                # b9596 != latest b9856) and re-downloads the pin it already has on every run.
+                $latest = if ($m -eq 'turboquant') { [string](Get-LlamaCppTurboquantLatestRelease).tag_name } else { [string](Resolve-LlamaCppRelease).tag_name }
             }
             catch {
-                if (-not $PreFlight) { Write-Warning "${m}: could not query latest release ($($_.Exception.Message))." }
+                if (-not $PreFlight) { Write-Warning "${m}: could not query target release ($($_.Exception.Message))." }
                 continue
             }
             if ([string]::IsNullOrWhiteSpace($latest)) { continue }

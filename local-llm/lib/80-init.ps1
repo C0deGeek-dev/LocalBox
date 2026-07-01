@@ -63,6 +63,14 @@ function Unload-LocalLLM {
         Stop-LocalLLMServeGateway
     }
     Stop-AllLlamaServers
+
+    # Also reap the launch-path no-think proxy. Stop-NoThinkProxy clears this shell's
+    # owned handle; the by-port kill catches an orphan left by a prior/other session
+    # (which otherwise survives — llm-stop is where a full teardown is expected).
+    if (Get-Command Stop-NoThinkProxy -ErrorAction SilentlyContinue) { Stop-NoThinkProxy }
+    if ((Get-Command Stop-NoThinkProxyOnPort -ErrorAction SilentlyContinue) -and $script:NoThinkProxyPort) {
+        Stop-NoThinkProxyOnPort -ListenPort ([int]$script:NoThinkProxyPort) | Out-Null
+    }
 }
 
 function purge { Remove-AllLocalLLM -DeleteFiles }

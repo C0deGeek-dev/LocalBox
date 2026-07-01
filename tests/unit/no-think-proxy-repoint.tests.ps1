@@ -41,6 +41,24 @@ Describe 'Clear-StaleNoThinkProxy (fix C: reap dead-upstream orphan)' {
     }
 }
 
+Describe 'Stop-NoThinkProxyOnPort (llm-stop reaps orphan by port)' {
+    It 'kills whatever listens on the proxy port' {
+        Mock Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 21348 } }
+        Mock Stop-Process { }
+
+        Stop-NoThinkProxyOnPort -ListenPort 11435 | Should -BeTrue
+        Should -Invoke Stop-Process -Times 1 -Exactly -ParameterFilter { $Id -eq 21348 }
+    }
+
+    It 'is a no-op when nothing listens on the port' {
+        Mock Get-NetTCPConnection { $null }
+        Mock Stop-Process { }
+
+        Stop-NoThinkProxyOnPort -ListenPort 11435 | Should -BeFalse
+        Should -Invoke Stop-Process -Times 0 -Exactly
+    }
+}
+
 Describe 'Start-NoThinkProxy (fix A: repoint on target mismatch)' {
     It 'does not throw on a live but mismatched target and starts a fresh proxy' {
         # Pre-check reports a proxy pointed at a DIFFERENT target ($false), then the
