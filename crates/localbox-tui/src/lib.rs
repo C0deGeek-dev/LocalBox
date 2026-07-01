@@ -15,6 +15,7 @@
 //!   traffic-light colors.
 
 pub mod customize;
+pub mod driver;
 pub mod plan;
 pub mod ui;
 pub mod vocab;

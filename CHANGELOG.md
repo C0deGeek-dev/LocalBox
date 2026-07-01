@@ -4,6 +4,15 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Driver policy + resilience (`localbox-tui::driver`).** Scrollback safety
+  by construction: the terminal options pin an inline fixed-height viewport
+  (no alternate screen, no whole-screen clear — content above the live band
+  stays in native scrollback). Failures render as one bounded plain-language
+  warning line (first line only, no backtrace vocabulary); a non-TTY stdout or
+  an explicit plain request degrades to numbered-line menus with zero escape
+  sequences; and UTF-8 console output is ensured best-effort on Windows so
+  box-drawing renders without profile edits.
+
 - **The Customize path (`localbox-tui::customize`).** Progressive disclosure
   over the resolved plan: every row shows its current value and choosing one
   merges the delta back into the overrides. Auto-tune owns Engine + KV — with
