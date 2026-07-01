@@ -10,5 +10,10 @@
 
 #![forbid(unsafe_code)]
 
+//! - [`ui`] — the backend-agnostic widgets (model picker, plan summary,
+//!   confirm menu) with `TestBackend` snapshot tests and the fit-aware
+//!   traffic-light colors.
+
 pub mod plan;
+pub mod ui;
 pub mod vocab;

@@ -4,6 +4,16 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Guided-launcher widgets (`localbox-tui::ui`).** The model picker
+  (`key · DisplayName`, dim `[strict]`, `[Show all tiers]`/`[Cancel]`
+  footers), the recommended-plan summary panel, and the exact five-item
+  confirm menu (Launch now / Customize / Auto-tune / What do these mean? /
+  Back to models) — backend-agnostic ratatui widgets whose rendered screens
+  are pinned by `TestBackend` snapshot tests, including the no-jargon
+  contract on the summary. Quant rows get the fit-aware traffic light
+  (green fits / yellow tight / red over; unknown stays uncolored) from the
+  shared fit classifier.
+
 - **Guided-launcher core in Rust (`localbox-tui`: vocabulary + plan).** The
   plain-language vocabulary (Run with / Quality / Memory / Speed / Images
   friendly names, memory-as-words at tokens×0.75, quality-as-hint+GB, the

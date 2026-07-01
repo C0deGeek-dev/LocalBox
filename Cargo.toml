@@ -41,5 +41,7 @@ thiserror = "=2.0.9"
 sysinfo = "=0.32.1"
 tempfile = "=3.14.0"
 toml = "=0.8.23"
+ratatui = { version = "=0.29.0", default-features = false }
+crossterm = "=0.28.1"
 localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "29fb9a6bd3af86ba06a610ab5d015e60d88ab8c0" }
 localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "29fb9a6bd3af86ba06a610ab5d015e60d88ab8c0" }
