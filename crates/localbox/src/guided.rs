@@ -146,21 +146,59 @@ pub fn request_from_guided(
     (request, agent)
 }
 
-/// The downloaded default-quant GGUF's on-disk size, for model rows whose
-/// catalog entry names no `SizeGB`. `None` when nothing is downloaded.
-fn disk_size_gb(gguf_root: Option<&Path>, key: &str, def: &ModelDef) -> Option<f64> {
+/// The downloaded GGUF's on-disk size for a specific quant (`None` = the
+/// model's default quant), for rows whose catalog entry names no `SizeGB`.
+/// `None` when nothing is downloaded.
+fn quant_disk_size_gb(
+    gguf_root: Option<&Path>,
+    key: &str,
+    def: &ModelDef,
+    quant: Option<&str>,
+) -> Option<f64> {
     let root = gguf_root?;
-    let file = def
-        .quant
-        .as_deref()
-        .and_then(|q| def.quants.get(q))
-        .map(|entry| entry.file.clone())
-        .or_else(|| def.file.clone())
-        .filter(|f| !f.trim().is_empty())?;
+    // A named quant resolves ONLY its own file; the single-file fallback
+    // belongs to the default-quant path.
+    let file = match quant {
+        Some(q) => def.quants.get(q).map(|entry| entry.file.clone()),
+        None => def
+            .quant
+            .as_deref()
+            .and_then(|q| def.quants.get(q))
+            .map(|entry| entry.file.clone())
+            .or_else(|| def.file.clone()),
+    }
+    .filter(|f| !f.trim().is_empty())?;
     let folder = def.root.as_deref().unwrap_or(key);
     let bytes = std::fs::metadata(root.join(folder).join(file)).ok()?.len();
     #[allow(clippy::cast_precision_loss)]
     Some(bytes as f64 / 1e9)
+}
+
+/// A quant's size in GB: the catalog's `SizeGB`, else the downloaded file.
+fn quant_size_gb(gguf_root: Option<&Path>, key: &str, def: &ModelDef, quant: &str) -> Option<f64> {
+    def.quants
+        .get(quant)
+        .and_then(|entry| entry.size_gb)
+        .or_else(|| quant_disk_size_gb(gguf_root, key, def, Some(quant)))
+}
+
+/// One quality option row: `hint · quant-key · GB` with the size colored by
+/// its fit — enough to tell two "best quality" builds apart.
+fn quant_menu_row(
+    gguf_root: Option<&Path>,
+    key: &str,
+    def: &ModelDef,
+    quant: &str,
+    vram: i64,
+) -> MenuRow {
+    let base = format!("{} · {quant}", localbox_tui::vocab::quality_hint(quant));
+    match quant_size_gb(gguf_root, key, def, quant) {
+        Some(gb) => MenuRow::plain(base).with_fit(
+            format!(" · {gb:.1} GB"),
+            localx_llama_core::vram::quant_fit_class(Some(gb), vram),
+        ),
+        None => MenuRow::plain(base),
+    }
 }
 
 /// The saved recipe from settings, when any.
@@ -434,7 +472,7 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
                         if row.size_gb.is_none() {
                             // The catalog names no size: the downloaded
                             // file's real size is still honest data.
-                            row.size_gb = disk_size_gb(gguf_root.as_deref(), key, def);
+                            row.size_gb = quant_disk_size_gb(gguf_root.as_deref(), key, def, None);
                             row.fit = localx_llama_core::vram::quant_fit_class(row.size_gb, vram);
                         }
                         row.menu_row()
@@ -484,6 +522,9 @@ fn confirm_flow(
 ) {
     let defaults = load_default_launch(catalog);
     let mut overrides = PlanOverrides::default();
+    let gguf_root = catalog.gguf_root().map(|root| {
+        localbox_launcher::launcher::expand_path_with_home(&root.to_string_lossy(), home)
+    });
 
     loop {
         let plan = resolve_launch_plan(key, def, &defaults, &overrides);
@@ -504,13 +545,22 @@ fn confirm_flow(
                 return;
             }
             ConfirmAction::Customize => {
-                customize_flow(chooser, home, key, def, &defaults, &mut overrides, vram);
+                customize_flow(
+                    chooser,
+                    home,
+                    key,
+                    def,
+                    &defaults,
+                    &mut overrides,
+                    vram,
+                    gguf_root.as_deref(),
+                );
                 if chooser.quit_requested() {
                     return;
                 }
             }
             ConfirmAction::AutoTune => {
-                auto_tune_flow(chooser, key, def, &plan);
+                auto_tune_flow(chooser, key, def, &plan, vram, gguf_root.as_deref());
             }
             ConfirmAction::Help => chooser.notice(glossary()),
             ConfirmAction::BackToModels => return,
@@ -518,6 +568,7 @@ fn confirm_flow(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn customize_flow(
     chooser: &mut dyn Chooser,
     home: &Path,
@@ -526,6 +577,7 @@ fn customize_flow(
     defaults: &DefaultLaunch,
     overrides: &mut PlanOverrides,
     vram: i64,
+    gguf_root: Option<&Path>,
 ) {
     // The cursor survives the loop: a toggle re-renders with the selection
     // still on the row that was toggled, not jumped back to the top.
@@ -570,16 +622,7 @@ fn customize_flow(
                 }
                 let labels: Vec<MenuRow> = quants
                     .iter()
-                    .map(|q| {
-                        let hint = MenuRow::plain(localbox_tui::vocab::quality_hint(q));
-                        match def.quants.get(q).and_then(|entry| entry.size_gb) {
-                            Some(gb) => hint.with_fit(
-                                format!(" · {gb:.1} GB"),
-                                localx_llama_core::vram::quant_fit_class(Some(gb), vram),
-                            ),
-                            None => hint,
-                        }
-                    })
+                    .map(|q| quant_menu_row(gguf_root, key, def, q, vram))
                     .collect();
                 let current = quants.iter().position(|q| *q == plan.quant).unwrap_or(0);
                 let default = def
@@ -640,11 +683,24 @@ fn customize_flow(
             }
             CustomizeAction::PickKv => {
                 let fork = plan.mode != Mode::Native;
-                let mut kinds = vec!["auto (default)", "q8_0", "q4_0", "f16"];
+                let mut kinds = vec!["auto", "q8_0", "q4_0", "f16"];
                 if fork {
                     kinds.extend(["turbo3", "turbo4"]);
                 }
-                let labels: Vec<MenuRow> = kinds.iter().map(|k| MenuRow::plain(*k)).collect();
+                let labels: Vec<MenuRow> = kinds
+                    .iter()
+                    .map(|k| {
+                        MenuRow::plain(match *k {
+                            "auto" => "auto — let the launcher choose",
+                            "q8_0" => "q8_0 — compact, nearly lossless",
+                            "q4_0" => "q4_0 — smallest, saves the most memory",
+                            "f16" => "f16 — full precision, uses the most memory",
+                            "turbo3" => "turbo3 — the Turbo engines' 3-bit compact format",
+                            "turbo4" => "turbo4 — the Turbo engines' 4-bit compact format",
+                            other => other,
+                        })
+                    })
+                    .collect();
                 let current = plan
                     .kv_cache_k
                     .as_deref()
@@ -755,17 +811,17 @@ const TUNE_ENGINES: &[(&str, Mode, &str)] = &[
     (
         "Standard",
         Mode::Native,
-        "Standard — plain llama.cpp, the most compatible",
+        "Standard (native) — plain llama.cpp, the most compatible",
     ),
     (
         "Turbo",
         Mode::Turboquant,
-        "Turbo — a tuned llama.cpp build, faster on supported GPUs",
+        "Turbo (turboquant) — a tuned llama.cpp build, faster on supported GPUs",
     ),
     (
         "Turbo+",
         Mode::Mtpturbo,
-        "Turbo+ — Turbo plus draft speed-ups, fastest when the model supports it",
+        "Turbo+ (mtpturbo) — Turbo plus draft speed-ups, fastest when the model supports it",
     ),
 ];
 const TUNE_BUDGETS: &[(&str, &str, &str)] = &[
@@ -869,7 +925,14 @@ tune. Images/vision do not affect it.";
 /// selection marked; picking returns here). Quant/context start at the
 /// CURRENT launch settings so the winner is one that "Launch now" actually
 /// replays.
-fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &GuidedPlan) {
+fn auto_tune_flow(
+    chooser: &mut dyn Chooser,
+    key: &str,
+    def: &ModelDef,
+    plan: &GuidedPlan,
+    vram: i64,
+    gguf_root: Option<&Path>,
+) {
     let quants: Vec<String> = def.quants.keys().cloned().collect();
     let contexts: Vec<String> = def.contexts.keys().cloned().collect();
     let engine_default = TUNE_ENGINES
@@ -905,7 +968,7 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &G
     loop {
         let quant_value = quants.get(choices.quant).map_or_else(
             || "single build".to_string(),
-            |q| localbox_tui::vocab::quality_label(def, q),
+            |q| quant_menu_row(gguf_root, key, def, q, vram).text(),
         );
         let context_value = contexts.get(choices.context).map_or_else(
             || "model default".to_string(),
@@ -994,7 +1057,7 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &G
                 }
                 let options = quants
                     .iter()
-                    .map(|q| MenuRow::plain(localbox_tui::vocab::quality_label(def, q)))
+                    .map(|q| quant_menu_row(gguf_root, key, def, q, vram))
                     .collect();
                 if let Some(i) = pick_option(
                     chooser,
@@ -1248,8 +1311,11 @@ mod tests {
         let mut def: ModelDef =
             serde_json::from_str(r#"{"Repo":"o/m","File":"model.gguf"}"#).unwrap();
         // Nothing downloaded → no number.
-        assert_eq!(disk_size_gb(Some(dir.path()), "mkey", &def), None);
-        assert_eq!(disk_size_gb(None, "mkey", &def), None);
+        assert_eq!(
+            quant_disk_size_gb(Some(dir.path()), "mkey", &def, None),
+            None
+        );
+        assert_eq!(quant_disk_size_gb(None, "mkey", &def, None), None);
         // A real file under <root>/<key>/<file> reports its true size.
         std::fs::create_dir_all(dir.path().join("mkey")).unwrap();
         std::fs::write(
@@ -1257,11 +1323,19 @@ mod tests {
             vec![0u8; 2_000_000],
         )
         .unwrap();
-        let gb = disk_size_gb(Some(dir.path()), "mkey", &def).unwrap();
+        let gb = quant_disk_size_gb(Some(dir.path()), "mkey", &def, None).unwrap();
         assert!((gb - 0.002).abs() < 1e-9);
+        // A named quant resolves its own file (absent here → no number).
+        assert_eq!(
+            quant_disk_size_gb(Some(dir.path()), "mkey", &def, Some("missing-quant")),
+            None
+        );
         // An explicit Root folder wins over the key.
         def.root = Some("elsewhere".to_string());
-        assert_eq!(disk_size_gb(Some(dir.path()), "mkey", &def), None);
+        assert_eq!(
+            quant_disk_size_gb(Some(dir.path()), "mkey", &def, None),
+            None
+        );
     }
 
     #[test]
