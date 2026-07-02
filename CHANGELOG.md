@@ -4,6 +4,35 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.0.2 - 2026-07-02
+
+Coordinated LocalX release.
+
+- **Guided launcher rebuilt around one live band.** 2.0.1 drew a new
+  inline viewport per menu and printed summaries between them, so screens
+  stacked as leftovers. Every state now renders as one composed frame in a
+  single terminal band: a hardware banner (GPU name + memory via
+  `nvidia-smi`, then AMD tools; plain CPU-only fallback), the plan summary
+  as a standing panel beside the menu, and content-sized boxes. Notices
+  insert above the band into scrollback; launching hands the screen back
+  cleanly and narrates its stages (server start + log path, model load,
+  ready, reply check, agent start). Ctrl+C leaves the launcher from any
+  menu.
+- **Model rows are informative**: `key · name · size · context-as-words ·
+  images`, size from the catalog or the downloaded file, with the fit
+  traffic light coloring only the size segment.
+- **Customize polish**: the cursor survives toggles, "Save these as my
+  default" returns to the launch menu, and the saved recipe's Strict
+  toggle actually replays (the resolver never read it — fixed, per-model
+  like quant/context).
+- **Auto-tune is a full tuning menu**: optimize-for, workload, engine,
+  quality, memory, trial budget, runs per trial, cached-vs-fresh
+  measurements, and save-vs-preview — every setting opens an option
+  sub-menu with plain descriptions, technical names, the default and the
+  current selection marked. An ℹ row explains every setting; the tune
+  passes the current plan's quant/context so "Launch now" replays the
+  winner, and it actually runs `localbench findbest`.
+
 ## v2.0.1 - 2026-07-02
 
 Coordinated LocalX release.
