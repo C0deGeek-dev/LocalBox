@@ -89,6 +89,20 @@ jobs:
           $config.Output.Verbosity = 'Detailed'
           Invoke-Pester -Configuration $config
 
+      # Rust contract: run the consumer's gate against this checkout's
+      # envelope fixture, so a breaking envelope change fails at the source.
+      - name: Install toolchain (pinned by LocalBench's rust-toolchain.toml)
+        working-directory: external/LocalBench
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: external/LocalBench
+      - name: Assert contract conformance (rust)
+        working-directory: external/LocalBench
+        env:
+          LOCALBOX_ROOT: ${{ github.workspace }}
+        run: cargo test -p localbench --test launcher_contract_localbox -- --nocapture
+
   lint:
     runs-on: windows-latest
     steps:
@@ -133,3 +147,8 @@ jobs:
 
       - name: Build TUI
         run: dotnet build tui/LocalBox.Tui/LocalBox.Tui.csproj -nologo
+
+      # The structured JSON seam the TUI drives; guarded while the seam lives.
+      - name: Smoke the TUI API seam
+        shell: pwsh
+        run: ./tests/smoke-tui-api.ps1
