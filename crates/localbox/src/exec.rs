@@ -146,15 +146,21 @@ impl ProxyOps for LiveProxyOps {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&self.log_dir).map_err(|e| e.to_string())?;
         let log = self.log_dir.join("no-think-proxy.log");
-        let args = vec![
+        let mut args = vec![
             "nothink-proxy".to_string(),
             "--listen".to_string(),
             config.listen_port.to_string(),
+            "--listen-host".to_string(),
+            config.listen_host.clone(),
             "--target-host".to_string(),
             config.target_host.clone(),
             "--target-port".to_string(),
             config.target_port.to_string(),
         ];
+        if let Some(key) = &config.api_key {
+            args.push("--api-key".to_string());
+            args.push(key.clone());
+        }
         let child = spawn_detached(&exe.to_string_lossy(), &args, None, Some(&log))
             .map_err(|e| e.to_string())?;
         Ok(child.id())

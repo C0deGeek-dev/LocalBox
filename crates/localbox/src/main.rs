@@ -15,7 +15,7 @@ use localbox_launcher::catalog::Catalog;
 use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{plan_launch, LaunchRequest};
 use localx_llama_core::Mode;
-use localx_llama_runtime::proxy::{serve_proxy, ProxyConfig};
+use localx_llama_runtime::proxy::{serve_proxy_on, ProxyConfig};
 
 const DEFAULT_PROXY_PORT: u16 = 11_435;
 const DEFAULT_SERVER_PORT: u16 = 8080;
@@ -46,6 +46,9 @@ Options for launch/serve:
   --keep-thinking       let the model's thinking reach the agent unfiltered
   --agent <a>           claude | localpilot | codex | none  (default claude)
   --dry-run             print what would happen; change nothing
+  --lan                 expose the gateway on the network (0.0.0.0)
+  --password <p>        the key LAN clients must present (with --lan)
+  --allow-public-no-auth  explicit opt-in to an open public gateway
 ";
 
 fn main() -> ExitCode {
@@ -173,6 +176,36 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     if has_flag(args, "--dry-run") {
         print_plan(&plan);
         return Ok(());
+    }
+
+    let mut plan = plan;
+    if has_flag(args, "--lan") {
+        let password = flag_value(args, "--password").unwrap_or("").to_string();
+        let host = std::env::var(if cfg!(windows) {
+            "COMPUTERNAME"
+        } else {
+            "HOSTNAME"
+        })
+        .unwrap_or_else(|_| "this-machine".to_string());
+        let advertised = format!("http://{host}:{}", plan.proxy.listen_port);
+        let guard = localbox_launcher::posture::evaluate_serve_guard(
+            &[advertised.clone()],
+            &password,
+            has_flag(args, "--allow-public-no-auth"),
+        );
+        if guard.refuse {
+            return Err(guard.reason);
+        }
+        plan.proxy.listen_host = "0.0.0.0".to_string();
+        plan.proxy.api_key = (!password.trim().is_empty()).then_some(password);
+        println!(
+            "LAN gateway: {advertised} (key {})",
+            if plan.proxy.api_key.is_some() {
+                "required"
+            } else {
+                "OPEN — opted in"
+            }
+        );
     }
 
     let outcome =
@@ -400,9 +433,11 @@ fn cmd_nothink_proxy(args: &[String]) -> Result<(), String> {
         target_host,
         target_port,
         merge_system: !has_flag(args, "--no-merge-system"),
+        api_key: flag_value(args, "--api-key").map(str::to_string),
     };
+    let listen_host = flag_value(args, "--listen-host").unwrap_or("127.0.0.1");
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     runtime
-        .block_on(serve_proxy(listen, config))
+        .block_on(serve_proxy_on(listen_host, listen, config))
         .map_err(|e| e.to_string())
 }

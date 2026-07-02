@@ -64,6 +64,9 @@ pub struct EnsureProxyConfig {
     pub owned_pid: Option<u32>,
     /// Ready-poll attempts after a start (150ms apart; ~10s at the default).
     pub ready_attempts: u32,
+    /// Bearer key forwarding requests must carry (the LAN-gateway posture);
+    /// `None` for the loopback agent proxy.
+    pub api_key: Option<String>,
 }
 
 impl EnsureProxyConfig {
@@ -78,6 +81,7 @@ impl EnsureProxyConfig {
             logs_requested: false,
             owned_pid: None,
             ready_attempts: 66,
+            api_key: None,
         }
     }
 }
