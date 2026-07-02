@@ -1,5 +1,5 @@
-# EditorConfig — editor defaults for the PowerShell launcher, Python proxy,
-# and C# TUI. Files are UTF-8 without BOM (a pre-commit hook strips BOMs).
+# EditorConfig — editor defaults for the Rust workspace and its JSON/Markdown
+# files. Files are UTF-8 without BOM.
 # end_of_line is intentionally unset: existing files mix line endings and a
 # mass reformat is not worth the churn.
 root = true
@@ -9,19 +9,11 @@ charset = utf-8
 insert_final_newline = true
 trim_trailing_whitespace = true
 
-[*.{ps1,psm1,psd1}]
+[*.rs]
 indent_style = space
 indent_size = 4
 
-[*.py]
-indent_style = space
-indent_size = 4
-
-[*.cs]
-indent_style = space
-indent_size = 4
-
-[*.{json,yml,yaml}]
+[*.{json,yml,yaml,toml}]
 indent_style = space
 indent_size = 2
 

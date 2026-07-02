@@ -10,10 +10,12 @@ Thanks for your interest in LocalBox, part of the [LocalX](https://c0degeek-dev.
 
 ## Building and testing
 
-PowerShell project. Before opening a pull request:
+Rust workspace. Before opening a pull request:
 
-```
-Invoke-Pester
+```text
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 ## Pull requests
