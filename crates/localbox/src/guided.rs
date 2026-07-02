@@ -544,7 +544,9 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
 }
 
 /// The catalog directory: the installed `~/.local-llm` tree, or a repo
-/// checkout's `local-llm/` when running from source.
+/// checkout's `local-llm/` when running from source. An empty installed
+/// tree is seeded on first use (the defaults plus the example catalog as
+/// the user's own `llm-models.json`, never overwriting anything).
 #[must_use]
 pub fn catalog_dir(home: &Path) -> PathBuf {
     let installed = home.join(".local-llm");
@@ -555,7 +557,35 @@ pub fn catalog_dir(home: &Path) -> PathBuf {
     if checkout.is_dir() {
         return checkout;
     }
+    seed_installed_tree(&installed);
     installed
+}
+
+/// First-run seeding of `~/.local-llm`: write the shipped defaults and the
+/// example catalog as the user's editable catalog. Existing files are never
+/// touched.
+pub fn seed_installed_tree(installed: &Path) {
+    let _ = std::fs::create_dir_all(installed);
+    let seeds: [(&str, &str); 3] = [
+        (
+            "defaults.json",
+            include_str!("../../../local-llm/defaults.json"),
+        ),
+        (
+            "llm-models.example.json",
+            include_str!("../../../local-llm/llm-models.example.json"),
+        ),
+        (
+            "llm-models.json",
+            include_str!("../../../local-llm/llm-models.example.json"),
+        ),
+    ];
+    for (name, content) in seeds {
+        let path = installed.join(name);
+        if !path.exists() {
+            let _ = std::fs::write(path, content);
+        }
+    }
 }
 
 #[cfg(test)]
