@@ -90,6 +90,19 @@ pub fn memory_label(def: &ModelDef, context_key: &str) -> String {
     }
 }
 
+/// The plain quality hint for a quant name.
+#[must_use]
+pub fn quality_hint(quant: &str) -> &'static str {
+    let lower = quant.to_lowercase();
+    if lower.contains("compact") || lower.contains("mini") || lower.contains("q4") {
+        "smaller & faster"
+    } else if lower.contains("quality") || lower.contains("q6") || lower.contains("q8") {
+        "best quality"
+    } else {
+        "balanced"
+    }
+}
+
 /// Friendly name for a quant: a plain quality hint plus the on-disk size.
 #[must_use]
 pub fn quality_label(def: &ModelDef, quant: &str) -> String {
@@ -99,15 +112,7 @@ pub fn quality_label(def: &ModelDef, quant: &str) -> String {
         .and_then(|q| q.size_gb)
         .map(|gb| format!(" · {gb:.1} GB"))
         .unwrap_or_default();
-    let lower = quant.to_lowercase();
-    let hint = if lower.contains("compact") || lower.contains("mini") || lower.contains("q4") {
-        "smaller & faster"
-    } else if lower.contains("quality") || lower.contains("q6") || lower.contains("q8") {
-        "best quality"
-    } else {
-        "balanced"
-    };
-    format!("{hint}{size}")
+    format!("{}{size}", quality_hint(quant))
 }
 
 /// The recommended plan in plain words — the guided launcher's centrepiece.

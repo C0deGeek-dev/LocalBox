@@ -32,13 +32,12 @@ pub fn fit_color(fit: FitClass) -> Option<Color> {
     }
 }
 
-/// One menu row: its text plus an optional accent color (the fit traffic
-/// light on model rows). The plain path prints the text; only the rich
-/// path shows the color.
+/// One menu row as colored segments: most rows are one plain segment; a
+/// model or quality row colors only its size segment with the fit traffic
+/// light (never the whole row). The plain path prints the joined text.
 #[derive(Debug, Clone)]
 pub struct MenuRow {
-    pub text: String,
-    pub accent: Option<Color>,
+    pub segments: Vec<(String, Option<Color>)>,
 }
 
 impl MenuRow {
@@ -46,18 +45,31 @@ impl MenuRow {
     #[must_use]
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
-            accent: None,
+            segments: vec![(text.into(), None)],
         }
     }
 
-    /// A row colored by its fit class.
+    /// Append a segment colored by its fit class.
     #[must_use]
-    pub fn fit(text: impl Into<String>, fit: FitClass) -> Self {
-        Self {
-            text: text.into(),
-            accent: fit_color(fit),
-        }
+    pub fn with_fit(mut self, text: impl Into<String>, fit: FitClass) -> Self {
+        self.segments.push((text.into(), fit_color(fit)));
+        self
+    }
+
+    /// Append an uncolored segment.
+    #[must_use]
+    pub fn with(mut self, text: impl Into<String>) -> Self {
+        self.segments.push((text.into(), None));
+        self
+    }
+
+    /// The row's full text, for the plain path and for tests.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.segments
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect()
     }
 }
 
@@ -113,29 +125,30 @@ impl ModelRow {
         }
     }
 
-    /// The one-line label both paths show: `key · Name · GB · words · images`.
-    #[must_use]
-    pub fn label(&self) -> String {
-        let mut label = format!("{} · {}", self.key, self.display_name);
-        if let Some(gb) = self.size_gb {
-            label.push_str(&format!(" · {gb:.1} GB"));
-        }
-        if let Some(tokens) = self.max_context_tokens {
-            label.push_str(&format!(" · up to {}", words_compact(tokens)));
-        }
-        if self.vision {
-            label.push_str(" · images");
-        }
-        if self.strict {
-            label.push_str("  [strict]");
-        }
-        label
-    }
-
-    /// The menu row for this model: the label colored by its fit class.
+    /// The menu row for this model: `key · Name · GB · words · images`,
+    /// with only the size segment carrying the fit color.
     #[must_use]
     pub fn menu_row(&self) -> MenuRow {
-        MenuRow::fit(self.label(), self.fit)
+        let mut row = MenuRow::plain(format!("{} · {}", self.key, self.display_name));
+        if let Some(gb) = self.size_gb {
+            row = row.with_fit(format!(" · {gb:.1} GB"), self.fit);
+        }
+        if let Some(tokens) = self.max_context_tokens {
+            row = row.with(format!(" · up to {}", words_compact(tokens)));
+        }
+        if self.vision {
+            row = row.with(" · images");
+        }
+        if self.strict {
+            row = row.with("  [strict]");
+        }
+        row
+    }
+
+    /// The one-line label both paths show.
+    #[must_use]
+    pub fn label(&self) -> String {
+        self.menu_row().text()
     }
 }
 
@@ -248,10 +261,15 @@ pub fn render_guided_screen(frame: &mut Frame, screen: &GuidedScreen) {
         .rows
         .iter()
         .map(|row| {
-            let style = row
-                .accent
-                .map_or_else(Style::default, |color| Style::default().fg(color));
-            ListItem::new(Line::from(Span::styled(row.text.clone(), style)))
+            let spans: Vec<Span> = row
+                .segments
+                .iter()
+                .map(|(text, color)| {
+                    let style = color.map_or_else(Style::default, |c| Style::default().fg(c));
+                    Span::styled(text.clone(), style)
+                })
+                .collect();
+            ListItem::new(Line::from(spans))
         })
         .collect();
     let rows_height = u16::try_from(screen.rows.len()).unwrap_or(u16::MAX);
@@ -340,11 +358,24 @@ mod tests {
             "q36apex · Qwen 3.6 APEX · 18.6 GB · up to ~196k words · images"
         );
         assert_eq!(row.fit, FitClass::Tight, "18.6 GB on a 24 GB card");
-        assert_eq!(row.menu_row().accent, Some(Color::Yellow));
+        // Only the size segment carries the traffic light — never the name.
+        let menu_row = row.menu_row();
+        let colored: Vec<&(String, Option<Color>)> = menu_row
+            .segments
+            .iter()
+            .filter(|(_, color)| color.is_some())
+            .collect();
+        assert_eq!(colored.len(), 1);
+        assert_eq!(colored[0].0, " · 18.6 GB");
+        assert_eq!(colored[0].1, Some(Color::Yellow));
         // No probe → no verdict, and the label simply omits what it lacks.
         let unknown = ModelRow::from_def("bare", &ModelDef::default(), 0);
         assert_eq!(unknown.fit, FitClass::Unknown);
-        assert_eq!(unknown.menu_row().accent, None);
+        assert!(unknown
+            .menu_row()
+            .segments
+            .iter()
+            .all(|(_, color)| color.is_none()));
         assert_eq!(unknown.label(), "bare · bare");
     }
 

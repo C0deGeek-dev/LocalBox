@@ -171,16 +171,19 @@ pub fn execute_launch(
 
     let binary = launcher.server_binary(request.mode, true)?;
     let log = server_log_path(home, plan.server_port);
+    eprintln!("Starting the model server — log: {}", log.display());
     let child = spawn_server(&binary, &plan.argv, &log)
         .map_err(|e| LiveError::Server(format!("{}: {e}", binary.display())))?;
     outcome.server_pid = Some(child.id());
 
+    eprintln!("Loading the model into memory … (this can take a few minutes)");
     if let Err(e) = launcher.wait_server(plan.server_port, 180) {
         return Err(LiveError::Server(format!(
             "{e} — the server log is at {}",
             log.display()
         )));
     }
+    eprintln!("Model ready on 127.0.0.1:{}.", plan.server_port);
     launcher.set_backend_session(&BackendSession {
         key: plan.key.clone(),
         mode: request.mode,
@@ -193,6 +196,7 @@ pub fn execute_launch(
         let ensured = ensure_proxy(&mut ops, &plan.proxy)?;
         outcome.proxy_pid = ensured.started_pid;
 
+        eprintln!("Checking the reply path (a one-word test question) …");
         let reply = block_on(post_smoke(&plan.base_url, &plan.key))?
             .map_err(|e| LiveError::Smoke(format!("the model did not answer: {e}")))?;
         let smoke = evaluate_smoke_reply(&reply);
@@ -200,6 +204,7 @@ pub fn execute_launch(
             return Err(LiveError::Smoke(format_smoke_failure(&smoke)));
         }
         outcome.smoke_text = smoke.visible_text;
+        eprintln!("Reply check passed.");
     }
 
     if agent == AgentKind::LocalPilot {
@@ -208,6 +213,7 @@ pub fn execute_launch(
     }
 
     if let Some(program) = agent.program() {
+        eprintln!("Starting {program} — exit it to return here; the model keeps serving.");
         let _env = EnvGuard::apply(&plan.env_plan);
         let status = run_interactive(program, &[]).map_err(|e| LiveError::Agent {
             agent: program.to_string(),

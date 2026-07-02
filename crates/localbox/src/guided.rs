@@ -200,6 +200,10 @@ trait Chooser {
     fn notice(&mut self, text: &str);
     /// Hand the screen back to normal printing (before a launch).
     fn release(&mut self) {}
+    /// Whether the user asked to leave the launcher entirely (Ctrl+C).
+    fn quit_requested(&self) -> bool {
+        false
+    }
 }
 
 /// Numbered plain-text menus over stdin — the non-TTY / screen-reader path.
@@ -227,7 +231,7 @@ impl Chooser for PlainChooser {
             println!("{panel_title}:");
             println!("{text}");
         }
-        let texts: Vec<String> = rows.iter().map(|row| row.text.clone()).collect();
+        let texts: Vec<String> = rows.iter().map(MenuRow::text).collect();
         print!("{}", plain_menu(title, &texts));
         println!("Enter a number (blank cancels):");
         let mut line = String::new();
@@ -262,6 +266,7 @@ struct TuiChooser {
     terminal: Option<TuiTerminal>,
     banner: String,
     panel: Option<(String, String)>,
+    quit: bool,
 }
 
 impl TuiChooser {
@@ -288,6 +293,7 @@ impl TuiChooser {
 
         let banner = self.banner.clone();
         let panel = self.panel.clone();
+        let mut quit = false;
         let terminal = self.ensure_terminal()?;
         crossterm::terminal::enable_raw_mode()?;
         let mut selected = start.min(rows.len().saturating_sub(1));
@@ -310,6 +316,14 @@ impl TuiChooser {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
+                // Raw mode swallows the console's Ctrl+C: honor it as
+                // "leave the launcher", not as a dead key.
+                if key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                {
+                    quit = true;
+                    break None;
+                }
                 match key.code {
                     KeyCode::Up => selected = selected.saturating_sub(1),
                     KeyCode::Down => selected = (selected + 1).min(rows.len().saturating_sub(1)),
@@ -320,6 +334,7 @@ impl TuiChooser {
             }
         };
         crossterm::terminal::disable_raw_mode()?;
+        self.quit = quit;
         Ok(result)
     }
 }
@@ -362,10 +377,19 @@ impl Chooser for TuiChooser {
 
     fn release(&mut self) {
         let _ = crossterm::terminal::disable_raw_mode();
+        // Drain any queued key events so a child process starting on this
+        // console never inherits our leftover keystrokes.
+        while crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+            let _ = crossterm::event::read();
+        }
         if let Some(mut terminal) = self.terminal.take() {
             // Clear the band so normal printing continues from a clean line.
             let _ = terminal.clear();
         }
+    }
+
+    fn quit_requested(&self) -> bool {
+        self.quit
     }
 }
 
@@ -442,6 +466,10 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         };
 
         confirm_flow(chooser.as_mut(), &home, &catalog, &key, &def, vram);
+        if chooser.quit_requested() {
+            chooser.release();
+            return Ok(());
+        }
         show_all = false;
     }
 }
@@ -477,13 +505,35 @@ fn confirm_flow(
             }
             ConfirmAction::Customize => {
                 customize_flow(chooser, home, key, def, &defaults, &mut overrides, vram);
+                if chooser.quit_requested() {
+                    return;
+                }
             }
             ConfirmAction::AutoTune => {
+                // Hand the screen over and actually run the benchmark the
+                // row promises; the confirm menu returns afterwards.
+                chooser.release();
                 chooser.notice(
-                    "Auto-tune runs a benchmark to find the best settings for your GPU.\n\
-                     Run it with:  localbench findbest --model ",
+                    "Auto-tune measures this model on your GPU and saves the fastest safe \
+                     settings. The benchmark can take a while — Ctrl+C stops it.",
                 );
-                chooser.notice(&format!("  localbench findbest --model {key}"));
+                let args = vec![
+                    "findbest".to_string(),
+                    "--model".to_string(),
+                    key.to_string(),
+                ];
+                match crate::exec::run_interactive("localbench", &args) {
+                    Ok(status) if status.success() => chooser.notice(
+                        "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings.",
+                    ),
+                    Ok(_) => chooser.notice(
+                        "Auto-tune did not finish; the recommended defaults still apply.",
+                    ),
+                    Err(_) => chooser.notice(
+                        "LocalBench is not installed, so Auto-tune cannot run.\n\
+                         Install it, then either pick this row again or run:\n  localbench findbest --model <model>",
+                    ),
+                }
             }
             ConfirmAction::Help => chooser.notice(glossary()),
             ConfirmAction::BackToModels => return,
@@ -501,6 +551,9 @@ fn customize_flow(
     vram: i64,
 ) {
     loop {
+        if chooser.quit_requested() {
+            return;
+        }
         let plan = resolve_launch_plan(key, def, defaults, overrides);
         chooser.set_panel(Some(("Current plan".to_string(), plan_summary(&plan, def))));
         let menu = customize_menu(&plan, def);
@@ -536,11 +589,14 @@ fn customize_flow(
                 let labels: Vec<MenuRow> = quants
                     .iter()
                     .map(|q| {
-                        let size = def.quants.get(q).and_then(|entry| entry.size_gb);
-                        MenuRow::fit(
-                            localbox_tui::vocab::quality_label(def, q),
-                            localx_llama_core::vram::quant_fit_class(size, vram),
-                        )
+                        let hint = MenuRow::plain(localbox_tui::vocab::quality_hint(q));
+                        match def.quants.get(q).and_then(|entry| entry.size_gb) {
+                            Some(gb) => hint.with_fit(
+                                format!(" · {gb:.1} GB"),
+                                localx_llama_core::vram::quant_fit_class(Some(gb), vram),
+                            ),
+                            None => hint,
+                        }
                     })
                     .collect();
                 if let Some(i) = chooser.choose("Quality", &labels, 0) {
