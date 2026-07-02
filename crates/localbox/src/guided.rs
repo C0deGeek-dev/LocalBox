@@ -22,7 +22,7 @@ use localbox_tui::plan::{resolve_launch_plan, DefaultLaunch, GuidedPlan, PlanOve
 use localbox_tui::ui::{
     render_guided_screen, ConfirmAction, GuidedScreen, MenuRow, ModelRow, CONFIRM_ROWS,
 };
-use localbox_tui::vocab::{engine_label, glossary, gpu_banner, plan_summary, target_label};
+use localbox_tui::vocab::{glossary, gpu_banner, plan_summary, target_label};
 use localx_llama_core::{Mode, ModelDef, TunerBestConfig, TunerEntry};
 
 use crate::exec::{home_dir, probe_gpu, probe_vram_gb};
@@ -557,7 +557,8 @@ fn customize_flow(
                     .iter()
                     .map(|t| MenuRow::plain(target_label(t)))
                     .collect();
-                if let Some(i) = chooser.choose("Run with", &labels, 0) {
+                let current = targets.iter().position(|t| *t == plan.target).unwrap_or(0);
+                if let Some(i) = pick_option(chooser, "Run with", labels, current, Some(0)) {
                     overrides.target = Some(targets[i].to_string());
                 }
             }
@@ -580,7 +581,12 @@ fn customize_flow(
                         }
                     })
                     .collect();
-                if let Some(i) = chooser.choose("Quality", &labels, 0) {
+                let current = quants.iter().position(|q| *q == plan.quant).unwrap_or(0);
+                let default = def
+                    .quant
+                    .as_deref()
+                    .and_then(|dq| quants.iter().position(|q| q == dq));
+                if let Some(i) = pick_option(chooser, "Quality", labels, current, default) {
                     overrides.quant = Some(quants[i].clone());
                 }
             }
@@ -590,18 +596,32 @@ fn customize_flow(
                     .iter()
                     .map(|c| MenuRow::plain(localbox_tui::vocab::memory_label(def, c)))
                     .collect();
-                if let Some(i) = chooser.choose("Memory (conversation size)", &labels, 0) {
+                let current = contexts
+                    .iter()
+                    .position(|c| *c == plan.context_key)
+                    .unwrap_or(0);
+                let default = contexts.iter().position(String::is_empty);
+                if let Some(i) = pick_option(
+                    chooser,
+                    "Memory (conversation size)",
+                    labels,
+                    current,
+                    default,
+                ) {
                     overrides.context_key = Some(contexts[i].clone());
                 }
             }
             CustomizeAction::PickMode => {
-                let modes = [Mode::Native, Mode::Turboquant, Mode::Mtpturbo];
-                let labels: Vec<MenuRow> = modes
+                let labels: Vec<MenuRow> = TUNE_ENGINES
                     .iter()
-                    .map(|m| MenuRow::plain(engine_label(*m)))
+                    .map(|(_, _, desc)| MenuRow::plain(*desc))
                     .collect();
-                if let Some(i) = chooser.choose("Engine", &labels, 0) {
-                    overrides.mode = Some(modes[i]);
+                let current = TUNE_ENGINES
+                    .iter()
+                    .position(|(_, mode, _)| *mode == plan.mode)
+                    .unwrap_or(0);
+                if let Some(i) = pick_option(chooser, "Engine", labels, current, Some(0)) {
+                    overrides.mode = Some(TUNE_ENGINES[i].1);
                 }
             }
             CustomizeAction::PickAutoTune => {
@@ -609,7 +629,8 @@ fn customize_flow(
                     MenuRow::plain("On — use my auto-tuned settings"),
                     MenuRow::plain("Off — use the recommended defaults"),
                 ];
-                if let Some(i) = chooser.choose("Auto-tune", &labels, 0) {
+                let current = usize::from(!plan.use_auto_best);
+                if let Some(i) = pick_option(chooser, "Auto-tune", labels, current, None) {
                     if i == 0 {
                         set_auto_tune_on(overrides, "balanced");
                     } else {
@@ -624,7 +645,12 @@ fn customize_flow(
                     kinds.extend(["turbo3", "turbo4"]);
                 }
                 let labels: Vec<MenuRow> = kinds.iter().map(|k| MenuRow::plain(*k)).collect();
-                if let Some(i) = chooser.choose("KV cache", &labels, 0) {
+                let current = plan
+                    .kv_cache_k
+                    .as_deref()
+                    .and_then(|kv| kinds.iter().position(|k| *k == kv))
+                    .unwrap_or(0);
+                if let Some(i) = pick_option(chooser, "KV cache", labels, current, Some(0)) {
                     if i == 0 {
                         overrides.kv_cache_k = None;
                         overrides.kv_cache_v = None;
@@ -665,17 +691,18 @@ fn customize_flow(
     }
 }
 
-/// What the Auto-tune sub-menu is set to; Enter on a value row cycles it.
+/// What the Auto-tune sub-menu is set to; Enter on a value row opens the
+/// option list for it (current selection and default marked).
 struct TuneChoices {
     /// Index into [`TUNE_PROFILES`].
     profile: usize,
     /// Index into [`TUNE_WORKLOADS`].
     workload: usize,
-    /// Index into [`TUNE_ENGINES`] (`0` = the plan's own engine).
+    /// Index into [`TUNE_ENGINES`]; starts at the launch plan's engine.
     engine: usize,
-    /// Index into the quant list (`0` = the plan's own quant).
+    /// Index into the model's quant list; starts at the plan's quant.
     quant: usize,
-    /// Index into the context list (`0` = the plan's own context).
+    /// Index into the model's context list; starts at the plan's context.
     context: usize,
     /// Index into [`TUNE_BUDGETS`].
     budget: usize,
@@ -687,33 +714,128 @@ struct TuneChoices {
     save: bool,
 }
 
-const TUNE_PROFILES: &[(&str, &str)] = &[
-    ("Balanced (recommended)", "balanced"),
-    ("Pure speed", "pure"),
-    ("Both profiles (longer)", "both"),
+/// `(short row value, findbest flag value, sub-menu description)`.
+const TUNE_PROFILES: &[(&str, &str, &str)] = &[
+    (
+        "Balanced",
+        "balanced",
+        "Balanced — best mix of speed and stability",
+    ),
+    ("Pure speed", "pure", "Pure speed — fastest generation wins"),
+    (
+        "Both profiles",
+        "both",
+        "Both profiles — save one winner per profile (takes longer)",
+    ),
 ];
-const TUNE_WORKLOADS: &[(&str, &str)] = &[
-    ("Coding agent (recommended)", "coding-agent"),
-    ("Generation speed", "gen"),
-    ("Prompt processing", "prompt"),
-    ("Both (longer)", "both"),
+const TUNE_WORKLOADS: &[(&str, &str, &str)] = &[
+    (
+        "Coding agent",
+        "coding-agent",
+        "Coding agent — the mixed workload a coding assistant produces",
+    ),
+    (
+        "Generation speed",
+        "gen",
+        "Generation speed — how fast answers are written",
+    ),
+    (
+        "Prompt processing",
+        "prompt",
+        "Prompt processing — how fast long context is read",
+    ),
+    (
+        "Both",
+        "both",
+        "Both — generation and prompt processing (takes longer)",
+    ),
 ];
-const TUNE_ENGINES: &[(&str, Option<Mode>)] = &[
-    ("From plan", None),
-    ("Standard", Some(Mode::Native)),
-    ("Turbo", Some(Mode::Turboquant)),
-    ("Turbo+", Some(Mode::Mtpturbo)),
+/// `(short row value, engine mode, sub-menu description)`.
+const TUNE_ENGINES: &[(&str, Mode, &str)] = &[
+    (
+        "Standard",
+        Mode::Native,
+        "Standard — plain llama.cpp, the most compatible",
+    ),
+    (
+        "Turbo",
+        Mode::Turboquant,
+        "Turbo — a tuned llama.cpp build, faster on supported GPUs",
+    ),
+    (
+        "Turbo+",
+        Mode::Mtpturbo,
+        "Turbo+ — Turbo plus draft speed-ups, fastest when the model supports it",
+    ),
 ];
-const TUNE_BUDGETS: &[(&str, &str)] = &[
-    ("Standard (30 trials)", "30"),
-    ("Quick (15 trials)", "15"),
-    ("Deep (60 trials)", "60"),
+const TUNE_BUDGETS: &[(&str, &str, &str)] = &[
+    (
+        "Standard (30 trials)",
+        "30",
+        "Standard — 30 trials, the sensible middle",
+    ),
+    (
+        "Quick (15 trials)",
+        "15",
+        "Quick — 15 trials, faster but a rougher answer",
+    ),
+    (
+        "Deep (60 trials)",
+        "60",
+        "Deep — 60 trials, the best winner, takes longest",
+    ),
 ];
-const TUNE_RUNS: &[(&str, &str)] = &[
-    ("Steady (3 per trial)", "3"),
-    ("Fast (1 per trial)", "1"),
-    ("Extra steady (5 per trial)", "5"),
+const TUNE_RUNS: &[(&str, &str, &str)] = &[
+    (
+        "Steady (3 per trial)",
+        "3",
+        "Steady — each measurement repeated 3 times",
+    ),
+    (
+        "Fast (1 per trial)",
+        "1",
+        "Fast — one measurement each, quickest but noisier",
+    ),
+    (
+        "Extra steady (5 per trial)",
+        "5",
+        "Extra steady — 5 repeats, slowest but most reliable numbers",
+    ),
 ];
+const TUNE_MEASUREMENTS: &[&str] = &[
+    "Reuse cached results — skip measurements already taken in earlier tunes",
+    "Fresh — ignore the cache and measure everything again",
+];
+const TUNE_SAVE: &[&str] = &[
+    "Yes — save the winner so Launch now replays it",
+    "No — preview only, nothing is saved",
+];
+
+/// Offer a setting's options as a sub-menu: the launch default and the
+/// current selection are marked, the cursor starts on the current value,
+/// and picking an option returns to the previous menu.
+fn pick_option(
+    chooser: &mut dyn Chooser,
+    title: &str,
+    options: Vec<MenuRow>,
+    current: usize,
+    default: Option<usize>,
+) -> Option<usize> {
+    let rows: Vec<MenuRow> = options
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut row)| {
+            if default == Some(i) {
+                row = row.with("   (default)");
+            }
+            if i == current {
+                row = row.with("   ← selected");
+            }
+            row
+        })
+        .collect();
+    chooser.choose(title, &rows, current)
+}
 
 /// Plain-language help for every tune setting (the ℹ row).
 const TUNE_GLOSSARY: &str = "\
@@ -743,23 +865,28 @@ KV-cache variants and GPU offload are explored automatically inside the\n\
 tune. Images/vision do not affect it.";
 
 /// The Auto-tune sub-menu: every `findbest` knob with a plain value on the
-/// row (Enter cycles it), the standing what-this-does panel, and a glossary
-/// row. Quant/context default to the CURRENT plan so the winner is one that
-/// "Launch now" actually replays.
+/// row; Enter opens that setting's option list (default and current
+/// selection marked; picking returns here). Quant/context start at the
+/// CURRENT launch settings so the winner is one that "Launch now" actually
+/// replays.
 fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &GuidedPlan) {
     let quants: Vec<String> = def.quants.keys().cloned().collect();
-    let contexts: Vec<String> = def
-        .contexts
-        .keys()
-        .filter(|k| !k.trim().is_empty())
-        .cloned()
-        .collect();
+    let contexts: Vec<String> = def.contexts.keys().cloned().collect();
+    let engine_default = TUNE_ENGINES
+        .iter()
+        .position(|(_, mode, _)| *mode == plan.mode)
+        .unwrap_or(0);
+    let quant_default = quants.iter().position(|q| *q == plan.quant).unwrap_or(0);
+    let context_default = contexts
+        .iter()
+        .position(|c| *c == plan.context_key)
+        .unwrap_or(0);
     let mut choices = TuneChoices {
         profile: 0,
         workload: 0,
-        engine: 0,
-        quant: 0,
-        context: 0,
+        engine: engine_default,
+        quant: quant_default,
+        context: context_default,
         budget: 0,
         runs: 0,
         fresh: false,
@@ -776,26 +903,14 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &G
 
     let mut cursor = 0;
     loop {
-        let engine_value = match TUNE_ENGINES[choices.engine].1 {
-            None => format!("From plan ({})", engine_label(plan.mode)),
-            Some(mode) => engine_label(mode).to_string(),
-        };
-        let quant_value = if choices.quant == 0 {
-            format!(
-                "From plan ({})",
-                localbox_tui::vocab::quality_label(def, &plan.quant)
-            )
-        } else {
-            localbox_tui::vocab::quality_label(def, &quants[choices.quant - 1])
-        };
-        let context_value = if choices.context == 0 {
-            format!(
-                "From plan ({})",
-                localbox_tui::vocab::memory_label(def, &plan.context_key)
-            )
-        } else {
-            localbox_tui::vocab::memory_label(def, &contexts[choices.context - 1])
-        };
+        let quant_value = quants.get(choices.quant).map_or_else(
+            || "single build".to_string(),
+            |q| localbox_tui::vocab::quality_label(def, q),
+        );
+        let context_value = contexts.get(choices.context).map_or_else(
+            || "model default".to_string(),
+            |c| localbox_tui::vocab::memory_label(def, c),
+        );
         let rows = vec![
             MenuRow::plain(format!(
                 "Optimize for:  {}",
@@ -805,7 +920,7 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &G
                 "Workload:      {}",
                 TUNE_WORKLOADS[choices.workload].0
             )),
-            MenuRow::plain(format!("Engine:        {engine_value}")),
+            MenuRow::plain(format!("Engine:        {}", TUNE_ENGINES[choices.engine].0)),
             MenuRow::plain(format!("Quality:       {quant_value}")),
             MenuRow::plain(format!("Memory:        {context_value}")),
             MenuRow::plain(format!("Trials:        {}", TUNE_BUDGETS[choices.budget].0)),
@@ -820,18 +935,14 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &G
             )),
             MenuRow::plain(format!(
                 "Save winner:   {}",
-                if choices.save {
-                    "yes — Launch now replays it"
-                } else {
-                    "no — preview only"
-                }
+                if choices.save { "yes" } else { "preview only" }
             )),
             MenuRow::plain("ℹ  What do these mean?"),
             MenuRow::plain("▶  Start auto-tune"),
             MenuRow::plain("←  Back"),
         ];
         let Some(choice) = chooser.choose(
-            "Auto-tune this model (Enter cycles a setting)",
+            "Auto-tune this model (Enter opens a setting)",
             &rows,
             cursor,
         ) else {
@@ -839,15 +950,126 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &G
         };
         cursor = choice;
         match choice {
-            0 => choices.profile = (choices.profile + 1) % TUNE_PROFILES.len(),
-            1 => choices.workload = (choices.workload + 1) % TUNE_WORKLOADS.len(),
-            2 => choices.engine = (choices.engine + 1) % TUNE_ENGINES.len(),
-            3 => choices.quant = (choices.quant + 1) % (quants.len() + 1),
-            4 => choices.context = (choices.context + 1) % (contexts.len() + 1),
-            5 => choices.budget = (choices.budget + 1) % TUNE_BUDGETS.len(),
-            6 => choices.runs = (choices.runs + 1) % TUNE_RUNS.len(),
-            7 => choices.fresh = !choices.fresh,
-            8 => choices.save = !choices.save,
+            0 => {
+                let options = TUNE_PROFILES
+                    .iter()
+                    .map(|(_, _, desc)| MenuRow::plain(*desc))
+                    .collect();
+                if let Some(i) =
+                    pick_option(chooser, "Optimize for", options, choices.profile, Some(0))
+                {
+                    choices.profile = i;
+                }
+            }
+            1 => {
+                let options = TUNE_WORKLOADS
+                    .iter()
+                    .map(|(_, _, desc)| MenuRow::plain(*desc))
+                    .collect();
+                if let Some(i) =
+                    pick_option(chooser, "Workload", options, choices.workload, Some(0))
+                {
+                    choices.workload = i;
+                }
+            }
+            2 => {
+                let options = TUNE_ENGINES
+                    .iter()
+                    .map(|(_, _, desc)| MenuRow::plain(*desc))
+                    .collect();
+                if let Some(i) = pick_option(
+                    chooser,
+                    "Engine",
+                    options,
+                    choices.engine,
+                    Some(engine_default),
+                ) {
+                    choices.engine = i;
+                }
+            }
+            3 => {
+                if quants.is_empty() {
+                    chooser.notice("This model has a single build; nothing to pick.");
+                    continue;
+                }
+                let options = quants
+                    .iter()
+                    .map(|q| MenuRow::plain(localbox_tui::vocab::quality_label(def, q)))
+                    .collect();
+                if let Some(i) = pick_option(
+                    chooser,
+                    "Quality (which build to measure)",
+                    options,
+                    choices.quant,
+                    Some(quant_default),
+                ) {
+                    choices.quant = i;
+                }
+            }
+            4 => {
+                if contexts.is_empty() {
+                    chooser.notice("This model has a single conversation size.");
+                    continue;
+                }
+                let options = contexts
+                    .iter()
+                    .map(|c| MenuRow::plain(localbox_tui::vocab::memory_label(def, c)))
+                    .collect();
+                if let Some(i) = pick_option(
+                    chooser,
+                    "Memory (conversation size to measure at)",
+                    options,
+                    choices.context,
+                    Some(context_default),
+                ) {
+                    choices.context = i;
+                }
+            }
+            5 => {
+                let options = TUNE_BUDGETS
+                    .iter()
+                    .map(|(_, _, desc)| MenuRow::plain(*desc))
+                    .collect();
+                if let Some(i) = pick_option(chooser, "Trials", options, choices.budget, Some(0)) {
+                    choices.budget = i;
+                }
+            }
+            6 => {
+                let options = TUNE_RUNS
+                    .iter()
+                    .map(|(_, _, desc)| MenuRow::plain(*desc))
+                    .collect();
+                if let Some(i) = pick_option(chooser, "Runs", options, choices.runs, Some(0)) {
+                    choices.runs = i;
+                }
+            }
+            7 => {
+                let options = TUNE_MEASUREMENTS
+                    .iter()
+                    .map(|t| MenuRow::plain(*t))
+                    .collect();
+                if let Some(i) = pick_option(
+                    chooser,
+                    "Measurements",
+                    options,
+                    usize::from(choices.fresh),
+                    Some(0),
+                ) {
+                    choices.fresh = i == 1;
+                }
+            }
+            8 => {
+                let options = TUNE_SAVE.iter().map(|t| MenuRow::plain(*t)).collect();
+                if let Some(i) = pick_option(
+                    chooser,
+                    "Save winner",
+                    options,
+                    usize::from(!choices.save),
+                    Some(0),
+                ) {
+                    choices.save = i == 0;
+                }
+            }
             9 => chooser.notice(TUNE_GLOSSARY),
             10 => break,
             _ => return,
@@ -858,17 +1080,9 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &G
     // returns afterwards.
     chooser.release();
     chooser.notice("Auto-tune is starting — Ctrl+C stops it.");
-    let mode = TUNE_ENGINES[choices.engine].1.unwrap_or(plan.mode);
-    let quant = if choices.quant == 0 {
-        plan.quant.clone()
-    } else {
-        quants[choices.quant - 1].clone()
-    };
-    let context = if choices.context == 0 {
-        plan.context_key.clone()
-    } else {
-        contexts[choices.context - 1].clone()
-    };
+    let mode = TUNE_ENGINES[choices.engine].1;
+    let quant = quants.get(choices.quant).cloned().unwrap_or_default();
+    let context = contexts.get(choices.context).cloned().unwrap_or_default();
     let mut args = vec![
         "findbest".to_string(),
         "--model".to_string(),
