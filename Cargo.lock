@@ -857,6 +857,7 @@ dependencies = [
  "localx-llama-runtime",
  "ratatui",
  "reqwest",
+ "serde",
  "serde_json",
  "sysinfo",
  "tempfile",

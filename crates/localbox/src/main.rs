@@ -30,6 +30,10 @@ Usage:
   localbox serve <model> [options]    start the model (and proxy) headless
   localbox stop                       stop every model server and the proxy
   localbox status                     report serve health and the remedy
+  localbox embed-serve [--port <p>]   start the CPU-only embedding server
+  localbox embed-stop                 stop the embedding server
+  localbox update [--mode <m>] [--check]
+                                      install or update the llama.cpp binaries
   localbox version                    print the launcher version envelope
   localbox nothink-proxy --listen <port> --target-port <port>
                                       host the no-think proxy (plumbing)
@@ -68,6 +72,9 @@ fn run() -> ExitCode {
         "serve" => cmd_launch(&args[1..], AgentKind::ServeOnly),
         "stop" => cmd_stop(),
         "status" => cmd_status(&args[1..]),
+        "embed-serve" => cmd_embed_serve(&args[1..]),
+        "embed-stop" => cmd_embed_stop(),
+        "update" => cmd_update(&args[1..]),
         "version" => cmd_version(),
         "nothink-proxy" => cmd_nothink_proxy(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -231,6 +238,150 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
         .unwrap_or(DEFAULT_SERVER_PORT);
     println!("{}", status_report(proxy_port, server_port));
     Ok(())
+}
+
+fn cmd_embed_serve(args: &[String]) -> Result<(), String> {
+    use localbox::embed;
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let catalog = localbox_launcher::catalog::Catalog::load(&catalog_dir(&home))
+        .map_err(|e| e.to_string())?;
+    let mut config = embed::EmbedConfig::from_catalog(&catalog);
+    if let Some(port) = flag_value(args, "--port") {
+        config.port = port.parse().map_err(|_| format!("bad port '{port}'"))?;
+    }
+
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    if localx_llama_runtime::net::is_port_listening(config.port) {
+        return match runtime.block_on(embed::probe_embeddings(config.port)) {
+            Some(dims) => {
+                println!(
+                    "Embedding server already running on 127.0.0.1:{} ({dims} dimensions).",
+                    config.port
+                );
+                Ok(())
+            }
+            None => Err(format!(
+                "port {} is in use by something that does not answer embeddings; \
+                 stop it or pick another port with --port",
+                config.port
+            )),
+        };
+    }
+
+    let model = runtime.block_on(embed::ensure_embed_model(&catalog, &config, &home))?;
+    let launcher = build_launcher(&home)?;
+    let binary = localx_llama_core::Launcher::server_binary(&launcher, Mode::Native, true)
+        .map_err(|e| e.to_string())?;
+    let argv =
+        localx_llama_runtime::server::embed_server_args(&model.to_string_lossy(), config.port);
+    let log = home
+        .join(".local-llm")
+        .join("logs")
+        .join("embed-server.log");
+    let child = localbox::exec::spawn_server(&binary, &argv, &log).map_err(|e| e.to_string())?;
+
+    if !runtime.block_on(localx_llama_runtime::server::wait_for_port(
+        config.port,
+        std::time::Duration::from_secs(120),
+    )) {
+        return Err(format!(
+            "the embedding server did not start — the log is at {}",
+            log.display()
+        ));
+    }
+    let dims = runtime
+        .block_on(embed::probe_embeddings(config.port))
+        .ok_or("the embedding server started but did not answer a probe")?;
+    // Record the PID from the socket table, not the spawn handle: on Windows
+    // the surviving server process is not always the direct child.
+    let listener_pid = localbox::exec::os_listener_pids(config.port)
+        .first()
+        .copied()
+        .or(Some(child.id()));
+    embed::write_embed_state(
+        &home,
+        &embed::EmbedState {
+            pid: listener_pid,
+            port: config.port,
+            base_url: format!("http://127.0.0.1:{}", config.port),
+            model: model.to_string_lossy().to_string(),
+            pooling: config.pooling.clone(),
+        },
+    );
+    println!(
+        "Embedding server running on 127.0.0.1:{} ({dims} dimensions, CPU-only).",
+        config.port
+    );
+    Ok(())
+}
+
+fn cmd_embed_stop() -> Result<(), String> {
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    if localbox::embed::stop_embed(&home) {
+        println!("Embedding server stopped.");
+    } else {
+        println!("No embedding server was running.");
+    }
+    Ok(())
+}
+
+fn cmd_update(args: &[String]) -> Result<(), String> {
+    use localbox::update::{plan_binary_update, write_stamp, UpdatePlan};
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let catalog = localbox_launcher::catalog::Catalog::load(&catalog_dir(&home))
+        .map_err(|e| e.to_string())?;
+    let launcher = build_launcher(&home)?;
+    let check_only = has_flag(args, "--check");
+    let modes: Vec<Mode> = match flag_value(args, "--mode") {
+        Some(m) => vec![parse_mode(Some(m))?],
+        None => vec![Mode::Native, Mode::Turboquant, Mode::Mtpturbo],
+    };
+    let driver_major = localbox::update::parse_cuda_driver_major(&nvidia_smi_banner());
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+
+    for mode in modes {
+        let root = localx_llama_core::Launcher::install_root(&launcher, mode);
+        println!("== {} ==", mode.as_str());
+        match runtime.block_on(plan_binary_update(&catalog, mode, &root, driver_major)) {
+            Ok(UpdatePlan::UpToDate { tag }) => println!("Up to date ({tag})."),
+            Ok(UpdatePlan::MtpStatus { message }) => println!("{message}"),
+            Ok(UpdatePlan::Install { release, asset }) => {
+                if check_only {
+                    println!("Update available: {} (asset {}).", release.tag, asset.name);
+                    continue;
+                }
+                let pin = localbox::update::pin_for(&catalog, &asset.name);
+                let require = catalog
+                    .setting("LlamaCppRequireDownloadPins")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                runtime.block_on(localbox::update::install_asset(
+                    &asset,
+                    &root,
+                    pin.as_deref(),
+                    require,
+                ))?;
+                let variant = if driver_major.is_some() {
+                    "cuda"
+                } else {
+                    "cpu"
+                };
+                write_stamp(&root, &release.tag, variant).map_err(|e| e.to_string())?;
+                println!("Installed {} into {}.", release.tag, root.display());
+            }
+            Err(message) => println!("Skipped: {message}"),
+        }
+    }
+    Ok(())
+}
+
+fn nvidia_smi_banner() -> String {
+    std::process::Command::new("nvidia-smi")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+        .unwrap_or_default()
 }
 
 fn cmd_nothink_proxy(args: &[String]) -> Result<(), String> {

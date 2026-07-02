@@ -11,10 +11,12 @@
 
 use localx_llama_core::{LauncherVersion, RUNTIME_LLAMACPP, TARGET_LOCALBOX};
 
+pub mod embed;
 pub mod exec;
 pub mod fetch;
 pub mod guided;
 pub mod live;
+pub mod update;
 
 /// The product version shipped with this build (the repo `VERSION` file).
 #[must_use]
