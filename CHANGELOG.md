@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.0.0 - 2026-07-02
+
+Coordinated LocalX release.
+
 - **Retired the PowerShell launcher, the Python no-think proxy, and the .NET
   TUI; LocalBox is now a single native binary.** The `local-llm/lib` profile
   module, `localbox-proxy`, `tui/`, the Pester suite, and `install.ps1` are
