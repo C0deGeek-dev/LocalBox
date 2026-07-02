@@ -21,6 +21,14 @@
 //!   store seam.
 
 pub mod catalog;
+
+/// The product version shipped with this build (the repo `VERSION` file) —
+/// the version the launcher contract's envelope reports.
+#[must_use]
+pub fn product_version() -> &'static str {
+    include_str!("../../../VERSION").trim()
+}
+
 pub mod env;
 pub mod launcher;
 pub mod localpilot_config;

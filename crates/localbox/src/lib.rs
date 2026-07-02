@@ -21,7 +21,7 @@ pub mod update;
 /// The product version shipped with this build (the repo `VERSION` file).
 #[must_use]
 pub fn product_version() -> &'static str {
-    include_str!("../../../VERSION").trim()
+    localbox_launcher::product_version()
 }
 
 /// The version envelope this product presents on the launcher contract.
