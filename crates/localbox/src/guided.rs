@@ -510,7 +510,7 @@ fn confirm_flow(
                 }
             }
             ConfirmAction::AutoTune => {
-                auto_tune_flow(chooser, key, &plan);
+                auto_tune_flow(chooser, key, def, &plan);
             }
             ConfirmAction::Help => chooser.notice(glossary()),
             ConfirmAction::BackToModels => return,
@@ -669,19 +669,34 @@ fn customize_flow(
 struct TuneChoices {
     /// Index into [`TUNE_PROFILES`].
     profile: usize,
+    /// Index into [`TUNE_WORKLOADS`].
+    workload: usize,
     /// Index into [`TUNE_ENGINES`] (`0` = the plan's own engine).
     engine: usize,
+    /// Index into the quant list (`0` = the plan's own quant).
+    quant: usize,
+    /// Index into the context list (`0` = the plan's own context).
+    context: usize,
     /// Index into [`TUNE_BUDGETS`].
     budget: usize,
+    /// Index into [`TUNE_RUNS`].
+    runs: usize,
     /// Ignore cached trial measurements and measure fresh.
     fresh: bool,
+    /// Save the winner (off = preview only, `--no-save`).
+    save: bool,
 }
 
-const TUNE_PROFILES: &[(&str, &[&str])] = &[
-    ("Balanced (recommended)", &["--profile", "balanced"]),
-    ("Pure speed", &["--profile", "pure"]),
-    ("Both profiles (longer)", &["--profile", "both"]),
-    ("Coding agent", &["--optimize", "coding-agent"]),
+const TUNE_PROFILES: &[(&str, &str)] = &[
+    ("Balanced (recommended)", "balanced"),
+    ("Pure speed", "pure"),
+    ("Both profiles (longer)", "both"),
+];
+const TUNE_WORKLOADS: &[(&str, &str)] = &[
+    ("Coding agent (recommended)", "coding-agent"),
+    ("Generation speed", "gen"),
+    ("Prompt processing", "prompt"),
+    ("Both (longer)", "both"),
 ];
 const TUNE_ENGINES: &[(&str, Option<Mode>)] = &[
     ("From plan", None),
@@ -694,32 +709,107 @@ const TUNE_BUDGETS: &[(&str, &str)] = &[
     ("Quick (15 trials)", "15"),
     ("Deep (60 trials)", "60"),
 ];
+const TUNE_RUNS: &[(&str, &str)] = &[
+    ("Steady (3 per trial)", "3"),
+    ("Fast (1 per trial)", "1"),
+    ("Extra steady (5 per trial)", "5"),
+];
 
-/// The Auto-tune sub-menu: choose what to optimize for, the engine, the
-/// trial budget, and whether to reuse cached measurements — then run the
-/// benchmark against the CURRENT plan's quant/context (a result tuned for
-/// other settings would never be replayed by "Launch now"). KV-cache
-/// variants and GPU offload are explored by the tune itself.
-fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, plan: &GuidedPlan) {
+/// Plain-language help for every tune setting (the ℹ row).
+const TUNE_GLOSSARY: &str = "\
+Auto-tune settings:
+
+\x20 Optimize for – Balanced favours stable speed with safe memory use;\n\
+\x20                Pure speed chases raw tokens/second; Both saves one\n\
+\x20                winner per profile.\n\
+\x20 Workload     – what gets measured: Coding agent is the mixed\n\
+\x20                agent-style workload; Generation speed times answers;\n\
+\x20                Prompt processing times reading long context.\n\
+\x20 Engine       – Standard is plain llama.cpp; Turbo and Turbo+ are the\n\
+\x20                tuned forks (Turbo+ adds draft speed-ups).\n\
+\x20 Quality      – which build of the model to measure. The winner only\n\
+\x20                replays on launches with the same Quality.\n\
+\x20 Memory       – the conversation size to measure at; also part of\n\
+\x20                what the winner replays on.\n\
+\x20 Trials       – how many setting combinations to try. More finds a\n\
+\x20                better winner but takes longer.\n\
+\x20 Runs         – repeats per measurement for steadier numbers.\n\
+\x20 Measurements – reuse cached results from earlier tunes, or measure\n\
+\x20                everything fresh.\n\
+\x20 Save winner  – keep the best settings for Launch now, or run as a\n\
+\x20                preview that saves nothing.\n\
+\n\
+KV-cache variants and GPU offload are explored automatically inside the\n\
+tune. Images/vision do not affect it.";
+
+/// The Auto-tune sub-menu: every `findbest` knob with a plain value on the
+/// row (Enter cycles it), the standing what-this-does panel, and a glossary
+/// row. Quant/context default to the CURRENT plan so the winner is one that
+/// "Launch now" actually replays.
+fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, def: &ModelDef, plan: &GuidedPlan) {
+    let quants: Vec<String> = def.quants.keys().cloned().collect();
+    let contexts: Vec<String> = def
+        .contexts
+        .keys()
+        .filter(|k| !k.trim().is_empty())
+        .cloned()
+        .collect();
     let mut choices = TuneChoices {
         profile: 0,
+        workload: 0,
         engine: 0,
+        quant: 0,
+        context: 0,
         budget: 0,
+        runs: 0,
         fresh: false,
+        save: true,
     };
+    chooser.set_panel(Some((
+        "Auto-tune".to_string(),
+        "Benchmarks this model on your GPU and saves the winning\n\
+         settings, so Launch now (with Auto-tune on) replays them.\n\
+         KV-cache variants and GPU offload are explored automatically.\n\
+         Pick ℹ for what each setting means."
+            .to_string(),
+    )));
+
     let mut cursor = 0;
     loop {
-        let engine_label = match TUNE_ENGINES[choices.engine].1 {
+        let engine_value = match TUNE_ENGINES[choices.engine].1 {
             None => format!("From plan ({})", engine_label(plan.mode)),
             Some(mode) => engine_label(mode).to_string(),
+        };
+        let quant_value = if choices.quant == 0 {
+            format!(
+                "From plan ({})",
+                localbox_tui::vocab::quality_label(def, &plan.quant)
+            )
+        } else {
+            localbox_tui::vocab::quality_label(def, &quants[choices.quant - 1])
+        };
+        let context_value = if choices.context == 0 {
+            format!(
+                "From plan ({})",
+                localbox_tui::vocab::memory_label(def, &plan.context_key)
+            )
+        } else {
+            localbox_tui::vocab::memory_label(def, &contexts[choices.context - 1])
         };
         let rows = vec![
             MenuRow::plain(format!(
                 "Optimize for:  {}",
                 TUNE_PROFILES[choices.profile].0
             )),
-            MenuRow::plain(format!("Engine:        {engine_label}")),
+            MenuRow::plain(format!(
+                "Workload:      {}",
+                TUNE_WORKLOADS[choices.workload].0
+            )),
+            MenuRow::plain(format!("Engine:        {engine_value}")),
+            MenuRow::plain(format!("Quality:       {quant_value}")),
+            MenuRow::plain(format!("Memory:        {context_value}")),
             MenuRow::plain(format!("Trials:        {}", TUNE_BUDGETS[choices.budget].0)),
+            MenuRow::plain(format!("Runs:          {}", TUNE_RUNS[choices.runs].0)),
             MenuRow::plain(format!(
                 "Measurements:  {}",
                 if choices.fresh {
@@ -728,6 +818,15 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, plan: &GuidedPlan) {
                     "reuse cached results"
                 }
             )),
+            MenuRow::plain(format!(
+                "Save winner:   {}",
+                if choices.save {
+                    "yes — Launch now replays it"
+                } else {
+                    "no — preview only"
+                }
+            )),
+            MenuRow::plain("ℹ  What do these mean?"),
             MenuRow::plain("▶  Start auto-tune"),
             MenuRow::plain("←  Back"),
         ];
@@ -741,10 +840,16 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, plan: &GuidedPlan) {
         cursor = choice;
         match choice {
             0 => choices.profile = (choices.profile + 1) % TUNE_PROFILES.len(),
-            1 => choices.engine = (choices.engine + 1) % TUNE_ENGINES.len(),
-            2 => choices.budget = (choices.budget + 1) % TUNE_BUDGETS.len(),
-            3 => choices.fresh = !choices.fresh,
-            4 => break,
+            1 => choices.workload = (choices.workload + 1) % TUNE_WORKLOADS.len(),
+            2 => choices.engine = (choices.engine + 1) % TUNE_ENGINES.len(),
+            3 => choices.quant = (choices.quant + 1) % (quants.len() + 1),
+            4 => choices.context = (choices.context + 1) % (contexts.len() + 1),
+            5 => choices.budget = (choices.budget + 1) % TUNE_BUDGETS.len(),
+            6 => choices.runs = (choices.runs + 1) % TUNE_RUNS.len(),
+            7 => choices.fresh = !choices.fresh,
+            8 => choices.save = !choices.save,
+            9 => chooser.notice(TUNE_GLOSSARY),
+            10 => break,
             _ => return,
         }
     }
@@ -752,12 +857,18 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, plan: &GuidedPlan) {
     // Hand the screen over and run the benchmark; the confirm menu
     // returns afterwards.
     chooser.release();
-    chooser.notice(
-        "Auto-tune measures this model on your GPU and saves the fastest safe \
-         settings for the plan you have right now (KV-cache variants and GPU \
-         offload are explored automatically). Ctrl+C stops it.",
-    );
+    chooser.notice("Auto-tune is starting — Ctrl+C stops it.");
     let mode = TUNE_ENGINES[choices.engine].1.unwrap_or(plan.mode);
+    let quant = if choices.quant == 0 {
+        plan.quant.clone()
+    } else {
+        quants[choices.quant - 1].clone()
+    };
+    let context = if choices.context == 0 {
+        plan.context_key.clone()
+    } else {
+        contexts[choices.context - 1].clone()
+    };
     let mut args = vec![
         "findbest".to_string(),
         "--model".to_string(),
@@ -766,29 +877,34 @@ fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, plan: &GuidedPlan) {
         mode.as_str().to_string(),
         "--budget".to_string(),
         TUNE_BUDGETS[choices.budget].1.to_string(),
+        "--runs".to_string(),
+        TUNE_RUNS[choices.runs].1.to_string(),
+        "--profile".to_string(),
+        TUNE_PROFILES[choices.profile].1.to_string(),
+        "--optimize".to_string(),
+        TUNE_WORKLOADS[choices.workload].1.to_string(),
     ];
-    if !plan.context_key.trim().is_empty() {
+    if !context.trim().is_empty() {
         args.push("--context".to_string());
-        args.push(plan.context_key.clone());
+        args.push(context);
     }
-    if !plan.quant.trim().is_empty() {
+    if !quant.trim().is_empty() {
         args.push("--quant".to_string());
-        args.push(plan.quant.clone());
+        args.push(quant);
     }
-    args.extend(
-        TUNE_PROFILES[choices.profile]
-            .1
-            .iter()
-            .map(ToString::to_string),
-    );
     if choices.fresh {
         args.push("--no-cache".to_string());
     }
+    if !choices.save {
+        args.push("--no-save".to_string());
+    }
 
     match crate::exec::run_interactive("localbench", &args) {
-        Ok(status) if status.success() => chooser.notice(
-            "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings.",
-        ),
+        Ok(status) if status.success() => chooser.notice(if choices.save {
+            "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings."
+        } else {
+            "Auto-tune preview finished; nothing was saved."
+        }),
         Ok(_) => chooser.notice("Auto-tune did not finish; the recommended defaults still apply."),
         Err(_) => chooser.notice(
             "LocalBench is not installed, so Auto-tune cannot run.\n\
