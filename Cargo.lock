@@ -822,6 +822,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23fb14cb19457329c82206317a5663005a4d404783dc74f4252769b0d5f42856"
 
 [[package]]
+name = "localbox"
+version = "0.1.0"
+dependencies = [
+ "localbox-launcher",
+ "localx-llama-core",
+ "localx-llama-runtime",
+ "reqwest",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "localbox-launcher"
 version = "0.1.0"
 dependencies = [
@@ -849,7 +864,7 @@ dependencies = [
 [[package]]
 name = "localx-llama-core"
 version = "0.1.0"
-source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=29fb9a6bd3af86ba06a610ab5d015e60d88ab8c0#29fb9a6bd3af86ba06a610ab5d015e60d88ab8c0"
+source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=880e01b4a3ede61e788d0d74d143bb9606488d1d#880e01b4a3ede61e788d0d74d143bb9606488d1d"
 dependencies = [
  "regex",
  "serde",
@@ -860,7 +875,7 @@ dependencies = [
 [[package]]
 name = "localx-llama-runtime"
 version = "0.1.0"
-source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=29fb9a6bd3af86ba06a610ab5d015e60d88ab8c0#29fb9a6bd3af86ba06a610ab5d015e60d88ab8c0"
+source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=880e01b4a3ede61e788d0d74d143bb9606488d1d#880e01b4a3ede61e788d0d74d143bb9606488d1d"
 dependencies = [
  "axum",
  "dunce",

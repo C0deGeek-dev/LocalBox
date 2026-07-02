@@ -1,0 +1,25 @@
+[package]
+name = "localbox"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The LocalBox application: live wiring over the launcher library — model download, llama-server spawn, in-process no-think proxy hosting, and agent launch."
+
+[lints]
+workspace = true
+
+[dependencies]
+localbox-launcher = { path = "../localbox-launcher" }
+localx-llama-core = { workspace = true }
+localx-llama-runtime = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

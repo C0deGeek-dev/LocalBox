@@ -73,12 +73,15 @@ impl LlamaLauncher {
     }
 
     /// The model folder under the GGUF root (`<root>/<Def.Root or key>`).
+    /// The root setting may be spelled with `~` or `%VAR%` — a child process
+    /// never expands those, so they resolve here before entering any argv.
     fn model_folder(&self, def: &ModelDef, key_fallback: &str) -> Result<PathBuf, LauncherError> {
         let root = self.catalog.gguf_root().ok_or_else(|| {
             LauncherError::Unavailable(
                 "LlamaCppGgufRoot is not configured; set it in settings.json".to_string(),
             )
         })?;
+        let root = expand_path_with_home(&root.to_string_lossy(), &self.home);
         let folder = def.root.clone().unwrap_or_else(|| key_fallback.to_string());
         Ok(root.join(folder))
     }
