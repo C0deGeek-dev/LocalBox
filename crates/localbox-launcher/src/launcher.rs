@@ -290,16 +290,18 @@ impl Launcher for LlamaLauncher {
     }
 
     fn wait_server(&self, port: u16, timeout_secs: u32) -> Result<(), LauncherError> {
-        let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_secs));
-        while Instant::now() < deadline {
-            if is_port_listening(port) {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(250));
+        // Readiness is /health answering 200: a llama-server listens
+        // immediately and answers 503 while the model is still loading.
+        if localx_llama_runtime::server::wait_for_ready(
+            port,
+            Duration::from_secs(u64::from(timeout_secs)),
+        ) {
+            Ok(())
+        } else {
+            Err(LauncherError::Unavailable(format!(
+                "server on port {port} did not become ready within {timeout_secs}s"
+            )))
         }
-        Err(LauncherError::Unavailable(format!(
-            "server on port {port} did not answer within {timeout_secs}s"
-        )))
     }
 
     fn stop_server(&self, _quiet: bool) {

@@ -387,10 +387,10 @@ fn cmd_embed_serve(args: &[String]) -> Result<(), String> {
         .join("embed-server.log");
     let child = localbox::exec::spawn_server(&binary, &argv, &log).map_err(|e| e.to_string())?;
 
-    if !runtime.block_on(localx_llama_runtime::server::wait_for_port(
+    if !localx_llama_runtime::server::wait_for_ready(
         config.port,
         std::time::Duration::from_secs(120),
-    )) {
+    ) {
         return Err(format!(
             "the embedding server did not start — the log is at {}",
             log.display()
