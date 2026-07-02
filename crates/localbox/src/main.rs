@@ -30,6 +30,9 @@ Usage:
   localbox serve <model> [options]    start the model (and proxy) headless
   localbox stop                       stop every model server and the proxy
   localbox status                     report serve health and the remedy
+  localbox info [model]               list the configured models, or one in detail
+  localbox purge                      stop servers and delete downloaded model files
+  localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
   localbox embed-stop                 stop the embedding server
   localbox update [--mode <m>] [--check]
@@ -75,6 +78,9 @@ fn run() -> ExitCode {
         "serve" => cmd_launch(&args[1..], AgentKind::ServeOnly),
         "stop" => cmd_stop(),
         "status" => cmd_status(&args[1..]),
+        "info" => cmd_info(&args[1..]),
+        "purge" => cmd_purge(),
+        "log" => cmd_log(&args[1..]),
         "embed-serve" => cmd_embed_serve(&args[1..]),
         "embed-stop" => cmd_embed_stop(),
         "update" => cmd_update(&args[1..]),
@@ -270,6 +276,74 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
         .transpose()?
         .unwrap_or(DEFAULT_SERVER_PORT);
     println!("{}", status_report(proxy_port, server_port));
+    Ok(())
+}
+
+fn cmd_info(args: &[String]) -> Result<(), String> {
+    use localbox::manage::{render_model_detail, render_model_overview};
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
+    match args.first().filter(|a| !a.starts_with("--")) {
+        Some(name) => print!("{}", render_model_detail(&catalog, name)?),
+        None => print!("{}", render_model_overview(&catalog)),
+    }
+    Ok(())
+}
+
+fn cmd_purge() -> Result<(), String> {
+    use localbox::manage::purge_targets;
+    use localbox_launcher::launcher::expand_path_with_home;
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
+    let root = catalog
+        .gguf_root()
+        .ok_or("LlamaCppGgufRoot is not configured; set it in settings.json")?;
+    let root = expand_path_with_home(&root.to_string_lossy(), &home);
+
+    let stopped = stop_all(&home, &[DEFAULT_PROXY_PORT]);
+    if stopped > 0 {
+        println!("Stopped {stopped} running process(es).");
+    }
+    let mut removed = 0;
+    for folder in purge_targets(&catalog, &root) {
+        if !folder.is_dir() {
+            continue;
+        }
+        std::fs::remove_dir_all(&folder)
+            .map_err(|e| format!("could not delete {}: {e}", folder.display()))?;
+        println!("Deleted {}", folder.display());
+        removed += 1;
+    }
+    if removed == 0 {
+        println!(
+            "No downloaded model files were found under {}.",
+            root.display()
+        );
+    } else {
+        println!("Done. Models download again on the next launch.");
+    }
+    Ok(())
+}
+
+fn cmd_log(args: &[String]) -> Result<(), String> {
+    use localbox::manage::{newest_log, tail_lines};
+    let lines: usize = match flag_value(args, "--lines") {
+        Some(v) => v.parse().map_err(|_| format!("bad line count '{v}'"))?,
+        None => 80,
+    };
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let logs_dir = home.join(".local-llm").join("logs");
+    let Some(path) = newest_log(&logs_dir) else {
+        println!(
+            "No server logs yet (nothing under {}). Launch a model first.",
+            logs_dir.display()
+        );
+        return Ok(());
+    };
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    println!("Tail of {} (last {lines} lines):", path.display());
+    println!("{}", tail_lines(&content, lines));
     Ok(())
 }
 
