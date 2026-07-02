@@ -20,7 +20,7 @@ pub enum CatalogError {
     /// The catalog file is missing entirely.
     #[error(
         "catalog not found at {0}. Copy llm-models.example.json to llm-models.json \
-         (or re-run the installer) before launching."
+         (or run `localbox` once to seed it) before launching."
     )]
     CatalogMissing(String),
     /// A model entry does not deserialize.

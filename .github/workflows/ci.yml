@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust:
+    # Native workspace gate, tri-platform (Windows/Linux/macOS are equal
+    # tier-1). The shared localx-llama crates are a public rev-pinned git
+    # dependency, so no fetch secret is needed.
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo check --workspace
+
+  launcher-contract:
+    # Cross-repo guard: run the LocalBench consumer's gate against this
+    # checkout's envelope fixture, so a breaking envelope change fails at
+    # the source, not in a user's tuning run.
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v6
+      - name: Checkout LocalBench
+        uses: actions/checkout@v6
+        with:
+          repository: C0deGeek-dev/LocalBench
+          path: external/LocalBench
+      - name: Install toolchain (pinned by LocalBench's rust-toolchain.toml)
+        working-directory: external/LocalBench
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: external/LocalBench
+      - name: Assert contract conformance
+        working-directory: external/LocalBench
+        env:
+          LOCALBOX_ROOT: ${{ github.workspace }}
+        run: cargo test -p localbench --test launcher_contract_localbox -- --nocapture

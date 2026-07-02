@@ -4,6 +4,24 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Retired the PowerShell launcher, the Python no-think proxy, and the .NET
+  TUI; LocalBox is now a single native binary.** The `local-llm/lib` profile
+  module, `localbox-proxy`, `tui/`, the Pester suite, and `install.ps1` are
+  gone — every behaviour they carried ships in the Rust binary, each
+  hard-won invariant pinned by a golden test before its logic was ported.
+  The no-think proxy runs in-process (the binary hosts it via
+  `localbox nothink-proxy`), the guided launcher is `localbox` itself, and
+  the first run seeds `~/.local-llm` (defaults plus an editable catalog,
+  never overwriting). Install is `cargo install --path crates/localbox
+  --locked` or a release binary — LocalBox no longer needs PowerShell,
+  .NET, or Python at runtime on any platform. CI keeps the tri-platform
+  Rust gate and the cross-repo launcher-contract check.
+- **Catalog inspection and cleanup in the binary.** `localbox info` lists
+  the configured models by tier (or one in detail; any of a model's names
+  resolves), `localbox purge` stops servers and deletes downloaded model
+  files strictly under the GGUF root, and `localbox log` tails the most
+  recent server log.
+
 - **Driver policy + resilience (`localbox-tui::driver`).** Scrollback safety
   by construction: the terminal options pin an inline fixed-height viewport
   (no alternate screen, no whole-screen clear — content above the live band

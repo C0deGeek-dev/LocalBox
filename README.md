@@ -59,42 +59,36 @@ path local.
 
 ## Quick start
 
-From a PowerShell window in this repository:
+LocalBox is a single native binary — no PowerShell, .NET, or Python needed.
+Build it from this repository (or use a release binary):
 
-```powershell
-. .\install.ps1
+```text
+cargo install --path crates/localbox --locked
 ```
 
-Open a new PowerShell window, then launch the guided model picker:
+Then launch the guided model picker:
 
-```powershell
-llm
+```text
+localbox
 ```
 
-That is the shortest path. The installer wires your profile, deploys the
-launcher, and can connect companion LocalX checkouts. Preview every change first
-with:
-
-```powershell
-. .\install.ps1 -DryRun
-```
-
-See the [installation guide](docs/install.md) for symlink mode, verified
-downloads, companion tools, and the Terminal.Gui interface.
+That is the shortest path. The first run seeds `~/.local-llm` with the
+defaults and an editable model catalog, never overwriting anything you
+already have. See the [installation guide](docs/install.md) for details.
 
 ## Everyday commands
 
 | Goal | Command |
 |---|---|
-| Pick a model interactively | `llm` |
-| Use the native selectable wizard | `llmc` |
-| Open the status dashboard | `info` |
-| Show every LocalBox and LocalBench command | `info -Commands` |
-| Run Qwen3-Coder through LocalPilot | `qcoder -Ctx 32k -LocalPilot` |
-| Run Qwen 3.6 Plus through Claude Code | `q36p -Ctx 128k` |
-| Run through Codex | `qcoder -Ctx 32k -Codex` |
-| Replay the best measured profile | `q36p -AutoBest` |
-| Use the configured default | `llmdefault` |
+| Pick a model interactively | `localbox` |
+| Guided launcher with plain-text menus | `localbox --plain` |
+| Launch a model into Claude Code | `localbox launch <model>` |
+| Run through LocalPilot | `localbox launch <model> --agent localpilot` |
+| Run through Codex | `localbox launch <model> --agent codex` |
+| Serve headless (no agent) | `localbox serve <model>` |
+| List the configured models | `localbox info` |
+| Serve health and the remedy | `localbox status` |
+| Stop everything | `localbox stop` |
 
 Model aliases come from the catalog, so the exact list on your machine may be
 different. `info -Commands` is the source of truth for the installed command
