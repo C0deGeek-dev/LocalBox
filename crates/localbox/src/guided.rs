@@ -510,30 +510,7 @@ fn confirm_flow(
                 }
             }
             ConfirmAction::AutoTune => {
-                // Hand the screen over and actually run the benchmark the
-                // row promises; the confirm menu returns afterwards.
-                chooser.release();
-                chooser.notice(
-                    "Auto-tune measures this model on your GPU and saves the fastest safe \
-                     settings. The benchmark can take a while — Ctrl+C stops it.",
-                );
-                let args = vec![
-                    "findbest".to_string(),
-                    "--model".to_string(),
-                    key.to_string(),
-                ];
-                match crate::exec::run_interactive("localbench", &args) {
-                    Ok(status) if status.success() => chooser.notice(
-                        "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings.",
-                    ),
-                    Ok(_) => chooser.notice(
-                        "Auto-tune did not finish; the recommended defaults still apply.",
-                    ),
-                    Err(_) => chooser.notice(
-                        "LocalBench is not installed, so Auto-tune cannot run.\n\
-                         Install it, then either pick this row again or run:\n  localbench findbest --model <model>",
-                    ),
-                }
+                auto_tune_flow(chooser, key, &plan);
             }
             ConfirmAction::Help => chooser.notice(glossary()),
             ConfirmAction::BackToModels => return,
@@ -550,6 +527,9 @@ fn customize_flow(
     overrides: &mut PlanOverrides,
     vram: i64,
 ) {
+    // The cursor survives the loop: a toggle re-renders with the selection
+    // still on the row that was toggled, not jumped back to the top.
+    let mut cursor = 0;
     loop {
         if chooser.quit_requested() {
             return;
@@ -561,9 +541,10 @@ fn customize_flow(
             .iter()
             .map(|row| MenuRow::plain(row.label.clone()))
             .collect();
-        let Some(choice) = chooser.choose("Customize settings", &rows, 0) else {
+        let Some(choice) = chooser.choose("Customize settings", &rows, cursor) else {
             return;
         };
+        cursor = choice;
         let action = &menu[choice].action;
         if let Some(explanation) = locked_explanation(action) {
             chooser.notice(explanation);
@@ -668,6 +649,9 @@ fn customize_flow(
                             {
                                 store.persist_value("DefaultLaunch", value);
                                 chooser.notice("Saved. Launch now replays these settings.");
+                                // Saving is a finishing move: hand back to
+                                // the Ready-to-launch menu.
+                                return;
                             }
                         }
                         Err(e) => chooser.notice(&plain_warning("save", &e.to_string())),
@@ -678,6 +662,63 @@ fn customize_flow(
             CustomizeAction::Done => return,
             CustomizeAction::ModeLocked | CustomizeAction::KvLocked => {}
         }
+    }
+}
+
+/// The Auto-tune sub-menu: pick what to tune for, then run the benchmark
+/// against the CURRENT plan's quant/context/engine — a result tuned for
+/// other settings would never be replayed by "Launch now".
+fn auto_tune_flow(chooser: &mut dyn Chooser, key: &str, plan: &GuidedPlan) {
+    let rows = vec![
+        MenuRow::plain("Balanced (recommended) — best mix of speed and stability"),
+        MenuRow::plain("Pure speed — fastest generation wins"),
+        MenuRow::plain("Coding agent — tuned for agent-style workloads"),
+        MenuRow::plain("← Back"),
+    ];
+    let Some(choice) = chooser.choose("Auto-tune: what should it optimize for?", &rows, 0) else {
+        return;
+    };
+    let extra: &[&str] = match choice {
+        0 => &["--profile", "balanced"],
+        1 => &["--profile", "pure"],
+        2 => &["--optimize", "coding-agent"],
+        _ => return,
+    };
+
+    // Hand the screen over and run the benchmark the row promises; the
+    // confirm menu returns afterwards.
+    chooser.release();
+    chooser.notice(
+        "Auto-tune measures this model on your GPU and saves the fastest safe \
+         settings for the plan you have right now. This can take a while — \
+         Ctrl+C stops it.",
+    );
+    let mut args = vec![
+        "findbest".to_string(),
+        "--model".to_string(),
+        key.to_string(),
+        "--mode".to_string(),
+        plan.mode.as_str().to_string(),
+    ];
+    if !plan.context_key.trim().is_empty() {
+        args.push("--context".to_string());
+        args.push(plan.context_key.clone());
+    }
+    if !plan.quant.trim().is_empty() {
+        args.push("--quant".to_string());
+        args.push(plan.quant.clone());
+    }
+    args.extend(extra.iter().map(ToString::to_string));
+
+    match crate::exec::run_interactive("localbench", &args) {
+        Ok(status) if status.success() => chooser.notice(
+            "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings.",
+        ),
+        Ok(_) => chooser.notice("Auto-tune did not finish; the recommended defaults still apply."),
+        Err(_) => chooser.notice(
+            "LocalBench is not installed, so Auto-tune cannot run.\n\
+             Install it, then either pick this row again or run:\n  localbench findbest --model <model>",
+        ),
     }
 }
 

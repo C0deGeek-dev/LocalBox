@@ -141,8 +141,11 @@ pub fn resolve_launch_plan(
         .or(defaults.use_auto_best)
         .unwrap_or(false);
     let vision = overrides.vision.unwrap_or(false);
+    // Strict is per-model like quant/context: the saved recipe's toggle
+    // replays only for the model it was saved for.
     let strict = overrides
         .strict
+        .or(if same_model { defaults.strict } else { None })
         .unwrap_or_else(|| def.strict.unwrap_or(false));
     let kv_cache_k = first_non_blank(&[
         overrides.kv_cache_k.as_deref(),
@@ -249,6 +252,16 @@ mod tests {
             "the def's own quant, not the recipe's"
         );
         assert_eq!(plan.context_key, "", "the def's default context");
+    }
+
+    #[test]
+    fn a_saved_strict_toggle_replays_for_its_own_model_only() {
+        let mut recipe = saved();
+        recipe.strict = Some(false); // saved with strict turned OFF
+        let plan = resolve_launch_plan("q36apex", &def(), &recipe, &PlanOverrides::default());
+        assert!(!plan.strict, "the recipe's toggle replays for its model");
+        let other = resolve_launch_plan("other-model", &def(), &recipe, &PlanOverrides::default());
+        assert!(other.strict, "another model keeps its own def strict");
     }
 
     #[test]
