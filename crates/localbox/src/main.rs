@@ -5,10 +5,10 @@
 //! thread with an explicit stack size — Windows main threads are smaller
 //! than the Linux/macOS default and deep CLI/TUI stacks overflow there.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use localbox::exec::{home_dir, probe_vram_gb};
+use localbox::guided::{catalog_dir, run_guided};
 use localbox::live::{execute_launch, status_report, stop_all, AgentKind};
 use localbox::{product_envelope, product_version};
 use localbox_launcher::catalog::Catalog;
@@ -24,6 +24,8 @@ const USAGE: &str = "\
 localbox — run a local model and the coding agent of your choice
 
 Usage:
+  localbox                            open the guided launcher (pick a model)
+  localbox --plain                    guided launcher with plain-text menus
   localbox launch <model> [options]   resolve, start, and hand off to an agent
   localbox serve <model> [options]    start the model (and proxy) headless
   localbox stop                       stop every model server and the proxy
@@ -60,13 +62,15 @@ fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or("");
     let result = match command {
+        "" => run_guided(false),
+        "--plain" => run_guided(true),
         "launch" => cmd_launch(&args[1..], AgentKind::Claude),
         "serve" => cmd_launch(&args[1..], AgentKind::ServeOnly),
         "stop" => cmd_stop(),
         "status" => cmd_status(&args[1..]),
         "version" => cmd_version(),
         "nothink-proxy" => cmd_nothink_proxy(&args[1..]),
-        "" | "help" | "--help" | "-h" => {
+        "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())
         }
@@ -126,20 +130,6 @@ fn parse_agent(value: Option<&str>, default: AgentKind) -> Result<AgentKind, Str
             "unknown agent '{other}' (expected claude, localpilot, codex, or none)"
         )),
     }
-}
-
-/// The catalog directory: the installed `~/.local-llm` tree, or a repo
-/// checkout's `local-llm/` when running from source.
-fn catalog_dir(home: &std::path::Path) -> PathBuf {
-    let installed = home.join(".local-llm");
-    if installed.join("llm-models.json").is_file() {
-        return installed;
-    }
-    let checkout = PathBuf::from("local-llm");
-    if checkout.is_dir() {
-        return checkout;
-    }
-    installed
 }
 
 fn build_launcher(home: &std::path::Path) -> Result<LlamaLauncher, String> {

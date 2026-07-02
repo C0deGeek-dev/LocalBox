@@ -269,6 +269,19 @@ impl JsonSettingsStore {
             let _ = std::fs::write(&self.path, json);
         }
     }
+
+    /// A persisted setting's raw value, when present.
+    #[must_use]
+    pub fn get_value(&self, name: &str) -> Option<&Value> {
+        self.settings.get(name)
+    }
+
+    /// Persist a structured setting (catalog-only keys are refused).
+    pub fn persist_value(&mut self, name: &str, value: Value) {
+        if localx_llama_core::config::set_setting(&mut self.settings, name, value).is_ok() {
+            self.write();
+        }
+    }
 }
 
 impl SettingsStore for JsonSettingsStore {

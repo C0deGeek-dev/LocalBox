@@ -13,6 +13,9 @@ workspace = true
 
 [dependencies]
 localbox-launcher = { path = "../localbox-launcher" }
+localbox-tui = { path = "../localbox-tui" }
+ratatui = { workspace = true, features = ["crossterm"] }
+crossterm = { workspace = true }
 localx-llama-core = { workspace = true }
 localx-llama-runtime = { workspace = true }
 serde_json = { workspace = true }
