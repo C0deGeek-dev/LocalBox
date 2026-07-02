@@ -5,14 +5,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use localx_llama_core::{
     BackendSession, KvTypes, Launcher, LauncherError, LauncherVersion, Mode, ModelDef,
     RUNTIME_LLAMACPP, TARGET_LOCALBOX,
 };
 use localx_llama_runtime::server::server_exe_name;
-use localx_llama_runtime::{is_port_free, is_port_listening};
+use localx_llama_runtime::is_port_free;
 
 use crate::catalog::Catalog;
 

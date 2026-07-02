@@ -45,6 +45,37 @@ model catalog (`llm-models.json`). Existing files are never overwritten.
 An NVIDIA GPU is recommended; VRAM is auto-detected via `nvidia-smi` and
 drives the guided launcher's fit hints.
 
+## Upgrading from 1.x
+
+LocalBox 1.x was a PowerShell launcher (`install.ps1`, `LocalLLMProfile.ps1`,
+the `llm*` command family). 2.0.0 replaced all of it with the `localbox`
+binary, and the old cleanup path went with it — so a 1.x install needs three
+manual steps after the upgrade:
+
+1. **Remove the profile hook.** `install.ps1` added a dot-source line to your
+   PowerShell profile (`$PROFILE.CurrentUserAllHosts`, typically
+   `Documents\PowerShell\profile.ps1`). Delete the line that loads
+   `LocalLLMProfile.ps1` — with the file gone it errors at every shell start.
+2. **Delete the deployed 1.x files.** Remove
+   `~/.local-llm/LocalLLMProfile.ps1` and `~/.local-llm/lib/` (symlinks in a
+   symlink-mode install, copies in a copy-mode install). Keep everything
+   else — `llm-models.json`, `settings.json`, downloaded models, and tuner
+   state all carry over unchanged.
+3. **Install the binary** as above, then run `localbox status` — it detects
+   any remaining 1.x leftovers and repeats this remedy.
+
+The commands map directly:
+
+| 1.x | 2.x |
+|---|---|
+| `llm` | `localbox` |
+| `llmdefaultserve` / `Start-LocalLLMHeadlessServe` | `localbox serve <model>` |
+| `llmstop` | `localbox stop` |
+| `llm-update` (llama.cpp binaries) | `localbox update` |
+| `llm-update` (launcher itself) | `git pull` + `cargo install --path crates/localbox --locked` |
+| `llmembedserve` | `localbox embed-serve` |
+| `llmdocs` / `info -Commands` | `localbox help` |
+
 ## Companions
 
 - [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) — install its CLI

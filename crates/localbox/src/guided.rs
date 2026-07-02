@@ -279,6 +279,11 @@ impl Chooser for TuiChooser {
 pub fn run_guided(plain_requested: bool) -> Result<(), String> {
     ensure_utf8_output();
     let home = home_dir().ok_or("could not determine the user home directory")?;
+    // Before the viewport: a 1.x leftover warning belongs in scrollback.
+    let leftovers = crate::migrate::v1_leftover_notice(&crate::migrate::find_v1_leftovers(&home));
+    if !leftovers.is_empty() {
+        println!("{leftovers}");
+    }
     let degraded = should_degrade(std::io::stdout().is_terminal(), plain_requested);
     let mut chooser: Box<dyn Chooser> = if degraded {
         Box::new(PlainChooser)

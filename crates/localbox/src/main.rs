@@ -276,6 +276,14 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
         .transpose()?
         .unwrap_or(DEFAULT_SERVER_PORT);
     println!("{}", status_report(proxy_port, server_port));
+    if let Some(home) = home_dir() {
+        let notice = localbox::migrate::v1_leftover_notice(&localbox::migrate::find_v1_leftovers(
+            &home,
+        ));
+        if !notice.is_empty() {
+            println!("{notice}");
+        }
+    }
     Ok(())
 }
 

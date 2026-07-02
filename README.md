@@ -91,7 +91,7 @@ already have. See the [installation guide](docs/install.md) for details.
 | Stop everything | `localbox stop` |
 
 Model aliases come from the catalog, so the exact list on your machine may be
-different. `info -Commands` is the source of truth for the installed command
+different. `localbox help` is the source of truth for the installed command
 surface.
 
 ## What LocalBox does for you
@@ -118,6 +118,7 @@ GGUF model ──> LocalBox ──> llama-server ──> Claude Code / Codex / L
 | I want to… | Read |
 |---|---|
 | Install or repair LocalBox | [Install](docs/install.md) |
+| Upgrade from a 1.x install | [Install → Upgrading from 1.x](docs/install.md#upgrading-from-1x) |
 | Learn the day-to-day flags | [Usage](docs/usage.md) |
 | Connect a coding-agent harness | [Harness mode](docs/harness-mode.md) |
 | Add or size a model | [Model management](docs/model-management.md) |

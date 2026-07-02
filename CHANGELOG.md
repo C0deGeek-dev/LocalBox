@@ -4,6 +4,21 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **1.x leftovers are now detected and named.** A 1.x `install.ps1`
+  deployment survives the 2.0.0 upgrade badly: a symlink-mode install leaves
+  a dangling `~/.local-llm/LocalLLMProfile.ps1` link (a red "Could not find
+  file" error at every PowerShell start), a copy-mode install keeps running
+  the stale 1.x launcher silently — and the cleanup logic lived in the
+  deleted `install.ps1`, so nothing repaired either. `localbox status` and
+  the guided launcher now detect the deployed 1.x launcher file, the `lib/`
+  module tree, and a PowerShell profile that still dot-sources
+  `LocalLLMProfile.ps1`, and print one bounded notice with the remedy
+  (`localbox::migrate`, unit-tested).
+- **"Upgrading from 1.x" documented.** `docs/install.md` gains the manual
+  migration steps (remove the profile hook, delete the deployed 1.x files,
+  install the binary) and the full 1.x → 2.x command mapping; the README
+  links it and no longer cites the retired `info -Commands`.
+
 ## v2.0.0 - 2026-07-02
 
 Coordinated LocalX release.
