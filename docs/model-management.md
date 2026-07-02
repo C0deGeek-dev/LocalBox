@@ -2,60 +2,54 @@
 
 Part of the [LocalBox documentation](README.md).
 
-```powershell
-addllm <hf-url-or-repo> -Key <key> [-Quants Q4_K_P,IQ4_XS] [-DefaultQuant Q4_K_P] [-Tier recommended]
+The model catalog is `~/.local-llm/llm-models.json` — an ordinary JSON file
+that is yours to edit. The first run seeds it from the shipped example, so you
+always have a working template with real entries next to it
+(`llm-models.example.json`).
+
+A catalog entry:
+
+```jsonc
+"q36plus": {
+  "DisplayName": "Qwen 3.6 Plus",
+  "Description": "General coding model.",       // shown in the picker
+  "Tier": "recommended",                        // picker shows this tier first
+  "Repo": "owner/name",                         // Hugging Face repo id
+  "Root": "q36plus",                            // folder under the GGUF root
+  "Quants": {
+    "q4kp":  { "File": "model-Q4_K_P.gguf", "SizeGB": 18.1 },
+    "iq4xs": "model-IQ4_XS.gguf"                // compact spelling works too
+  },
+  "Quant": "q4kp",                              // default quant
+  "Contexts": { "": 32768, "64k": 65536, "128k": 131072 }
+}
 ```
 
-`addllm` registers **every recognized GGUF quant** the HF repo publishes by
-default (the `imatrix.gguf` calibration file is excluded). Pass `-Quants` only
-when you want to filter the catalog entry to a subset. The GGUF itself is
-downloaded on first launch.
+The GGUF itself downloads from Hugging Face on first launch (resumable,
+verified against the expected destination). `localbox info <model>` shows the
+entry as LocalBox resolved it; unknown names list the known keys.
 
-Backfilling missing quants on an existing entry (rerunning HF discovery
-without overwriting your manual `QuantNotes` / `ContextNotes`):
-
-```powershell
-updatellm <key>            # adds any HF quants missing from the entry
-updatellm <key> -DryRun    # preview without writing
-```
-
-Removing a model:
-
-```powershell
-removellm <key>            # confirms first; deletes GGUF folder by default
-removellm <key> -Force     # skip confirmation
-removellm <key> -KeepFiles # keep the GGUF blobs on disk
-```
+Removing a model is editing it out of the catalog; `localbox purge` stops
+servers and deletes every downloaded model folder under the GGUF root (models
+download again on the next launch).
 
 ---
 
 ## VRAM-aware tradeoffs
 
-The launcher reads your GPU's VRAM and uses it to **tag every quant** with
-`[fits]` / `[tight]` / `[over]` in `info` and the `llm` wizard, so you can see
-at a glance which builds will load fully on your card.
+The launcher reads your GPU's VRAM and uses it to tag every quant as
+fits / tight / over in the guided launcher, so you can see at a glance which
+builds will load fully on your card.
 
 VRAM resolves in this order:
 
-1. `VRAMGB` set in `settings.json` or `llm-models.json` (top-level).
-2. `nvidia-smi --query-gpu=memory.total` auto-detect (largest GPU on a multi-GPU box).
+1. `VRAMGB` set in `settings.json` (top-level).
+2. `nvidia-smi --query-gpu=memory.total` auto-detect.
 3. Fallback to 24.
 
-The `info` dashboard shows the resolved value and source
-(`auto` / `configured` / `fallback`).
-
-```powershell
-Set-LocalLLMSetting VRAMGB 32          # 5090
-Set-LocalLLMSetting VRAMGB 48          # RTX 6000 Ada / dual-card aggregate
-Set-LocalLLMSetting VRAMGB $null       # remove override, fall back to auto-detect
-```
-
-Per-quant tradeoffs come from two optional catalog fields:
-
-- `QuantSizesGB` — file size per quant in GB (drives the fit badge).
-- `QuantNotes` — human-readable note per quant (quality/use-case context). Shown verbatim.
-
-Per-context guidance comes from `ContextNotes` in the same shape. Backfill
-these on any model you add — they show up inline in `info` and the wizard.
+Per-quant tradeoffs come from the optional `SizeGB` (drives the fit badge)
+and `Note` (human-readable quality/use-case context, shown verbatim) fields
+on each `Quants` entry. Backfill these on any model you add — they show up
+inline in the guided launcher.
 
 ---

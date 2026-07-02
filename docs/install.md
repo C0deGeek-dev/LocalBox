@@ -2,31 +2,54 @@
 
 Part of the [LocalBox documentation](README.md).
 
-From the repo root:
+LocalBox is a single native binary. It needs no PowerShell, .NET, or Python
+at runtime, on any platform.
 
-```powershell
-. .\install.ps1                  # copy files to deployed locations + add to $PROFILE
-. .\install.ps1 -Symlink         # symlink instead of copy (admin / dev mode)
-. .\install.ps1 -SetupProfile    # only ensure $PROFILE dot-sources the deployed file
-. .\install.ps1 -InstallLocalBench   # also clone LocalBench if missing
-. .\install.ps1 -InstallLocalPilot   # also clone LocalPilot if missing
-. .\install.ps1 -DryRun          # preview without changing anything
+## From source
+
+From the repo root (Rust toolchain pinned by `rust-toolchain.toml`):
+
+```text
+cargo install --path crates/localbox --locked
 ```
 
-After install, open a fresh PowerShell:
+Or run straight from the checkout without installing:
 
-```powershell
-llm                              # interactive wizard — pick model, mode, action
-llmtui                           # Terminal.Gui TUI, explicit preview path
-info                             # verify: VRAM, default model, configured quants
+```text
+cargo run -p localbox
 ```
 
-The install step offers to clone missing LocalBench and LocalPilot into
-`~/.local-llm/tools/` (a sibling `LocalPilot` checkout next to the LocalBox
-repo is detected and used first). Use `-SkipToolPrompts` for
-unattended installs. `Show-Diagnostics` also reports on `python`, the
-`localpilot` CLI, `PwshSpectreConsole`, LocalBench, and LocalPilot.
-Installs also record `LocalBoxRoot` in `settings.json`, which lets `llm-update`
-pull this repo and refresh the installed LocalX artifacts later.
+## First run
+
+```text
+localbox                         # guided launcher: pick a model, confirm, go
+localbox info                    # list the configured models
+localbox status                  # serve health and the remedy when down
+```
+
+The first run seeds `~/.local-llm` with the shipped defaults and an editable
+model catalog (`llm-models.json`). Existing files are never overwritten.
+`llama-server` binaries download pinned and checksum-verified on first use
+(`localbox update`); GGUF weights download from Hugging Face on first launch.
+
+## Per platform
+
+- **Windows** — CUDA or CPU `llama-server` builds download automatically,
+  matched to your driver's CUDA major version.
+- **Linux** — prebuilt llama.cpp release assets are downloaded when available
+  (CUDA best-effort, CPU otherwise). If no asset fits your system, install
+  your own `llama-server` into `~/.local-llm/llama-cpp/`.
+- **macOS** — prebuilt Metal assets are downloaded when available; otherwise
+  bring your own `llama-server` the same way.
+
+An NVIDIA GPU is recommended; VRAM is auto-detected via `nvidia-smi` and
+drives the guided launcher's fit hints.
+
+## Companions
+
+- [LocalPilot](https://github.com/C0deGeek-dev/LocalPilot) — install its CLI
+  so `localbox launch <model> --agent localpilot` can hand off to it.
+- [LocalBench](https://github.com/C0deGeek-dev/LocalBench) — provides
+  `localbench findbest`, whose saved profiles the guided launcher replays.
 
 ---

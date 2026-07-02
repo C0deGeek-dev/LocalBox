@@ -7,15 +7,15 @@ behaviour at the current `VERSION`.
 > under `docs/wiki/` and synced one-way on every push to `main`. Edit the source
 > in `docs/wiki/`; web edits are overwritten on the next sync.
 
-## Stale wizard or weird errors
+## A launch fails or the agent can't reach the model
 
-Run `llmlogerr` for the full trace and `llmlog` for launch/debug details (vision,
-proxy, llama-server, Claude). Use `llmc` for the native picker, or set
-`$env:LOCAL_LLM_NO_SPECTRE=1` to disable Spectre everywhere.
+`localbox status` reports the serve health (proxy + server) and the remedy;
+`localbox log` tails the most recent server log.
 
-## The Spectre wizard stalls
+## Menus render oddly in this terminal
 
-Raise the prompt cooldown: `$env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS = '750'`.
+`localbox --plain` uses numbered plain-text menus with no escape sequences;
+non-TTY sessions degrade to them automatically.
 
 ## `localpilot` not on PATH
 
@@ -23,13 +23,14 @@ Install the CLI: `cargo install localpilot`.
 
 ## A quant won't fit / `llama-server` OOMs
 
-Check `info` — quants are tagged `[fits] / [tight] / [over]` against your VRAM.
-Pick a smaller quant or a smaller context, or override detection with
-`Set-LocalLLMSetting VRAMGB <gb>`.
+Check the guided launcher — quants are tagged fits / tight / over against
+your VRAM. Pick a smaller quant or a smaller context, or override detection
+with the `VRAMGB` key in `~/.local-llm/settings.json`.
 
 ## Roll back to the Ollama era
 
-`git checkout ollama-classic` in the repo and re-run `install.ps1`.
+`git checkout ollama-classic` in the repo — that era is PowerShell-based and
+installs via its own `install.ps1`.
 
 Full troubleshooting reference:
 [troubleshooting.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/troubleshooting.md).

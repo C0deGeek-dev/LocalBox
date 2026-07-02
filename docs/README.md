@@ -16,7 +16,7 @@ before editing; don't restate the same area in two places. The top-level
 | MCP servers | [`mcp.md`](mcp.md) |
 | Auto-tuner (`findbest`) | [`auto-tuner.md`](auto-tuner.md) |
 | AutoBest profile format | [`autobest-profile.md`](autobest-profile.md) |
-| Wizard & Terminal.Gui TUI | [`wizard-and-tui.md`](wizard-and-tui.md) |
+| Guided launcher (TUI) | [`wizard-and-tui.md`](wizard-and-tui.md) |
 | Repo layout, architecture, casing convention | [`architecture.md`](architecture.md) |
 | Versioning policy — when minor/major bumps, pre-1.0 rules | [`versioning.md`](versioning.md) |
 | Troubleshooting | [`troubleshooting.md`](troubleshooting.md) |

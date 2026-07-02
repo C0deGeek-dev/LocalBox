@@ -15,46 +15,36 @@ The launcher supports three flavors of `llama-server`:
   Does **not** support MTP — LocalBox rejects `--spec-type draft-mtp` up front
   in this mode.
 - **`mtpturbo`** — combined build: MTP spec-decode **and** turbo KV cache in
-  one binary. No prebuilt Windows CUDA release exists for any fork that
-  carries both features, so LocalBox builds it from source on first use.
-  When you pick `mtpturbo` and the binary is absent:
-  - LocalBox probes for the toolchain (git, cmake, ninja, nvcc, MSVC). If
-    anything is missing it prints the exact `winget install` command for
-    each.
-  - If the toolchain is complete it prompts `Build it now? [Y/n]`, then
-    shallow-clones [`EsmaeelNabil/llama.cpp#feat/mtp-turboquant-kv-cache`](https://github.com/EsmaeelNabil/llama.cpp/tree/feat/mtp-turboquant-kv-cache),
-    auto-detects compute capability via `nvidia-smi`, single-arch CUDA build
-    via Ninja (~5–30 min depending on GPU), installs into
-    `~/.local-llm/llama-cpp-mtpturbo/`, writes `.build-stamp`.
-  - Repo + branch are overrideable via `LlamaCppMtpTurboRepo` /
-    `LlamaCppMtpTurboBranch` settings if you fork it. CUDA Toolkit + VS
-    BuildTools are heavyweight system-wide deps that LocalBox never silent-
-    installs; it just names the winget IDs and gets out of the way.
+  one binary. No prebuilt release exists for any fork that carries both
+  features, so the binary is built from source (pinned to an exact commit via
+  `LlamaCppMtpTurboCommit`; repo/branch overrideable via
+  `LlamaCppMtpTurboRepo` / `LlamaCppMtpTurboBranch`) and installed into
+  `~/.local-llm/llama-cpp-mtpturbo/` with a `.build-stamp`.
+  `localbox update --mode mtpturbo --check` reports whether the installed
+  stamp still matches the pinned source; when no build is present, LocalBox
+  explains honestly that this mode has no prebuilt download and how to
+  provide the binary yourself.
 
-All three modes start a native `llama-server` process, pin to a free port from
-`LlamaCppPort` (default `8080`), wait for `/v1/models` to come up, then point
-Claude Code at `http://localhost:<port>`.
+All three modes start a native `llama-server` process on a free port (default
+search starts at `8080`), wait for readiness, then point the agent at
+`http://127.0.0.1:<port>` (through the no-think proxy when thinking is
+stripped).
 
-```powershell
-# Wizard route — pick mode interactively
-llm
+```text
+# Guided route — pick mode one level down in Customize
+localbox
 
 # Direct
-Invoke-Backend -Action launch-claude `
-  -Key qcoder30 -ContextKey 256 `
-  -LlamaCppMode turboquant -KvCacheK turbo4 -KvCacheV turbo4 -Strict
+localbox launch qcoder30 --context 256k --mode turboquant
 
-# MTP + turbo KV together — the unsloth 256K-on-24GB recipe. Catalog stores
-# SpecType=draft-mtp (mainline canonical); LocalBox translates to bare 'mtp'
-# at emit time for this mode automatically.
-Invoke-Backend -Action launch-claude `
-  -Key genesisv2 -ContextKey 128k `
-  -LlamaCppMode mtpturbo -KvCacheK turbo3 -KvCacheV turbo4
+# MTP + turbo KV together — the 256K-on-24GB recipe. The catalog stores
+# SpecType=draft-mtp (mainline canonical); LocalBox translates it to the
+# fork's spelling at emit time for this mode automatically.
+localbox launch genesisv2 --context 128k --mode mtpturbo
 
-lps                           # show running llama-server (port, pid, gguf path)
-llm-status                    # detailed per-process status (KV, ngl, MTP, VRAM, slots, /props)
-lstop                         # stop it
-llm-stop                      # alias for unloadall: stop every running llama-server
+localbox status               # serve health (proxy + server) and the remedy
+localbox log                  # tail the most recent server log
+localbox stop                 # stop every llama-server and the proxy
 ```
 
 ---

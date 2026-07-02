@@ -10,45 +10,44 @@ template, KV-cache type, sampler, and tool allowlist per model family.
 
 ## Prerequisites
 
-- **Windows with PowerShell.** LocalBox manages the `llama-server` lifecycle,
-  drives `Start-Process`, reads `nvidia-smi`, and touches `$PROFILE`. It does not
-  run in WSL/bash.
+- **Windows, Linux, or macOS.** LocalBox is a single native binary — no
+  PowerShell, .NET, or Python at runtime.
 - An NVIDIA GPU is recommended; LocalBox auto-detects VRAM and tags each quant
-  `[fits]` / `[tight]` / `[over]`.
+  fits / tight / over. macOS uses Metal builds; Linux CUDA is best-effort with
+  a CPU fallback.
 - `llama-server` binaries download (pinned + checksum-verified) on first use;
   GGUF weights download from Hugging Face on first launch.
 
 ## Install
 
-From the repo root:
+From the repo root (or use a release binary):
 
-```powershell
-. .\install.ps1                  # copy files to deployed locations + wire $PROFILE
-. .\install.ps1 -DryRun          # preview without changing anything
+```text
+cargo install --path crates/localbox --locked
 ```
 
-Open a fresh PowerShell so `$PROFILE` loads the launcher. Full options (symlink
-mode, companion checkouts, the Terminal.Gui TUI) are in
+Full details (per-platform notes, bring-your-own `llama-server`) are in
 [install.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/install.md).
 
 ## First run
 
-```powershell
-llm                              # interactive wizard: pick model, mode, action
-info                             # dashboard: VRAM fit, default model, parser freshness
-info -Commands                   # full LocalBox + LocalBench command list
+```text
+localbox                         # guided launcher: pick a model, confirm, go
+localbox info                    # list the configured models by tier
+localbox status                  # serve health and the remedy when down
 ```
 
-Then launch a model. Each catalog model gets its own function:
+The first run seeds `~/.local-llm` with the defaults and an editable model
+catalog. Then launch a model directly when you know what you want:
 
-```powershell
-qcoder -Ctx 32k -LocalPilot      # Qwen3-Coder at 32k context, via LocalPilot
-q36p -Ctx 128k                   # Qwen 3.6 Plus at 128k, via Claude Code
+```text
+localbox launch qcoder30 --context 32k --agent localpilot
+localbox launch q36plus --context 128k          # via Claude Code (default)
 ```
 
 ## Next steps
 
-- [[How-To]] — manage models, run the proxy/serve, AutoBest.
+- [[How-To]] — manage models, serve headless, AutoBest replay.
 - [[Examples]] — copy-pasteable launch recipes.
 - [[Reference]] — the full in-repo documentation index.
 - [[Troubleshooting]] — common problems and fixes.

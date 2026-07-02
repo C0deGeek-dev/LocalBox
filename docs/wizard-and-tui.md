@@ -1,84 +1,61 @@
-# Wizard and Terminal.Gui TUI
+# Guided launcher
 
 Part of the [LocalBox documentation](README.md).
 
-`llm` launches the Spectre picker when `PwshSpectreConsole` is available. Use
-`llmc` for the native selectable picker; it uses arrow keys + Enter, while
-keeping number/letter shortcuts for fast selection.
-It walks: model → quant → mode → vision → strict → context → action →
-kvcache/AutoBest → launch.
-Each step has a Back option (`0`/Escape in native, `[[Back]]` in Spectre); the
-Spectre wizard wraps each prompt in `Invoke-LLMWizardStep` and logs the
-full exception trace to `~/.local-llm/wizard-errors.log` if anything throws,
-so a Spectre live-display refresh can't scroll the trace off screen. Inspect
-with `llmlogerr [-Lines 80]`; reset with `llmlogerrclear`. The launch debug
-trace (vision, proxy, llama-server, Claude launches) is recorded in
-`~/.local-llm/launch.log` and tailable with `llmlog [-Lines 80]`.
+`localbox` with no arguments opens the guided launcher — a plain-language,
+non-developer-friendly flow built into the binary (no separate TUI install):
 
-After a model is selected, the Spectre wizard waits briefly before drawing the
-next prompt and retries one fast-empty transition. Tune that guard with
-`LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS` (default `500`, max `5000`).
-
-`llms` launches the Spectre wizard explicitly. `llmc` remains an explicit
-native-picker alias.
-
-```powershell
-$env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS = '750'
-$env:LOCAL_LLM_NO_SPECTRE = '1'   # disable Spectre everywhere / make llm use native
+```text
+pick a model  →  read the summary  →  confirm  →  launch  →  return
 ```
 
----
+- **The picker** shows the catalog's `recommended` tier by default, with a
+  `[Show all tiers]` row when more models exist (a model without a tier reads
+  as `experimental` and stays behind that row). Each row carries the model's
+  display name and a fit hint against your VRAM: green `fits`, yellow
+  `tight`, red `over`.
+- **The summary** is five short plain-language lines — what runs, how much
+  memory it wants, the quality hint, where it serves, what happens next. No
+  jargon: internals like quant spellings stay one level down.
+- **The confirm menu** offers exactly five actions: launch, customize, save
+  as my default, help, and back.
+- **Customize** is the power level: quant variant, context window, engine
+  (`native` / `turboquant` / `mtpturbo`), KV cache, vision, strict, and
+  auto-tune. Rows the current selection locks out explain *why* instead of
+  disappearing. Auto-tune (on by default when a measured profile exists)
+  replays the best saved `localbench findbest` result and owns the
+  engine/KV choices while on; manual KV settings only fill gaps the profile
+  left.
+- **Save as my default** persists the whole recipe; the next `localbox` run
+  offers it as a one-keystroke replay. A `.llm-default` file in a workspace
+  (a single line naming a model) overrides the saved default for that
+  directory tree — the nearest file walking up from the working directory
+  wins.
+- **Help** opens a plain-language glossary of every term the flow uses.
 
-## Terminal.Gui TUI
+After the agent session ends, the launcher returns to the picker.
 
-`llmtui` launches the C# Terminal.Gui frontend. It is currently an explicit
-preview path; `llm` still opens the existing PowerShell wizard flow.
+## Rendering
 
-Build and install it from the repo:
+On a real terminal the launcher renders as an inline list in a fixed-height
+viewport — no alternate screen, no whole-screen clears, so everything above
+the live band stays in your native scrollback. Errors render as one bounded,
+plain-language line, never a stack trace.
 
-```powershell
-pwsh .\tui\publish-tui.ps1 -Install
-reloadllm
-llmtui
+On a non-TTY (a pipe, a harness) or with `--plain`, the same flow degrades to
+numbered plain-text menus with zero escape codes.
+
+```text
+localbox            # inline interactive launcher
+localbox --plain    # numbered plain-text menus
 ```
 
-The main installer can publish TUI binaries too:
+## Logs
 
-```powershell
-.\install.ps1 -InstallTui
-llm-update -InstallTui
-llm-update -RefreshInstalled
+Server output lands under `~/.local-llm/logs/`. Tail the most recent log:
+
+```text
+localbox log --lines 80
 ```
-
-Without `-InstallTui`, `install.ps1` offers to publish the TUIs interactively
-unless `-SkipToolPrompts` is set. `llm-update` refreshes already-installed TUI
-binaries after an update, and `-InstallTui` forces a refresh even when the
-checkouts are already current. When the LocalPilot checkout fast-forwards,
-`llm-update` also reruns LocalPilot's installer so the `localpilot` CLI on
-`PATH` matches the updated source. Use `-RefreshInstalled` to redeploy/rebuild
-installed artifacts from already-current checkouts.
-
-When installed, the launcher runs `~/.local-llm/bin/LocalBox.Tui.exe` and passes
-the active `LocalLLMProfile.ps1` path with `--profile`. From a repo checkout, it
-can also run the TUI project directly with `dotnet run`, so the command works on
-fresh developer machines before publishing.
-
-Useful controls:
-
-| Key | Action |
-|-----|--------|
-| `Up` / `Down` | Move in the active list. |
-| `Enter` / `Right` | Advance through model -> context -> quant -> action -> mode -> AutoBest -> confirm. |
-| `Left` | Go back one wizard step. |
-| `Space` | Cycle the current step. |
-| `Tab` | Move focus to details so long text can scroll. |
-| `Ctrl+B` | Open LocalBench.Tui when LocalBench is installed and has a TUI build. |
-| `F5` | Refresh backend data. |
-| `F9` | Show dry-run launch command. |
-| `F10` | Quit. |
-
-`lbtui` opens LocalBench.Tui directly. It runs the LocalBench TUI project from a
-checkout when available, otherwise it falls back to the published
-`~/.local-llm/tools/localbench/bin/LocalBench.Tui.exe`.
 
 ---

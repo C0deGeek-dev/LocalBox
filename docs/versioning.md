@@ -43,9 +43,10 @@ break — it is a backward-compatible signal, so it does not force a major (or,
 pre-1.0, a minor). The break happens when the deprecated thing is **removed**;
 that removal is what bumps the minor pre-1.0 (major post-1.0).
 
-Example: `no-think-proxy.py` is deprecated as of `0.3.0-beta` — still bumps a
-patch-class version while it ships deprecated. When it is deleted, that is the
-`0.4.0` (pre-1.0) trigger.
+Example: the standalone no-think proxy script was deprecated while its
+in-process replacement shipped alongside it — a patch-class change. Deleting
+it (with the rest of the PowerShell launcher surface) is the break that
+triggers the major bump.
 
 ## When `1.0.0`?
 

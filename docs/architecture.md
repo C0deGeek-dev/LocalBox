@@ -2,87 +2,80 @@
 
 Part of the [LocalBox documentation](README.md).
 
-The repo ships in two folders that map to two deployed locations:
+LocalBox is a Rust workspace producing one binary, `localbox`, built on the
+shared [localx-llama](https://github.com/C0deGeek-dev/localx-llama) crate tier
+(consumed as a git dependency pinned by revision in `Cargo.lock`).
 
 ```
-repo                              deployed
-local-llm/      ─── install ──→   %USERPROFILE%\.local-llm\
-localbox-proxy/ ─── install ──→   %USERPROFILE%\.localbox-proxy\
-```
+crates/
+  localbox-launcher/    the launcher library
+    catalog.rs          three-layer config load (defaults < catalog < settings)
+    launcher.rs         the launcher-contract implementation (LlamaLauncher),
+                        GGUF path resolution, path expansion (~ and %VAR%)
+    orchestrate.rs      read-only launch planning: request → LaunchPlan
+                        (argv, ports, proxy config, env plan, provider TOML)
+    proxy.rs            no-think proxy lifecycle (tri-state target check,
+                        repoint-not-restart, reap-before-probe)
+    posture.rs          serve-gateway guard (public-looking no-auth refused),
+                        default GGUF root
+    permissions.rs      settings persistence (catalog-only keys refused),
+                        permission fail-closed rules
+    smoke.rs            reply-path smoke evaluation (degenerate-output detectors)
+    env.rs              agent environment plan (model aliases, endpoint vars)
+    localpilot_config.rs  generated .localpilot.toml provider block
+  localbox-tui/         the guided-launcher flow as pure functions
+    vocab.rs            plain-language vocabulary, plan summary, glossary
+    plan.rs             model → GuidedPlan resolution, DefaultLaunch replay
+    customize.rs        the Customize menu state machine, save gates
+    ui.rs               picker/confirm row model (TestBackend snapshots)
+    driver.rs           terminal policy: inline viewport, plain fallback
+  localbox/             the application binary
+    main.rs             hand-rolled CLI (worker thread, 16 MiB stack)
+    guided.rs           the persistent pick → confirm → launch → return loop
+    live.rs             launch execution: download → spawn → readiness →
+                        proxy → smoke → agent handoff; stop; status
+    exec.rs             process/socket effects (spawn, EnvGuard, socket-table
+                        PIDs, interactive agent launch)
+    fetch.rs            resumable pin-verified HTTP downloads (HF GGUF pulls)
+    embed.rs            CPU-only embedding server lifecycle
+    update.rs           llama.cpp binary install/update per mode
+    manage.rs           info / purge / log conveniences
 
-```
 local-llm/
-  LocalLLMProfile.ps1   minimal entry point — dot-sourced by $PROFILE
-  llm-models.json       model catalog (committed, sharable)
-  defaults.json         shipped launcher defaults (overlaid by settings.json)
-  lib/
-    00-settings.ps1     config loader, settings.json overlay, env names
-    05-validate.ps1     catalog validator
-    10-helpers.ps1      pwsh utility primitives
-    15-updates.ps1      llm-update + proxy version check
-    20-models.ps1       model-def + GGUF/mmproj resolution
-    25-vram.ps1         nvidia-smi auto-detect, fit-class arithmetic
-    32-llamacpp.ps1     llama-server lifecycle (port pick, health, session)
-    33-llamacpp-install.ps1   resolve native/turboquant/mtpturbo llama-server binaries
-    34-llamacpp-status.ps1    rich per-process llama-server inspector (llm-status)
-    35-backend.ps1      Invoke-Backend dispatcher
-    40-parsers.ps1      per-family chat template / sampler / strict overlay
-    41-llamacpp-args.ps1   pure argv builder for llama-server
-    42-llamacpp-templates.ps1  parser → llama-server flag mapping, strict file
-    55-huggingface.ps1  HF repo discovery, GGUF download, quant code recognition
-    60-catalog.ps1      catalog editor (addllm/updatellm/removellm)
-    65-claude-launch.ps1   Claude/LocalPilot/Codex launcher; env save/restore, proxy
-    71-localbench-bridge.ps1   LocalBench interop
-    72-llamacpp-tuner.ps1      AutoBest config persistence
-    75-display.ps1      info dashboard (Spectre + plain-text fallbacks)
-    80-init.ps1         purge / unloadall
-    85-shortcuts.ps1    per-model function generator, default-key resolution
-    90-wizard.ps1       native selectable + Spectre interactive wizards
-    99-entrypoints.ps1  llm/llmmenu/llmc/llms/reloadllm/lps/lstop
-
-localbox-proxy/
-  no-think-proxy.py     strips Anthropic thinking/reasoning blocks
-                        (DEPRECATED — LocalPilot strips `<think>` natively on
-                        both the Anthropic and OpenAI paths and suppresses the
-                        thinking request shape itself; the proxy is a legacy
-                        shim, scheduled for removal)
+  defaults.json             shipped launcher defaults (embedded + seeded)
+  llm-models.example.json   example model catalog (embedded + seeded)
 ```
 
-`LocalLLMProfile.ps1` dot-sources every `lib/*.ps1` in numeric prefix order,
-loads `llm-models.json` overlaid with `~/.local-llm/settings.json`, and
-registers per-model shortcut functions. Everything else hangs off that.
+The shared tier supplies the pure domain (`localx-llama-core`: model catalog
+types, argv construction, VRAM/fit, config precedence, tuner store schema, the
+launcher trait) and the runtime effects (`localx-llama-runtime`: downloads and
+pin verification, health classification, the in-process no-think filter, port
+and spawn utilities).
 
----
+## Boundaries that hold the design
 
-## Casing convention
+- **Planning is read-only; execution is one module.** `orchestrate` resolves a
+  complete `LaunchPlan` without touching the system; `live` is the only place
+  the plan's effects happen. A `--dry-run` prints the same plan the launch
+  executes.
+- **The guided flow is pure; frontends pick indexes.** Every TUI decision
+  lives in `localbox-tui` as tested functions; the ratatui and plain-text
+  frontends only select rows, so behaviour cannot fork between them.
+- **The no-think proxy is in-process.** The filter is a library in the shared
+  runtime tier; the binary hosts it by re-invoking itself
+  (`localbox nothink-proxy`). There is no sidecar to install or version.
+- **The launcher contract is a trait.** LocalBench consumes `LlamaLauncher`
+  through the shared trait and its versioned envelope; conformance is tested
+  cross-repo in CI in both directions.
+- **Tier-1 platforms are equal.** OS-specific behaviour (socket-table PID
+  lookup, executable suffixes, path expansion) sits behind small seams with
+  per-OS implementations; CI runs the full gate on Windows, Linux, and macOS.
 
-The repo mixes three styles intentionally:
+## On-disk layout (`~/.local-llm`)
 
-- `kebab-case` for folders (`local-llm/`, `localbox-proxy/`) — matches their deployed path.
-- `PascalCase` for the entry-point script (`LocalLLMProfile.ps1`) — PowerShell convention.
-- `kebab-case` for data files (`llm-models.json`).
-
-These names are user-visible (the deployed paths). Renaming them would break
-setups, so they stay.
-
----
-
-## Carve-as-you-touch policy
-
-Two libs are still large — `65-claude-launch.ps1` (~2.2k lines) and
-`90-wizard.ps1` (~2.5k lines). The policy is **carve-as-you-touch, not a bulk
-rewrite**:
-
-- **Do not drop new feature code into these files.** A new concern gets its own
-  numbered `lib/NN-*.ps1` (dot-sourced in prefix order), not another block in the
-  launcher or the wizard.
-- **Extract only when you are already in the file for a real fix.** As you touch
-  `65-claude-launch.ps1`, lift the seam you are working on — agent-launch policy,
-  the Codex path, the LocalPilot path, the proxy wiring, the installer/env
-  save-restore — into its own function/lib once a cohesive cluster forms. As you
-  touch `90-wizard.ps1`, split along rendering, the interactive UI, and flow-state.
-  Pay the size down along the change you are already making, where a regression test
-  is cheap; do not open a standalone "split the monolith" change with no functional
-  driver.
-
----
+Seeded on first run, never overwritten: `defaults.json`,
+`llm-models.example.json`, and the user's editable `llm-models.json`.
+Everything else appears as it is used — `settings.json` (per-machine
+overrides), `gguf/` (model weights), `llama-cpp*/` (per-mode server
+binaries + `.build-stamp`), `tuner/` (AutoBest profiles and the trial
+cache), and `logs/`.

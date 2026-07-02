@@ -1,6 +1,6 @@
-﻿# LocalBox AutoBest Profile Contract
+# LocalBox AutoBest Profile Contract
 
-`Start-ClaudeWithLlamaCppModel -AutoBest` loads saved launcher profiles from:
+The guided launcher's auto-tune replay loads saved profiles from:
 
 ```text
 ~/.local-llm/tuner/best-<key>.json
@@ -8,7 +8,7 @@
 
 The current compatibility schema is `localbox-autobest-v1`. The top
 level object keeps launcher-owned routing fields and an `entries` array. Each
-entry is matched by `Get-BestLlamaCppConfig` using:
+entry is matched at launch time using:
 
 - `contextKey`
 - `mode`
@@ -25,14 +25,14 @@ Entries also record `contextTokens` as provenance for the resolved `num_ctx`;
 Vision and text-only profiles are not interchangeable (the mmproj module shifts
 VRAM use and behaviour), so an exact `vision` match is always preferred. Because
 no current tuning path records a vision-tuned entry, a vision launch
-(`-UseVision`) would otherwise never match. To keep AutoBest usable, a vision
+(--vision) would otherwise never match. To keep AutoBest usable, a vision
 launch falls back to the matching text-only tune and prints a warning that the
 tune was measured without the mmproj (so VRAM headroom is tighter — raise
 `--n-cpu-moe` or launch without vision if you hit OOM). A non-vision launch is
 unaffected and only matches text-only entries.
 
-Entries must include an `overrides` object whose keys can be splatted into
-`Build-LlamaServerArgs`. The currently accepted tuning override keys are:
+Entries must include an `overrides` object whose keys map onto the
+server-argument builder's parameters. The currently accepted tuning override keys are:
 
 - `KvK`
 - `KvV`
@@ -53,16 +53,11 @@ prefers long-prefill, end-to-end latency over decode-only generation TPS.
 Expanded LocalBench entries can be saved as `pure` or `balanced`; entries
 without a `profile` field are treated as `pure` for backwards compatibility.
 
-`Start-ClaudeWithLlamaCppModel -AutoBest` defaults to
-`-AutoBestProfile auto`, which prefers `balanced` entries when available and
-falls back to `pure`. `-AutoBestProfile pure` and `-AutoBestProfile balanced`
-force the selection profile. `-AutoBestProfile short` and
-`-AutoBestProfile long` remain legacy prompt-length overrides and load pure
-profiles only.
+Replay defaults to the auto preference, which prefers `balanced` entries when available and
+falls back to `pure`. The guided launcher's Customize menu forces the selection profile explicitly.
 
 After a saved profile is applied and llama-server is healthy, LocalBox performs
-a small Anthropic-compatible `/v1/messages` launch smoke request before handing
-the session to Claude or LocalPilot. The smoke includes the real launch system
+a small Anthropic-compatible `/v1/messages` launch smoke request before handing the session to the agent. The smoke includes the real launch system
 prompt and must produce visible response text; output inside `<think>...</think>`
 is ignored for this check. For strip-mode models this first
 uses the no-think proxy, matching the normal launch route. llama.cpp strip-mode
@@ -78,22 +73,16 @@ Claude/LocalPilot llama.cpp launches are single-session agent workloads, so the
 launcher also applies `--parallel 1` and `--cache-reuse 256` by default outside
 the saved tuner override set. This keeps title/smoke/sidebar requests from
 competing with the main agent turn across multiple slots and gives repeated
-large prompts a stable cache path. Override these with
-`Set-LocalLLMSetting LlamaCppAgentParallel <n>` and
-`Set-LocalLLMSetting LlamaCppAgentCacheReuse <n>`; set either value to `0` to
+large prompts a stable cache path. Override these with the `LlamaCppAgentParallel` and `LlamaCppAgentCacheReuse` keys in `settings.json`; set either value to `0` to
 fall back to llama.cpp defaults for that flag.
 
 Local Claude/LocalPilot launches also set
 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `LocalModelMaxOutputTokens` (default
 `4096`) before starting the client. This prevents local models from accepting
-the hosted Claude default of 32k output tokens for ordinary turns. Use
-`Set-LocalLLMSetting LocalModelMaxOutputTokens <n>` to change it, or `0` to
+the hosted Claude default of 32k output tokens for ordinary turns. Set the `LocalModelMaxOutputTokens` key in `settings.json` to change it, or `0` to
 leave the client default untouched.
 
-The wizard exposes saved selection profiles directly. When both `balanced` and
-`pure` entries exist, launch settings include explicit profile choices in
-addition to the `auto` preference (`balanced`, then `pure`). Immediate launch
-after a `-Profile both` tuning run asks which saved profile should be replayed.
+The guided launcher exposes saved selection profiles directly: when both `balanced` and `pure` entries exist, Customize offers explicit profile choices in addition to the `auto` preference (`balanced`, then `pure`).
 
 LocalBench-compatible exports add provenance without changing the launch-time
 reader:

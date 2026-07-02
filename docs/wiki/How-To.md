@@ -9,54 +9,53 @@ behaviour at the current `VERSION`. See **[[Getting-Started]]** first.
 
 ## Install LocalBox
 
-```powershell
-. .\install.ps1                  # copy + wire $PROFILE
-. .\install.ps1 -Symlink         # symlink instead of copy (dev mode)
-. .\install.ps1 -InstallLocalBench -InstallLocalPilot   # also clone companions
+```text
+cargo install --path crates/localbox --locked
 ```
 
-Full reference: [install.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/install.md).
+No PowerShell, .NET, or Python needed at runtime. Full reference:
+[install.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/install.md).
 
 ## Manage local models
 
-Add a model from a Hugging Face repo (registers every recognized GGUF quant by
-default):
+The catalog is `~/.local-llm/llm-models.json` — an ordinary JSON file, seeded
+on first run and yours to edit (add a model by copying an entry and pointing
+`Repo`/`Quants` at the Hugging Face repo):
 
-```powershell
-addllm <hf-url-or-repo> -Key <key> [-Quants Q4_K_P,IQ4_XS] [-DefaultQuant Q4_K_P]
-updatellm <key>          # backfill quants missing from an existing entry
-removellm <key>          # remove (confirms first; -KeepFiles to keep GGUF blobs)
-info <key>               # see the exact filename behind each quant key
+```text
+localbox info                    # list the configured models by tier
+localbox info <model>            # one model in detail (any of its names works)
+localbox purge                   # stop servers, delete downloaded model files
 ```
 
-VRAM-aware: `info` and the `llm` wizard tag each quant `[fits] / [tight] /
-[over]` against your card. Full detail:
+VRAM-aware: the guided launcher tags each quant fits / tight / over against
+your card. Full detail:
 [model-management.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/model-management.md).
 
 ## Run the no-think proxy / serve a model
 
-For Claude Code launches LocalBox automatically starts the Python no-think proxy
-(`127.0.0.1:11435`) in front of `llama-server` and strips Anthropic-only
-`thinking`/`reasoning` blocks the local backend can't parse. You don't start it
-manually — it comes up with the launch.
+For Claude Code launches LocalBox automatically brings up its in-process
+no-think proxy (`127.0.0.1:11435`) in front of `llama-server` and strips
+`thinking`/`reasoning` blocks the local backend can't parse. You don't start
+it manually — it comes up with the launch.
 
 To serve a model to other machines over an Anthropic-compatible endpoint:
 
-```powershell
-$env:LOCAL_LLM_SERVE_PASS = "chosenpass"
-llmserve -Key qcoder30 -ContextKey 32k -LlamaCppMode native
+```text
+localbox serve qcoder30 --context 32k --lan --password chosenpass
 ```
 
 Password-only HTTP is for LAN/VPN use; put HTTPS in front for anything public.
+A public-looking bind with no password is refused unless you explicitly opt in.
 See [harness-mode.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/harness-mode.md).
 
 ## Save and replay an AutoBest profile
 
-Tune with LocalBench, then replay the saved profile with `-AutoBest`:
+Tune with LocalBench, then let the guided launcher replay the saved profile:
 
-```powershell
-findbest q36plus -ContextKey 256k          # tune (delegates to LocalBench)
-q36p -Ctx 256 -AutoBest                     # replay the saved profile
+```text
+localbench findbest --model q36plus --context 64k    # tune
+localbox                                             # guided launch replays it
 ```
 
 See [auto-tuner.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/auto-tuner.md)
