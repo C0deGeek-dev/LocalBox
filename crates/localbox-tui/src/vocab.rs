@@ -9,6 +9,32 @@ use localx_llama_core::{Mode, ModelDef};
 
 use crate::plan::GuidedPlan;
 
+/// What the GPU probe saw: the card's marketing name and its memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuInfo {
+    /// The card name as the vendor tool reports it.
+    pub name: String,
+    /// Total graphics memory in whole GB; `0` = the tool named no number.
+    pub vram_gb: u32,
+}
+
+/// The one-line hardware banner above the guided menus: what card was
+/// found (NVIDIA via `nvidia-smi`, AMD via its tools) and how much
+/// graphics memory the fit hints are judged against.
+#[must_use]
+pub fn gpu_banner(gpu: Option<&GpuInfo>) -> String {
+    match gpu {
+        Some(info) if info.vram_gb > 0 => format!(
+            "Computer:  {} · {} GB graphics memory",
+            info.name, info.vram_gb
+        ),
+        Some(info) => format!("Computer:  {}", info.name),
+        None => {
+            "Computer:  no NVIDIA or AMD GPU found — running on the processor (slower)".to_string()
+        }
+    }
+}
+
 /// Friendly name for a run target (action).
 #[must_use]
 pub fn target_label(value: &str) -> String {
@@ -208,6 +234,29 @@ mod tests {
             quality_label(&def, "apex-i-mini"),
             "smaller & faster · 12.1 GB"
         );
+    }
+
+    #[test]
+    fn the_gpu_banner_names_the_card_and_degrades_plainly() {
+        let card = GpuInfo {
+            name: "NVIDIA GeForce RTX 4090".to_string(),
+            vram_gb: 24,
+        };
+        assert_eq!(
+            gpu_banner(Some(&card)),
+            "Computer:  NVIDIA GeForce RTX 4090 · 24 GB graphics memory"
+        );
+        let unsized_card = GpuInfo {
+            name: "AMD Radeon RX 7900 XTX".to_string(),
+            vram_gb: 0,
+        };
+        assert_eq!(
+            gpu_banner(Some(&unsized_card)),
+            "Computer:  AMD Radeon RX 7900 XTX"
+        );
+        let none = gpu_banner(None);
+        assert!(none.contains("no NVIDIA or AMD GPU"));
+        assert!(none.contains("processor"), "names the CPU fallback plainly");
     }
 
     #[test]

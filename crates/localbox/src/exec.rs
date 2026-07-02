@@ -76,6 +76,93 @@ pub fn probe_vram_gb() -> u32 {
     }
 }
 
+/// Probe the GPU's name and memory for the guided launcher's hardware
+/// banner: `nvidia-smi` first, then AMD tools (`rocm-smi` where present,
+/// the CIM video-controller table on Windows). `None` = no GPU tool
+/// answered — the banner then says so in plain words.
+#[must_use]
+pub fn probe_gpu() -> Option<localbox_tui::vocab::GpuInfo> {
+    if let Ok(out) = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    {
+        if out.status.success() {
+            if let Some(info) = parse_gpu_name_vram(&String::from_utf8_lossy(&out.stdout)) {
+                return Some(info);
+            }
+        }
+    }
+    if let Ok(out) = Command::new("rocm-smi")
+        .args(["--showproductname"])
+        .output()
+    {
+        if out.status.success() {
+            if let Some(name) = parse_rocm_product_name(&String::from_utf8_lossy(&out.stdout)) {
+                return Some(localbox_tui::vocab::GpuInfo { name, vram_gb: 0 });
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Last resort for AMD on Windows (no rocm-smi): the CIM table.
+        // Only reached when neither vendor tool answered, so the extra
+        // shell spawn never slows an NVIDIA machine.
+        if let Ok(out) = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-CimInstance Win32_VideoController).Name",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                if let Some(name) = parse_amd_controller_name(&String::from_utf8_lossy(&out.stdout))
+                {
+                    return Some(localbox_tui::vocab::GpuInfo { name, vram_gb: 0 });
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse `nvidia-smi --query-gpu=name,memory.total` CSV: first card wins.
+fn parse_gpu_name_vram(raw: &str) -> Option<localbox_tui::vocab::GpuInfo> {
+    let line = raw.lines().find(|l| !l.trim().is_empty())?;
+    let (name, mib) = line.rsplit_once(',')?;
+    let mib: f64 = mib.trim().parse().ok()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(localbox_tui::vocab::GpuInfo {
+        name: name.to_string(),
+        vram_gb: (mib / 1024.0).round().max(0.0) as u32,
+    })
+}
+
+/// Pull the card name out of `rocm-smi --showproductname` output.
+fn parse_rocm_product_name(raw: &str) -> Option<String> {
+    raw.lines()
+        .find_map(|line| line.split_once("Card series:").map(|(_, name)| name))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+/// The first AMD-looking name in a video-controller listing.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_amd_controller_name(raw: &str) -> Option<String> {
+    raw.lines()
+        .map(str::trim)
+        .find(|line| line.contains("AMD") || line.contains("Radeon"))
+        .map(str::to_string)
+}
+
 /// The PIDs listening on a loopback port, via the OS socket table
 /// (`netstat -ano` on Windows, `lsof -t` elsewhere).
 #[must_use]
@@ -282,6 +369,27 @@ mod tests {
             "claude",
             std::io::ErrorKind::PermissionDenied
         ));
+    }
+
+    #[test]
+    fn gpu_probe_parsers_read_vendor_tool_output() {
+        // nvidia-smi CSV: name may itself contain no comma; MiB → whole GB.
+        let nvidia = parse_gpu_name_vram("NVIDIA GeForce RTX 4090, 24564\n").unwrap();
+        assert_eq!(nvidia.name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(nvidia.vram_gb, 24);
+        assert!(parse_gpu_name_vram("\n").is_none());
+        assert!(parse_gpu_name_vram("garbage without commas\n").is_none());
+
+        let rocm = "========== Product Info ==========\nGPU[0] : Card series: Radeon RX 7900 XTX\n";
+        assert_eq!(parse_rocm_product_name(rocm).unwrap(), "Radeon RX 7900 XTX");
+        assert!(parse_rocm_product_name("no card line").is_none());
+
+        let cim = "Name\n----\nMicrosoft Basic Display\nAMD Radeon RX 7800 XT\n";
+        assert_eq!(
+            parse_amd_controller_name(cim).unwrap(),
+            "AMD Radeon RX 7800 XT"
+        );
+        assert!(parse_amd_controller_name("Intel Arc A770").is_none());
     }
 
     #[test]

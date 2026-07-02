@@ -54,7 +54,9 @@ pub fn find_v1_leftovers(home: &Path) -> Vec<V1Leftover> {
     }
     for relative in PROFILE_CANDIDATES {
         // Component-wise join so the reported path uses native separators.
-        let path = relative.split('/').fold(home.to_path_buf(), |p, c| p.join(c));
+        let path = relative
+            .split('/')
+            .fold(home.to_path_buf(), |p, c| p.join(c));
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };

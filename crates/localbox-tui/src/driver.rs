@@ -10,8 +10,10 @@
 use ratatui::{TerminalOptions, Viewport};
 
 /// The fixed height of the live region. Content above it is pushed into
-/// native scrollback (insert-before), never cleared.
-pub const LIVE_REGION_HEIGHT: u16 = 16;
+/// native scrollback (insert-before), never cleared. Sized so the stacked
+/// confirm screen (banner + summary panel + 5-action menu) fits whole on a
+/// narrow terminal.
+pub const LIVE_REGION_HEIGHT: u16 = 18;
 
 /// The terminal options every driver uses: an inline viewport of fixed
 /// height. This is the whole scrollback-safety contract — an alternate screen

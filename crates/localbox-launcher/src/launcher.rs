@@ -11,8 +11,8 @@ use localx_llama_core::{
     BackendSession, KvTypes, Launcher, LauncherError, LauncherVersion, Mode, ModelDef,
     RUNTIME_LLAMACPP, TARGET_LOCALBOX,
 };
-use localx_llama_runtime::server::server_exe_name;
 use localx_llama_runtime::is_port_free;
+use localx_llama_runtime::server::server_exe_name;
 
 use crate::catalog::Catalog;
 

@@ -19,11 +19,13 @@ use localbox_tui::customize::{
 };
 use localbox_tui::driver::{ensure_utf8_output, plain_menu, plain_warning, should_degrade};
 use localbox_tui::plan::{resolve_launch_plan, DefaultLaunch, GuidedPlan, PlanOverrides};
-use localbox_tui::ui::{ConfirmAction, CONFIRM_ROWS};
-use localbox_tui::vocab::{engine_label, glossary, plan_summary, target_label};
+use localbox_tui::ui::{
+    render_guided_screen, ConfirmAction, GuidedScreen, MenuRow, ModelRow, CONFIRM_ROWS,
+};
+use localbox_tui::vocab::{engine_label, glossary, gpu_banner, plan_summary, target_label};
 use localx_llama_core::{Mode, ModelDef, TunerBestConfig, TunerEntry};
 
-use crate::exec::{home_dir, probe_vram_gb};
+use crate::exec::{home_dir, probe_gpu, probe_vram_gb};
 use crate::live::{execute_launch, AgentKind};
 
 /// Model rows visible by default: the `recommended` tier only (a definition
@@ -144,6 +146,23 @@ pub fn request_from_guided(
     (request, agent)
 }
 
+/// The downloaded default-quant GGUF's on-disk size, for model rows whose
+/// catalog entry names no `SizeGB`. `None` when nothing is downloaded.
+fn disk_size_gb(gguf_root: Option<&Path>, key: &str, def: &ModelDef) -> Option<f64> {
+    let root = gguf_root?;
+    let file = def
+        .quant
+        .as_deref()
+        .and_then(|q| def.quants.get(q))
+        .map(|entry| entry.file.clone())
+        .or_else(|| def.file.clone())
+        .filter(|f| !f.trim().is_empty())?;
+    let folder = def.root.as_deref().unwrap_or(key);
+    let bytes = std::fs::metadata(root.join(folder).join(file)).ok()?.len();
+    #[allow(clippy::cast_precision_loss)]
+    Some(bytes as f64 / 1e9)
+}
+
 /// The saved recipe from settings, when any.
 #[must_use]
 pub fn load_default_launch(catalog: &Catalog) -> DefaultLaunch {
@@ -171,17 +190,45 @@ pub fn default_launch_from_plan(plan: &GuidedPlan) -> DefaultLaunch {
 }
 
 /// One menu interaction: show rows, get an index back (`None` = cancelled).
+/// The banner and panel are screen context the chooser carries between
+/// choices — the rich path composes them into one frame with the menu, the
+/// plain path prints them as text.
 trait Chooser {
-    fn choose(&mut self, title: &str, rows: &[String], start: usize) -> Option<usize>;
+    fn set_banner(&mut self, banner: String);
+    fn set_panel(&mut self, panel: Option<(String, String)>);
+    fn choose(&mut self, title: &str, rows: &[MenuRow], start: usize) -> Option<usize>;
     fn notice(&mut self, text: &str);
+    /// Hand the screen back to normal printing (before a launch).
+    fn release(&mut self) {}
 }
 
 /// Numbered plain-text menus over stdin — the non-TTY / screen-reader path.
-struct PlainChooser;
+#[derive(Default)]
+struct PlainChooser {
+    banner: Option<String>,
+    panel: Option<(String, String)>,
+}
 
 impl Chooser for PlainChooser {
-    fn choose(&mut self, title: &str, rows: &[String], _start: usize) -> Option<usize> {
-        print!("{}", plain_menu(title, rows));
+    fn set_banner(&mut self, banner: String) {
+        // Print once, up front: a repeated banner is noise in a transcript.
+        if self.banner.as_deref() != Some(banner.as_str()) {
+            println!("{banner}");
+            self.banner = Some(banner);
+        }
+    }
+
+    fn set_panel(&mut self, panel: Option<(String, String)>) {
+        self.panel = panel;
+    }
+
+    fn choose(&mut self, title: &str, rows: &[MenuRow], _start: usize) -> Option<usize> {
+        if let Some((panel_title, text)) = &self.panel {
+            println!("{panel_title}:");
+            println!("{text}");
+        }
+        let texts: Vec<String> = rows.iter().map(|row| row.text.clone()).collect();
+        print!("{}", plain_menu(title, &texts));
         println!("Enter a number (blank cancels):");
         let mut line = String::new();
         if std::io::stdin().read_line(&mut line).is_err() {
@@ -203,36 +250,61 @@ impl Chooser for PlainChooser {
     }
 }
 
-/// A ratatui inline-viewport list (scrollback-safe per the pinned terminal
-/// options); raw mode lives only inside a single choice.
-struct TuiChooser;
+type TuiTerminal = ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
+
+/// The rich path: ONE inline-viewport terminal for the whole guided
+/// session (scrollback-safe per the pinned terminal options), every state
+/// drawn as one composed frame so screens replace each other instead of
+/// stacking. Raw mode lives only inside a single choice; notices are
+/// inserted above the band into native scrollback.
+#[derive(Default)]
+struct TuiChooser {
+    terminal: Option<TuiTerminal>,
+    banner: String,
+    panel: Option<(String, String)>,
+}
 
 impl TuiChooser {
-    fn run_list(title: &str, rows: &[String], start: usize) -> std::io::Result<Option<usize>> {
-        use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-        use ratatui::prelude::*;
-        use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+    fn ensure_terminal(&mut self) -> std::io::Result<&mut TuiTerminal> {
+        if self.terminal.is_none() {
+            let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
+            self.terminal = Some(ratatui::Terminal::with_options(
+                backend,
+                localbox_tui::driver::terminal_options(),
+            )?);
+        }
+        self.terminal
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("the terminal was just created"))
+    }
 
+    fn run_list(
+        &mut self,
+        title: &str,
+        rows: &[MenuRow],
+        start: usize,
+    ) -> std::io::Result<Option<usize>> {
+        use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+
+        let banner = self.banner.clone();
+        let panel = self.panel.clone();
+        let terminal = self.ensure_terminal()?;
         crossterm::terminal::enable_raw_mode()?;
-        let backend = CrosstermBackend::new(std::io::stdout());
-        let mut terminal =
-            Terminal::with_options(backend, localbox_tui::driver::terminal_options())?;
         let mut selected = start.min(rows.len().saturating_sub(1));
         let result = loop {
             terminal.draw(|frame| {
-                let mut state = ListState::default();
-                state.select(Some(selected));
-                let items: Vec<ListItem> =
-                    rows.iter().map(|row| ListItem::new(row.as_str())).collect();
-                let list = List::new(items)
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(title.to_string()),
-                    )
-                    .highlight_symbol("> ")
-                    .highlight_style(Style::default().add_modifier(Modifier::BOLD));
-                frame.render_stateful_widget(list, frame.area(), &mut state);
+                render_guided_screen(
+                    frame,
+                    &GuidedScreen {
+                        banner: &banner,
+                        panel: panel
+                            .as_ref()
+                            .map(|(panel_title, text)| (panel_title.as_str(), text.as_str())),
+                        menu_title: title,
+                        rows,
+                        selected,
+                    },
+                );
             })?;
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
@@ -248,16 +320,21 @@ impl TuiChooser {
             }
         };
         crossterm::terminal::disable_raw_mode()?;
-        let mut out = std::io::stdout();
-        use std::io::Write;
-        let _ = writeln!(out);
         Ok(result)
     }
 }
 
 impl Chooser for TuiChooser {
-    fn choose(&mut self, title: &str, rows: &[String], start: usize) -> Option<usize> {
-        match Self::run_list(title, rows, start) {
+    fn set_banner(&mut self, banner: String) {
+        self.banner = banner;
+    }
+
+    fn set_panel(&mut self, panel: Option<(String, String)>) {
+        self.panel = panel;
+    }
+
+    fn choose(&mut self, title: &str, rows: &[MenuRow], start: usize) -> Option<usize> {
+        match self.run_list(title, rows, start) {
             Ok(choice) => choice,
             Err(e) => {
                 let _ = crossterm::terminal::disable_raw_mode();
@@ -268,7 +345,27 @@ impl Chooser for TuiChooser {
     }
 
     fn notice(&mut self, text: &str) {
-        println!("{text}");
+        match self.terminal.as_mut() {
+            // The band stays live: notices go ABOVE it, into scrollback.
+            Some(terminal) => {
+                use ratatui::text::Line;
+                use ratatui::widgets::{Paragraph, Widget};
+                let lines: Vec<Line> = text.lines().map(|l| Line::from(l.to_string())).collect();
+                let height = u16::try_from(lines.len().max(1)).unwrap_or(u16::MAX);
+                let _ = terminal.insert_before(height, |buf| {
+                    Paragraph::new(lines.clone()).render(buf.area, buf);
+                });
+            }
+            None => println!("{text}"),
+        }
+    }
+
+    fn release(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+        if let Some(mut terminal) = self.terminal.take() {
+            // Clear the band so normal printing continues from a clean line.
+            let _ = terminal.clear();
+        }
     }
 }
 
@@ -286,10 +383,13 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
     }
     let degraded = should_degrade(std::io::stdout().is_terminal(), plain_requested);
     let mut chooser: Box<dyn Chooser> = if degraded {
-        Box::new(PlainChooser)
+        Box::new(PlainChooser::default())
     } else {
-        Box::new(TuiChooser)
+        Box::new(TuiChooser::default())
     };
+    let gpu = probe_gpu();
+    let vram = i64::from(gpu.as_ref().map_or(0, |info| info.vram_gb));
+    chooser.set_banner(gpu_banner(gpu.as_ref()));
     let mut show_all = false;
 
     loop {
@@ -297,25 +397,35 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         let catalog = Catalog::load(&catalog_dir).map_err(|e| e.to_string())?;
         let (keys, show_all_offered) = picker_keys(&catalog, show_all);
 
-        let mut rows: Vec<String> = keys
+        let gguf_root = catalog.gguf_root().map(|root| {
+            localbox_launcher::launcher::expand_path_with_home(&root.to_string_lossy(), &home)
+        });
+        let mut rows: Vec<MenuRow> = keys
             .iter()
             .map(|key| {
-                let def = catalog.model(key);
-                let name = def.and_then(|d| d.display_name.clone()).unwrap_or_default();
-                let strict = def.and_then(|d| d.strict).unwrap_or(false);
-                let mut row = format!("{key} · {name}");
-                if strict {
-                    row.push_str("  [strict]");
-                }
-                row
+                catalog.model(key).map_or_else(
+                    || MenuRow::plain(key.clone()),
+                    |def| {
+                        let mut row = ModelRow::from_def(key, def, vram);
+                        if row.size_gb.is_none() {
+                            // The catalog names no size: the downloaded
+                            // file's real size is still honest data.
+                            row.size_gb = disk_size_gb(gguf_root.as_deref(), key, def);
+                            row.fit = localx_llama_core::vram::quant_fit_class(row.size_gb, vram);
+                        }
+                        row.menu_row()
+                    },
+                )
             })
             .collect();
         if show_all_offered {
-            rows.push("[Show all tiers]".to_string());
+            rows.push(MenuRow::plain("[Show all tiers]"));
         }
-        rows.push("[Cancel]".to_string());
+        rows.push(MenuRow::plain("[Cancel]"));
 
+        chooser.set_panel(None);
         let Some(index) = chooser.choose("Pick a model", &rows, 0) else {
+            chooser.release();
             return Ok(());
         };
         if show_all_offered && index == rows.len() - 2 {
@@ -323,6 +433,7 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
             continue;
         }
         if index == rows.len() - 1 {
+            chooser.release();
             return Ok(());
         }
         let key = keys[index].clone();
@@ -330,7 +441,7 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
             continue;
         };
 
-        confirm_flow(chooser.as_mut(), &home, &catalog, &key, &def);
+        confirm_flow(chooser.as_mut(), &home, &catalog, &key, &def, vram);
         show_all = false;
     }
 }
@@ -341,16 +452,20 @@ fn confirm_flow(
     catalog: &Catalog,
     key: &str,
     def: &ModelDef,
+    vram: i64,
 ) {
     let defaults = load_default_launch(catalog);
     let mut overrides = PlanOverrides::default();
 
     loop {
         let plan = resolve_launch_plan(key, def, &defaults, &overrides);
-        chooser.notice(&plan_summary(&plan, def));
-        let rows: Vec<String> = CONFIRM_ROWS
+        chooser.set_panel(Some((
+            "Recommended plan".to_string(),
+            plan_summary(&plan, def),
+        )));
+        let rows: Vec<MenuRow> = CONFIRM_ROWS
             .iter()
-            .map(|(label, _)| (*label).to_string())
+            .map(|(label, _)| MenuRow::plain(*label))
             .collect();
         let Some(choice) = chooser.choose(&format!("Ready to launch {key}?"), &rows, 0) else {
             return;
@@ -361,7 +476,7 @@ fn confirm_flow(
                 return;
             }
             ConfirmAction::Customize => {
-                customize_flow(chooser, home, key, def, &defaults, &mut overrides);
+                customize_flow(chooser, home, key, def, &defaults, &mut overrides, vram);
             }
             ConfirmAction::AutoTune => {
                 chooser.notice(
@@ -383,11 +498,16 @@ fn customize_flow(
     def: &ModelDef,
     defaults: &DefaultLaunch,
     overrides: &mut PlanOverrides,
+    vram: i64,
 ) {
     loop {
         let plan = resolve_launch_plan(key, def, defaults, overrides);
+        chooser.set_panel(Some(("Current plan".to_string(), plan_summary(&plan, def))));
         let menu = customize_menu(&plan, def);
-        let rows: Vec<String> = menu.iter().map(|row| row.label.clone()).collect();
+        let rows: Vec<MenuRow> = menu
+            .iter()
+            .map(|row| MenuRow::plain(row.label.clone()))
+            .collect();
         let Some(choice) = chooser.choose("Customize settings", &rows, 0) else {
             return;
         };
@@ -399,7 +519,10 @@ fn customize_flow(
         match action {
             CustomizeAction::PickTarget => {
                 let targets = ["localpilot", "claude", "codex", "serve"];
-                let labels: Vec<String> = targets.iter().map(|t| target_label(t)).collect();
+                let labels: Vec<MenuRow> = targets
+                    .iter()
+                    .map(|t| MenuRow::plain(target_label(t)))
+                    .collect();
                 if let Some(i) = chooser.choose("Run with", &labels, 0) {
                     overrides.target = Some(targets[i].to_string());
                 }
@@ -410,9 +533,15 @@ fn customize_flow(
                     chooser.notice("This model has a single build; nothing to pick.");
                     continue;
                 }
-                let labels: Vec<String> = quants
+                let labels: Vec<MenuRow> = quants
                     .iter()
-                    .map(|q| localbox_tui::vocab::quality_label(def, q))
+                    .map(|q| {
+                        let size = def.quants.get(q).and_then(|entry| entry.size_gb);
+                        MenuRow::fit(
+                            localbox_tui::vocab::quality_label(def, q),
+                            localx_llama_core::vram::quant_fit_class(size, vram),
+                        )
+                    })
                     .collect();
                 if let Some(i) = chooser.choose("Quality", &labels, 0) {
                     overrides.quant = Some(quants[i].clone());
@@ -420,9 +549,9 @@ fn customize_flow(
             }
             CustomizeAction::PickContext => {
                 let contexts: Vec<String> = def.contexts.keys().cloned().collect();
-                let labels: Vec<String> = contexts
+                let labels: Vec<MenuRow> = contexts
                     .iter()
-                    .map(|c| localbox_tui::vocab::memory_label(def, c))
+                    .map(|c| MenuRow::plain(localbox_tui::vocab::memory_label(def, c)))
                     .collect();
                 if let Some(i) = chooser.choose("Memory (conversation size)", &labels, 0) {
                     overrides.context_key = Some(contexts[i].clone());
@@ -430,16 +559,18 @@ fn customize_flow(
             }
             CustomizeAction::PickMode => {
                 let modes = [Mode::Native, Mode::Turboquant, Mode::Mtpturbo];
-                let labels: Vec<String> =
-                    modes.iter().map(|m| engine_label(*m).to_string()).collect();
+                let labels: Vec<MenuRow> = modes
+                    .iter()
+                    .map(|m| MenuRow::plain(engine_label(*m)))
+                    .collect();
                 if let Some(i) = chooser.choose("Engine", &labels, 0) {
                     overrides.mode = Some(modes[i]);
                 }
             }
             CustomizeAction::PickAutoTune => {
                 let labels = vec![
-                    "On — use my auto-tuned settings".to_string(),
-                    "Off — use the recommended defaults".to_string(),
+                    MenuRow::plain("On — use my auto-tuned settings"),
+                    MenuRow::plain("Off — use the recommended defaults"),
                 ];
                 if let Some(i) = chooser.choose("Auto-tune", &labels, 0) {
                     if i == 0 {
@@ -455,7 +586,7 @@ fn customize_flow(
                 if fork {
                     kinds.extend(["turbo3", "turbo4"]);
                 }
-                let labels: Vec<String> = kinds.iter().map(|k| (*k).to_string()).collect();
+                let labels: Vec<MenuRow> = kinds.iter().map(|k| MenuRow::plain(*k)).collect();
                 if let Some(i) = chooser.choose("KV cache", &labels, 0) {
                     if i == 0 {
                         overrides.kv_cache_k = None;
@@ -495,6 +626,10 @@ fn customize_flow(
 }
 
 fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
+    // Hand the screen back to normal printing: downloads, server spawn,
+    // and the agent all write plain lines from here on.
+    chooser.release();
+    chooser.notice(&format!("Launching {} …", plan.model_key));
     let auto_store = if plan.use_auto_best {
         let path = home
             .join(".local-llm")
@@ -603,6 +738,28 @@ mod tests {
         let mut def: ModelDef = serde_json::from_str(r#"{"Repo":"o/m"}"#).unwrap();
         def.tier = tier.map(str::to_string);
         def
+    }
+
+    #[test]
+    fn disk_size_fallback_reads_the_real_file_and_never_guesses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut def: ModelDef =
+            serde_json::from_str(r#"{"Repo":"o/m","File":"model.gguf"}"#).unwrap();
+        // Nothing downloaded → no number.
+        assert_eq!(disk_size_gb(Some(dir.path()), "mkey", &def), None);
+        assert_eq!(disk_size_gb(None, "mkey", &def), None);
+        // A real file under <root>/<key>/<file> reports its true size.
+        std::fs::create_dir_all(dir.path().join("mkey")).unwrap();
+        std::fs::write(
+            dir.path().join("mkey").join("model.gguf"),
+            vec![0u8; 2_000_000],
+        )
+        .unwrap();
+        let gb = disk_size_gb(Some(dir.path()), "mkey", &def).unwrap();
+        assert!((gb - 0.002).abs() < 1e-9);
+        // An explicit Root folder wins over the key.
+        def.root = Some("elsewhere".to_string());
+        assert_eq!(disk_size_gb(Some(dir.path()), "mkey", &def), None);
     }
 
     #[test]
