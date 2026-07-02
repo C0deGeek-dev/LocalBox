@@ -18,7 +18,7 @@
     <a href="https://c0degeek-dev.github.io/LocalStack/">LocalX</a>
   </p>
   <p>
-    <img alt="version 2.0.0" src="https://img.shields.io/badge/version-2.0.0-38bdae?style=flat-square">
+    <img alt="version 2.0.1" src="https://img.shields.io/badge/version-2.0.1-38bdae?style=flat-square">
     <img alt="Windows PowerShell" src="https://img.shields.io/badge/platform-Windows%20PowerShell-4d8df7?style=flat-square">
     <img alt="llama.cpp runtime" src="https://img.shields.io/badge/runtime-llama.cpp-59636e?style=flat-square">
     <img alt="GitHub stars" src="https://img.shields.io/github/stars/C0deGeek-dev/LocalBox?style=flat-square&amp;label=stars">

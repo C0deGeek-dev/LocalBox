@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.0.1 - 2026-07-02
+
+Coordinated LocalX release.
+
 - **1.x leftovers are now detected and named.** A 1.x `install.ps1`
   deployment survives the 2.0.0 upgrade badly: a symlink-mode install leaves
   a dangling `~/.local-llm/LocalLLMProfile.ps1` link (a red "Could not find
