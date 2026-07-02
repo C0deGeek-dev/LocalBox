@@ -359,7 +359,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -893,7 +893,7 @@ dependencies = [
 [[package]]
 name = "localx-llama-core"
 version = "0.1.0"
-source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=09c9adc70b776d918b04c9254426696953b1c0a3#09c9adc70b776d918b04c9254426696953b1c0a3"
+source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=7581577837beca5faca30c95968bc1caea1d8215#7581577837beca5faca30c95968bc1caea1d8215"
 dependencies = [
  "regex",
  "serde",
@@ -904,7 +904,7 @@ dependencies = [
 [[package]]
 name = "localx-llama-runtime"
 version = "0.1.0"
-source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=09c9adc70b776d918b04c9254426696953b1c0a3#09c9adc70b776d918b04c9254426696953b1c0a3"
+source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=7581577837beca5faca30c95968bc1caea1d8215#7581577837beca5faca30c95968bc1caea1d8215"
 dependencies = [
  "axum",
  "dunce",
