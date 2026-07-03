@@ -110,7 +110,10 @@ impl LlamaLauncher {
 }
 
 /// Expand `~`-prefixed and `%VAR%`-style path spellings against a home and the
-/// process environment.
+/// process environment. `%USERPROFILE%` and `%HOME%` always mean the given
+/// home — even when that env var is unset on this OS — so a config authored on
+/// Windows (`%USERPROFILE%\.local-llm\gguf`) still resolves on macOS/Linux
+/// instead of surviving as a literal, relative path.
 #[must_use]
 pub fn expand_path_with_home(path: &str, home: &Path) -> PathBuf {
     let mut expanded = String::with_capacity(path.len());
@@ -121,12 +124,18 @@ pub fn expand_path_with_home(path: &str, home: &Path) -> PathBuf {
         };
         let name = &rest[start + 1..start + 1 + len];
         expanded.push_str(&rest[..start]);
-        match std::env::var(name) {
-            Ok(value) => expanded.push_str(&value),
-            Err(_) => {
-                expanded.push('%');
-                expanded.push_str(name);
-                expanded.push('%');
+        if name.eq_ignore_ascii_case("USERPROFILE") || name.eq_ignore_ascii_case("HOME") {
+            // Funnel the home markers into the `~` branch below so their tail
+            // resolves against `home` regardless of the host's environment.
+            expanded.push('~');
+        } else {
+            match std::env::var(name) {
+                Ok(value) => expanded.push_str(&value),
+                Err(_) => {
+                    expanded.push('%');
+                    expanded.push_str(name);
+                    expanded.push('%');
+                }
             }
         }
         rest = &rest[start + len + 2..];
@@ -134,8 +143,13 @@ pub fn expand_path_with_home(path: &str, home: &Path) -> PathBuf {
     expanded.push_str(rest);
 
     if let Some(tail) = expanded.strip_prefix('~') {
-        let tail = tail.trim_start_matches(['/', '\\']);
-        return home.join(tail);
+        // Join component-by-component, splitting on either separator, so a
+        // `\`-spelled Windows tail does not become one literal filename.
+        let mut out = home.to_path_buf();
+        for part in tail.split(['/', '\\']).filter(|p| !p.is_empty()) {
+            out.push(part);
+        }
+        return out;
     }
     PathBuf::from(expanded)
 }
@@ -535,6 +549,27 @@ mod tests {
             PathBuf::from("%NOPE_UNSET%/x")
         );
         std::env::remove_var("LOCALBOX_TEST_VAR");
+    }
+
+    #[test]
+    fn windows_home_spellings_resolve_against_home_on_any_os() {
+        let home = Path::new("/home/tester");
+        let want = home.join(".local-llm").join("gguf");
+        // The Windows default spelling (backslash tail, `%USERPROFILE%`) must
+        // resolve to `<home>/.local-llm/gguf`, not a literal relative path —
+        // and does so without reading the environment, so it holds on macOS,
+        // Linux, and Windows alike.
+        assert_eq!(
+            expand_path_with_home("%USERPROFILE%\\.local-llm\\gguf", home),
+            want
+        );
+        // `%HOME%` is treated the same, and the cross-platform `~/` spelling
+        // lands in the identical place.
+        assert_eq!(
+            expand_path_with_home("%HOME%\\.local-llm\\gguf", home),
+            want
+        );
+        assert_eq!(expand_path_with_home("~/.local-llm/gguf", home), want);
     }
 
     #[test]

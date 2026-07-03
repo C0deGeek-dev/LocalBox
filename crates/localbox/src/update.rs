@@ -111,6 +111,13 @@ pub fn select_native_asset<'a>(
             is_archive(n) && lower.contains(os) && arch_matches(n) && !lower.contains("cudart")
         })
         .collect();
+    // macOS ships one Metal build per architecture — no CUDA/CPU split and no
+    // `-avx2-`/`-cpu-` token — so the arch-filtered candidate is the pick.
+    // Without this, the CPU token scan below finds nothing and the updater
+    // falls through to a bring-your-own message on every Mac.
+    if os == "macos" {
+        return eligible.first().copied();
+    }
     match variant {
         Variant::Cuda => {
             let majors: Vec<u32> = [13, 12, 11].into();
@@ -298,7 +305,36 @@ pub async fn install_asset(
         return Err(format!("extracting {} failed ({status})", asset.name));
     }
     flatten_extracted(root);
+    #[cfg(unix)]
+    set_unix_exec_bits(root);
     Ok(())
+}
+
+/// Ensure the extracted `llama-*` binaries are executable. `.zip` assets do not
+/// carry the Unix exec bit reliably, so a fresh macOS/Linux download can land
+/// unrunnable; `.tar.*` usually preserves it, but re-asserting is harmless.
+#[cfg(unix)]
+fn set_unix_exec_bits(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_binary = path.is_file()
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("llama-"));
+        if !is_binary {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+    }
 }
 
 /// If the server binary landed in a nested folder (`build/bin`, a versioned
@@ -521,6 +557,28 @@ mod tests {
             select_native_asset(&names, Variant::Cpu, None),
             Some("llama-b100-bin-win-avx2-x64.zip")
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_asset_selection_picks_the_metal_build_on_macos() {
+        // The real b9596 asset list: macOS carries no `-cpu-`/`-avx2-` token,
+        // so selection must still resolve the arch-matched Metal build rather
+        // than falling through to a bring-your-own message.
+        let names = [
+            "llama-b9596-bin-macos-arm64.tar.gz",
+            "llama-b9596-bin-macos-x64.tar.gz",
+            "llama-b9596-bin-ubuntu-x64.tar.gz",
+            "llama-b9596-bin-win-cpu-x64.zip",
+        ];
+        let picked = select_native_asset(&names, Variant::Cpu, None).unwrap();
+        assert!(picked.starts_with("llama-b9596-bin-macos-"));
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        assert!(picked.contains(arch));
     }
 
     #[test]
