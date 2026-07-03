@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.1.0 - 2026-07-03
+
+Coordinated LocalX release.
+
 - Agent launches now apply the permission/bypass gate again. On first launch of
   an agent that supports it (Claude, Codex, LocalPilot) LocalBox asks once
   whether to let the model act without per-action approval — defaulting **off**,
