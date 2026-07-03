@@ -57,6 +57,40 @@ impl LlamaLauncher {
         self.session.lock().ok().and_then(|s| s.clone())
     }
 
+    /// Launch params the user set directly in `settings.json` — the llama-server
+    /// tunables the catalog documents (`LlamaCppMlock`, `LlamaCppNoMmap`,
+    /// `LlamaCppAgentParallel`, `LlamaCppAgentCacheReuse`, `LlamaCppNCpuMoe`), as
+    /// opposed to values that arrive via an AutoBest profile. Absent keys stay
+    /// `None`, so an AutoBest profile or a caller default still wins over an
+    /// unset setting.
+    #[must_use]
+    pub fn settings_launch_params(&self) -> localx_llama_core::args::LaunchParams {
+        use serde_json::Value;
+        let int = |k: &str| self.catalog.setting(k).and_then(Value::as_i64);
+        let boolean = |k: &str| self.catalog.setting(k).and_then(Value::as_bool);
+        localx_llama_core::args::LaunchParams {
+            parallel: int("LlamaCppAgentParallel"),
+            cache_reuse: int("LlamaCppAgentCacheReuse"),
+            n_cpu_moe: int("LlamaCppNCpuMoe"),
+            mlock: boolean("LlamaCppMlock"),
+            no_mmap: boolean("LlamaCppNoMmap"),
+            ..Default::default()
+        }
+    }
+
+    /// The agent output-token cap (`LocalModelMaxOutputTokens`), defaulting to
+    /// 4096 when unset. Documented in `settings.md`; fed to both the agent env
+    /// plan and the LocalPilot provider config.
+    #[must_use]
+    pub fn max_output_tokens(&self) -> u32 {
+        self.catalog
+            .setting("LocalModelMaxOutputTokens")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(4096)
+    }
+
     /// The GGUF's expected on-disk path — pure path math, no download, no
     /// existence requirement (the DryRun resolution).
     ///
@@ -382,6 +416,30 @@ mod tests {
 
     fn launcher(dir: &Path) -> LlamaLauncher {
         LlamaLauncher::new(catalog_with_root(dir), "1.2.1", dir.join("home"), 24)
+    }
+
+    #[test]
+    fn settings_launch_params_reads_the_documented_tunables() {
+        let models: Map<String, Value> = serde_json::from_str(r#"{ "Models": {} }"#).unwrap();
+        let settings: Map<String, Value> = serde_json::from_str(
+            r#"{ "LlamaCppMlock": true, "LlamaCppNoMmap": false,
+                 "LlamaCppAgentParallel": 2, "LlamaCppAgentCacheReuse": 512,
+                 "LlamaCppNCpuMoe": 9 }"#,
+        )
+        .unwrap();
+        let cat = Catalog::from_layers(&Map::new(), &models, &settings).unwrap();
+        let p = LlamaLauncher::new(cat, "1.2.1", "/tmp/home", 24).settings_launch_params();
+        assert_eq!(p.mlock, Some(true));
+        assert_eq!(p.no_mmap, Some(false));
+        assert_eq!(p.parallel, Some(2));
+        assert_eq!(p.cache_reuse, Some(512));
+        assert_eq!(p.n_cpu_moe, Some(9));
+
+        // An unset key stays None so an AutoBest profile or a default still wins.
+        let bare = Catalog::from_layers(&Map::new(), &models, &Map::new()).unwrap();
+        let empty = LlamaLauncher::new(bare, "1.2.1", "/tmp/home", 24).settings_launch_params();
+        assert_eq!(empty.mlock, None);
+        assert_eq!(empty.parallel, None);
     }
 
     #[test]

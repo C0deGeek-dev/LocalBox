@@ -263,12 +263,25 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     }
 
     let agent = parse_agent(flag_value(args, "--agent"), default_agent)?;
+    let launcher = build_launcher(&home)?;
+
+    // Fill any llama-server tunable the user set in settings.json but that neither
+    // an AutoBest profile nor a flag already provided. Settings are the lowest
+    // precedence: an unset key stays None and the defaults below (or an AutoBest
+    // profile) win.
+    let overlay = launcher.settings_launch_params();
+    let params = &mut request.params;
+    params.parallel = params.parallel.or(overlay.parallel);
+    params.cache_reuse = params.cache_reuse.or(overlay.cache_reuse);
+    params.n_cpu_moe = params.n_cpu_moe.or(overlay.n_cpu_moe);
+    params.mlock = params.mlock.or(overlay.mlock);
+    params.no_mmap = params.no_mmap.or(overlay.no_mmap);
 
     // Single-session defaults for an interactive agent launch: one slot and a
     // prompt-cache-reuse window keep the session predictable (llama-server's
     // default multi-slot competition destabilizes a single agent's cache). A
-    // headless `serve` keeps the server defaults; AutoBest overrides win because
-    // they arrive as `Some(_)`.
+    // headless `serve` keeps the server defaults; a setting or AutoBest override
+    // wins because it already arrives as `Some(_)`.
     if agent != AgentKind::ServeOnly {
         if request.params.parallel.is_none() {
             request.params.parallel = Some(1);
@@ -278,7 +291,6 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
         }
     }
 
-    let launcher = build_launcher(&home)?;
     let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
     apply_launch_posture(&mut plan, args, agent)?;
 

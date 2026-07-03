@@ -149,13 +149,14 @@ pub fn plan_launch(
     };
     let proxy = EnsureProxyConfig::new(request.proxy_port, server_port);
 
+    let max_output_tokens = launcher.max_output_tokens();
     let provider_toml = localpilot_config_toml(&LocalPilotConfigInputs {
         provider_kind: ProviderKind::Anthropic,
         base_url: base_url.clone(),
         model: request.key.clone(),
         // Vision is declared to the agent only when the projector resolved.
         supports_vision: vision_module.is_some(),
-        max_tokens: 4096,
+        max_tokens: max_output_tokens,
         context_tokens,
         bypass: request.bypass,
     });
@@ -163,6 +164,7 @@ pub fn plan_launch(
     let mut env_inputs = EnvPlanInputs::new(base_url.clone(), request.key.clone());
     env_inputs.keep_thinking = request.keep_thinking;
     env_inputs.context_tokens = context_tokens;
+    env_inputs.max_output_tokens = max_output_tokens;
     let env_plan = claude_env_plan(&env_inputs);
 
     Ok(LaunchPlan {
