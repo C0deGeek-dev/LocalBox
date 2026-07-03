@@ -138,8 +138,15 @@ pub fn plan_launch(
     )
     .map_err(|e| LauncherError::Unavailable(e.to_string()))?;
 
-    let base_url = format!("127.0.0.1:{}", request.proxy_port);
-    let base_url = format!("http://{base_url}");
+    // `--keep-thinking` routes the agent straight at the server: the no-think
+    // proxy strips `<think>` unconditionally, so keeping thinking means bypassing
+    // it (the tradeoff is losing the proxy's system-message merge). Otherwise the
+    // agent talks to the proxy, which strips and merges.
+    let base_url = if request.keep_thinking {
+        format!("http://127.0.0.1:{server_port}")
+    } else {
+        format!("http://127.0.0.1:{}", request.proxy_port)
+    };
     let proxy = EnsureProxyConfig::new(request.proxy_port, server_port);
 
     let provider_toml = localpilot_config_toml(&LocalPilotConfigInputs {
@@ -284,6 +291,32 @@ mod tests {
         let plan = plan_launch(&launcher, &request).expect("plan");
         assert!(plan.vision_module.is_none());
         assert!(!plan.argv.contains(&"--mmproj".to_string()));
+    }
+
+    #[test]
+    fn keep_thinking_routes_direct_to_the_server_not_the_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher(dir.path());
+
+        // Default: the agent endpoint is the no-think proxy port.
+        let request = LaunchRequest::new("q36apex", "64k", Mode::Turboquant);
+        let proxied = plan_launch(&launcher, &request).unwrap();
+        assert!(proxied
+            .base_url
+            .ends_with(&format!(":{}", proxied.proxy.listen_port)));
+
+        // keep_thinking: the endpoint is the server port, so the stripping proxy
+        // is bypassed (uses_proxy will be false at launch).
+        let mut request = LaunchRequest::new("q36apex", "64k", Mode::Turboquant);
+        request.keep_thinking = true;
+        let direct = plan_launch(&launcher, &request).unwrap();
+        assert_eq!(
+            direct.base_url,
+            format!("http://127.0.0.1:{}", direct.server_port)
+        );
+        assert!(!direct
+            .base_url
+            .ends_with(&format!(":{}", direct.proxy.listen_port)));
     }
 
     #[test]

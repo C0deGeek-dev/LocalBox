@@ -46,7 +46,9 @@ Options for launch/serve:
   --mode <m>            native | turboquant | mtpturbo   (default native)
   --quant <key>         quant variant from the catalog (default per model)
   --vision              load the vision projector when the model has one
-  --keep-thinking       let the model's thinking reach the agent unfiltered
+  --keep-thinking       route the agent straight at the server so thinking
+                        reaches it unfiltered (bypasses the no-think proxy, so
+                        its system-message merge does not apply)
   --agent <a>           claude | localpilot | codex | none  (default claude)
   --dry-run             print what would happen; change nothing
   --lan                 expose the gateway on the network (0.0.0.0)
@@ -176,15 +178,26 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     request.keep_thinking = has_flag(args, "--keep-thinking");
 
     let agent = parse_agent(flag_value(args, "--agent"), default_agent)?;
-    let launcher = build_launcher(&home)?;
-    let plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
 
-    if has_flag(args, "--dry-run") {
-        print_plan(&plan);
-        return Ok(());
+    // Single-session defaults for an interactive agent launch: one slot and a
+    // prompt-cache-reuse window keep the session predictable (llama-server's
+    // default multi-slot competition destabilizes a single agent's cache). A
+    // headless `serve` keeps the server defaults; AutoBest overrides win because
+    // they arrive as `Some(_)`.
+    if agent != AgentKind::ServeOnly {
+        if request.params.parallel.is_none() {
+            request.params.parallel = Some(1);
+        }
+        if request.params.cache_reuse.is_none() {
+            request.params.cache_reuse = Some(256);
+        }
     }
 
-    let mut plan = plan;
+    let launcher = build_launcher(&home)?;
+    let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
+
+    // Apply the LAN posture BEFORE the dry-run print so `--dry-run --lan` shows
+    // the gateway plan that a live `--lan` launch would actually use.
     if has_flag(args, "--lan") {
         let password = flag_value(args, "--password").unwrap_or("").to_string();
         let host = std::env::var(if cfg!(windows) {
@@ -212,6 +225,23 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
                 "OPEN — opted in"
             }
         );
+    }
+
+    // Codex speaks the OpenAI protocol: swap in its OPENAI_* env plan (pointed at
+    // the local endpoint) so both the dry-run preview and the live launch show
+    // what actually reaches Codex — the Anthropic plan would leave it on the cloud.
+    if agent == AgentKind::Codex {
+        let auth = plan
+            .proxy
+            .api_key
+            .clone()
+            .unwrap_or_else(|| "local".to_string());
+        plan.env_plan = localbox_launcher::env::codex_env_plan(&plan.base_url, &auth);
+    }
+
+    if has_flag(args, "--dry-run") {
+        print_plan(&plan);
+        return Ok(());
     }
 
     let outcome =

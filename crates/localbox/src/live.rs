@@ -214,6 +214,8 @@ pub fn execute_launch(
 
     if let Some(program) = agent.program() {
         eprintln!("Starting {program} — exit it to return here; the model keeps serving.");
+        // `plan.env_plan` is already agent-correct (Anthropic for Claude/LocalPilot,
+        // OpenAI for Codex — set by the caller so the dry-run preview matches).
         let _env = EnvGuard::apply(&plan.env_plan);
         let status = run_interactive(program, &[]).map_err(|e| LiveError::Agent {
             agent: program.to_string(),

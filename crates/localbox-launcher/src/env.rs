@@ -35,6 +35,9 @@ pub const CLAUDE_ENV_NAMES: &[&str] = &[
     "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
     "ENABLE_TOOL_SEARCH",
     "CLAUDE_LOCAL_MAX_IMAGES",
+    // Codex (OpenAI-protocol) agent target.
+    "OPENAI_BASE_URL",
+    "OPENAI_API_KEY",
     "LOCALBOX_BACKEND",
     "LOCALBOX_LLAMA_SERVER_PID",
     "LOCALBOX_LLAMA_SERVER_PORT",
@@ -173,6 +176,20 @@ pub fn claude_env_plan(inputs: &EnvPlanInputs) -> Vec<(&'static str, String)> {
         ));
     }
     plan
+}
+
+/// The variables a **Codex** (OpenAI-protocol) agent launch sets. Codex reads
+/// `OPENAI_BASE_URL` + `OPENAI_API_KEY`, so it must be pointed at the local
+/// OpenAI-compatible endpoint — otherwise it silently talks to the cloud. Point
+/// it at the no-think proxy's `/v1` (the proxy strips `<think>` from OpenAI SSE
+/// deltas too), or at the raw server when thinking is kept.
+#[must_use]
+pub fn codex_env_plan(base_url: &str, auth_token: &str) -> Vec<(&'static str, String)> {
+    let v1 = format!("{}/v1", base_url.trim_end_matches('/'));
+    vec![
+        ("OPENAI_BASE_URL", v1),
+        ("OPENAI_API_KEY", auth_token.to_string()),
+    ]
 }
 
 /// Inputs to the backend-telemetry env plan.
@@ -398,6 +415,26 @@ mod tests {
         }
         assert_eq!(get("ANTHROPIC_AUTH_TOKEN").as_deref(), Some("local"));
         assert_eq!(get("ANTHROPIC_API_KEY").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn codex_plan_points_at_the_local_openai_endpoint() {
+        // Without this, Codex reads no OPENAI_* vars and talks to the cloud.
+        let plan = codex_env_plan("http://127.0.0.1:11435", "local");
+        let get = |name: &str| {
+            plan.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(
+            get("OPENAI_BASE_URL").as_deref(),
+            Some("http://127.0.0.1:11435/v1")
+        );
+        assert_eq!(get("OPENAI_API_KEY").as_deref(), Some("local"));
+        // Every codex var is inside the restore envelope.
+        for (name, _) in &plan {
+            assert!(CLAUDE_ENV_NAMES.contains(name), "{name} not in envelope");
+        }
     }
 
     #[test]
