@@ -10,7 +10,7 @@ Copy-pasteable launch recipes that match shipped behaviour at the current
 ## Code agent at 32k, via LocalPilot
 
 ```text
-localbox launch qcoder30 --context 32k --agent localpilot
+localbox launch q3635ba3bapex --context 32k --agent localpilot
 ```
 
 Starts `llama-server` with the Qwen3-Coder parser, brings up the no-think
@@ -21,8 +21,8 @@ the original environment is restored; the model keeps serving until
 ## 256k context on a 24 GB card
 
 ```text
-localbox launch qcoder30 --context 256k --quant iq4xs
-localbox launch qcoder30 --context 256k --quant iq4xs --agent localpilot
+localbox launch q3635ba3bapex --context 256k --quant iq4xs
+localbox launch q3635ba3bapex --context 256k --quant iq4xs --agent localpilot
 ```
 
 Qwen3-Coder-30B-A3B at IQ4_XS with q4_0 KV cache is the combination that fits a
@@ -42,7 +42,7 @@ types one level down in the guided launcher's Customize menu.
 
 ```text
 # host
-localbox serve qcoder30 --context 32k --lan --password chosenpass
+localbox serve q3635ba3bapex --context 32k --lan --password chosenpass
 
 # client (e.g. LocalPilot)
 set ANTHROPIC_BASE_URL=http://<host-name>:11435

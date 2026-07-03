@@ -41,7 +41,7 @@ The first run seeds `~/.local-llm` with the defaults and an editable model
 catalog. Then launch a model directly when you know what you want:
 
 ```text
-localbox launch qcoder30 --context 32k --agent localpilot
+localbox launch q3635ba3bapex --context 32k --agent localpilot
 localbox launch q36plus --context 128k          # via Claude Code (default)
 ```
 

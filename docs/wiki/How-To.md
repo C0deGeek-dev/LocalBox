@@ -42,7 +42,7 @@ it manually — it comes up with the launch.
 To serve a model to other machines over an Anthropic-compatible endpoint:
 
 ```text
-localbox serve qcoder30 --context 32k --lan --password chosenpass
+localbox serve q3635ba3bapex --context 32k --lan --password chosenpass
 ```
 
 Password-only HTTP is for LAN/VPN use; put HTTPS in front for anything public.

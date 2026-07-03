@@ -43,7 +43,7 @@ key, and which contexts the model declares.
 ### Examples
 
 ```text
-localbox launch qcoder30 --context 32k --agent localpilot
+localbox launch q3635ba3bapex --context 32k --agent localpilot
 localbox launch q36plus --context 128k
 localbox launch q36plus --mode turboquant --quant q6kp
 localbox serve q36plus --context 64k

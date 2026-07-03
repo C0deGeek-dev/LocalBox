@@ -35,7 +35,7 @@ stripped).
 localbox
 
 # Direct
-localbox launch qcoder30 --context 256k --mode turboquant
+localbox launch q3635ba3bapex --context 256k --mode turboquant
 
 # MTP + turbo KV together — the 256K-on-24GB recipe. The catalog stores
 # SpecType=draft-mtp (mainline canonical); LocalBox translates it to the

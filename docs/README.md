@@ -13,7 +13,6 @@ before editing; don't restate the same area in two places. The top-level
 | Day-to-day usage, flags, quant keys, 256k recipe | [`usage.md`](usage.md) |
 | Model management — adding a model, VRAM-aware fit | [`model-management.md`](model-management.md) |
 | Per-machine settings (`settings.json`), verified downloads, per-workspace default | [`settings.md`](settings.md) |
-| MCP servers | [`mcp.md`](mcp.md) |
 | Auto-tuner (`findbest`) | [`auto-tuner.md`](auto-tuner.md) |
 | AutoBest profile format | [`autobest-profile.md`](autobest-profile.md) |
 | Guided launcher (TUI) | [`wizard-and-tui.md`](wizard-and-tui.md) |

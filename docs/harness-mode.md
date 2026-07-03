@@ -10,7 +10,7 @@ clean-room harness with a similar operating model.
 ### Claude Code harness (default)
 
 ```text
-localbox launch qcoder30 --context 32k
+localbox launch q3635ba3bapex --context 32k
 ```
 
 What happens:
@@ -44,7 +44,7 @@ first-run decision that defaults to **off** — see
 ### LocalPilot harness
 
 ```text
-localbox launch qcoder30 --context 32k --agent localpilot
+localbox launch q3635ba3bapex --context 32k --agent localpilot
 ```
 
 Same flow, except LocalBox writes a `.localpilot.toml` provider block into
@@ -56,7 +56,7 @@ config so LocalPilot accepts image input with no hand edit.
 ### Codex harness
 
 ```text
-localbox launch qcoder30 --context 32k --agent codex
+localbox launch q3635ba3bapex --context 32k --agent codex
 ```
 
 Same flow, launching `codex` against the running server's OpenAI-compatible

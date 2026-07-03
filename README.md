@@ -125,7 +125,6 @@ GGUF model ──> LocalBox ──> llama-server ──> Claude Code / Codex / L
 | Tune a model automatically | [Auto-tuner](docs/auto-tuner.md) and [AutoBest profiles](docs/autobest-profile.md) |
 | Configure a machine | [Settings](docs/settings.md) |
 | Choose a llama.cpp runtime mode | [llama.cpp modes](docs/llamacpp-modes.md) |
-| Configure MCP servers | [MCP](docs/mcp.md) |
 | Understand the repository | [Architecture](docs/architecture.md) |
 | Fix a problem | [Troubleshooting](docs/troubleshooting.md) |
 
