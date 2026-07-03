@@ -14,10 +14,8 @@ keys (`Models`, `CommandAliases`) can never be overridden from settings.
 
 ```jsonc
 {
-  "Default": "q36plus",                  // default model key
   "VRAMGB": 32,                          // override nvidia-smi auto-detect
   "LlamaCppGgufRoot": "~/.local-llm/gguf",   // where model weights live (~ and %VAR% ok)
-  "LlamaCppDefaultMode": "native",       // or "turboquant" / "mtpturbo"
   "LlamaCppNCpuMoe": 35,                 // MoE expert CPU offload (0 disables)
   "LlamaCppMlock": true,                 // RAM locking
   "LlamaCppNoMmap": true,
@@ -64,11 +62,6 @@ Out of the box, every binary download is pinned and verified:
 - **`LlamaCppRequireDownloadPins` defaults to `true`**: an asset with no
   recorded pin is a hard failure. To opt out of pinning (trust-on-first-use),
   set it to `false` in `settings.json`.
-- **`LlamaCppMtpTurboCommit`** pins the from-source mtpturbo build to an exact
-  commit instead of a force-pushable branch HEAD (also pre-set in
-  `defaults.json`). Off Windows there is no source build: install your own
-  `llama-server` for that mode instead.
-
 **Updating the pins** (e.g. to move to a newer llama.cpp build) is a deliberate
 loop, done in `~/.local-llm/settings.json`:
 
@@ -87,8 +80,8 @@ pins can lead or lag the shipped ones.
 
 Drop a `.llm-default` file in any directory containing a single line — a model
 key or its on-disk folder name. The guided launcher walks up from the working
-directory and uses the nearest match, falling back to settings → catalog
-`Default`.
+directory and preselects the nearest match in the model picker; without one it
+starts at the top of the list.
 
 ```
 echo q36plus > .llm-default        # this workspace prefers Qwen 3.6 Plus

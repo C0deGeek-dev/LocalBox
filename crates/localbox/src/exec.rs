@@ -417,7 +417,10 @@ mod tests {
             parse_apple_chip("Apple M3 Pro\n").as_deref(),
             Some("Apple M3 Pro")
         );
-        assert_eq!(parse_apple_chip("  Apple M1  ").as_deref(), Some("Apple M1"));
+        assert_eq!(
+            parse_apple_chip("  Apple M1  ").as_deref(),
+            Some("Apple M1")
+        );
         // Intel Macs have no Apple GPU to claim.
         assert_eq!(parse_apple_chip("Intel(R) Core(TM) i7-9750H"), None);
         assert_eq!(parse_apple_chip(""), None);
@@ -479,11 +482,15 @@ mod tests {
     #[test]
     fn env_guard_restores_on_drop_even_for_previously_unset_vars() {
         // A canonical envelope var that is unset in the test environment.
-        std::env::remove_var("LOCALBOX_CONTEXT_KEY");
+        std::env::remove_var("OPENAI_BASE_URL");
         {
-            let _guard = EnvGuard::apply(&[("LOCALBOX_CONTEXT_KEY", "64k".to_string())]);
-            assert_eq!(std::env::var("LOCALBOX_CONTEXT_KEY").unwrap(), "64k");
+            let _guard =
+                EnvGuard::apply(&[("OPENAI_BASE_URL", "http://127.0.0.1:11435/v1".to_string())]);
+            assert_eq!(
+                std::env::var("OPENAI_BASE_URL").unwrap(),
+                "http://127.0.0.1:11435/v1"
+            );
         }
-        assert!(std::env::var("LOCALBOX_CONTEXT_KEY").is_err());
+        assert!(std::env::var("OPENAI_BASE_URL").is_err());
     }
 }

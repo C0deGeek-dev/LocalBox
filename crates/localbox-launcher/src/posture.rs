@@ -1,14 +1,8 @@
-//! The one-screen security posture and the LAN serve-gateway guard.
+//! The LAN serve-gateway guard.
 //!
-//! The repo's invisible security decisions become one visible screen:
-//! permission/bypass gate status, the loopback-only agent proxy, the serve
-//! gateway's exposure and auth, and the binary download-pin posture. The
-//! serve guard refuses the one genuinely dangerous shape — open (no-auth)
+//! The serve guard refuses the one genuinely dangerous shape — open (no-auth)
 //! HTTP on a public-looking address — unless the operator opts in explicitly;
 //! everything else is visible, not blocked.
-
-use crate::env::EnvStore;
-use crate::permissions::{gate_status_text, AgentGate, SettingsStore};
 
 /// Whether a base URL is *public-looking* plain HTTP: `http://` on anything
 /// that is not loopback, RFC-1918/link-local private space, or `localhost`.
@@ -95,101 +89,10 @@ pub fn evaluate_serve_guard(
     }
 }
 
-/// The download-pin posture inputs.
-#[derive(Debug, Clone, Default)]
-pub struct PinPosture {
-    /// Number of pinned asset hashes configured.
-    pub pin_count: usize,
-    /// Whether unpinned downloads are blocked.
-    pub require_pins: bool,
-    /// The pinned llama.cpp release tag, when set.
-    pub pinned_tag: Option<String>,
-}
-
-/// Inputs to the posture screen.
-pub struct PostureInputs<'a> {
-    pub env: &'a dyn EnvStore,
-    pub settings: &'a dyn SettingsStore,
-    pub proxy_port: u16,
-    /// Whether a serve-gateway token is currently set.
-    pub serve_token_set: bool,
-    pub pins: PinPosture,
-}
-
-/// Render the one-screen security posture.
-#[must_use]
-pub fn security_posture(inputs: &PostureInputs) -> String {
-    let permission = gate_status_text(
-        AgentGate::ClaudeSkipPermissions,
-        inputs.env,
-        inputs.settings,
-    );
-    let localpilot = gate_status_text(AgentGate::LocalPilotBypass, inputs.env, inputs.settings);
-    let codex = gate_status_text(AgentGate::CodexBypass, inputs.env, inputs.settings);
-    let serve_auth = if inputs.serve_token_set {
-        "token set"
-    } else {
-        "no token set (gateway would be open)"
-    };
-    let tag = inputs
-        .pins
-        .pinned_tag
-        .clone()
-        .unwrap_or_else(|| "none (latest, unpinned)".to_string());
-    let pin_line = if inputs.pins.require_pins {
-        format!(
-            "{} asset pin(s), unpinned downloads blocked, llama.cpp tag {tag}",
-            inputs.pins.pin_count
-        )
-    } else {
-        format!(
-            "{} asset pin(s), unpinned downloads ALLOWED (trust-on-first-use), llama.cpp tag {tag}",
-            inputs.pins.pin_count
-        )
-    };
-
-    format!(
-        "=== LocalBox security posture ===\n\
-         \x20 Agent permission prompts : {permission}\n\
-         \x20 LocalPilot bypass        : {localpilot}\n\
-         \x20 Codex bypass             : {codex}\n\
-         \x20 Agent proxy              : 127.0.0.1:{} (local only)\n\
-         \x20 Serve gateway (if used)  : listens on 0.0.0.0; auth: {serve_auth}\n\
-         \x20                            LAN/VPN only; HTTPS in front for off-LAN; public no-auth HTTP is refused.\n\
-         \x20 Binary download pins     : {pin_line}",
-        inputs.proxy_port
-    )
-}
-
-/// The managed default GGUF root under a home directory — discovery returns
-/// this when nothing is configured, never a hardcoded machine path.
-#[must_use]
-pub fn default_gguf_root(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(".local-llm").join("gguf")
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::permissions::JsonSettingsStore;
-    use std::collections::BTreeMap;
-
-    #[derive(Default)]
-    struct FakeEnv {
-        vars: BTreeMap<String, String>,
-    }
-    impl EnvStore for FakeEnv {
-        fn get(&self, name: &str) -> Option<String> {
-            self.vars.get(name).cloned()
-        }
-        fn set(&mut self, name: &str, value: &str) {
-            self.vars.insert(name.to_string(), value.to_string());
-        }
-        fn remove(&mut self, name: &str) {
-            self.vars.remove(name);
-        }
-    }
 
     #[test]
     fn the_public_http_classifier_spares_private_space() {
@@ -247,52 +150,5 @@ mod tests {
         let guard = evaluate_serve_guard(&["http://192.168.1.2:1".to_string()], "", false);
         assert!(!guard.refuse);
         assert!(guard.public_urls.is_empty());
-    }
-
-    #[test]
-    fn the_posture_screen_surfaces_every_gate_and_pin_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut settings = JsonSettingsStore::open(dir.path().join("settings.json")).unwrap();
-        crate::permissions::SettingsStore::persist_bool(&mut settings, "LocalPilotBypass", true);
-        let env = FakeEnv::default();
-        let posture = security_posture(&PostureInputs {
-            env: &env,
-            settings: &settings,
-            proxy_port: 11_435,
-            serve_token_set: false,
-            pins: PinPosture {
-                pin_count: 3,
-                require_pins: true,
-                pinned_tag: Some("b4988".to_string()),
-            },
-        });
-        assert!(posture.contains("Agent permission prompts : undecided"));
-        assert!(posture.contains("LocalPilot bypass        : ON"));
-        assert!(posture.contains("Codex bypass             : undecided"));
-        assert!(posture.contains("127.0.0.1:11435 (local only)"));
-        assert!(posture.contains("no token set (gateway would be open)"));
-        assert!(posture.contains("3 asset pin(s), unpinned downloads blocked, llama.cpp tag b4988"));
-        // The trust-on-first-use spelling appears when pins are not required.
-        let tofu = security_posture(&PostureInputs {
-            env: &env,
-            settings: &settings,
-            proxy_port: 11_435,
-            serve_token_set: true,
-            pins: PinPosture::default(),
-        });
-        assert!(tofu.contains("ALLOWED (trust-on-first-use)"));
-        assert!(tofu.contains("none (latest, unpinned)"));
-        assert!(tofu.contains("auth: token set"));
-    }
-
-    #[test]
-    fn discovery_defaults_are_managed_never_hardcoded() {
-        // The default derives from the given home — no literal machine path.
-        let root = default_gguf_root(std::path::Path::new("/home/alice"));
-        assert!(root.ends_with(std::path::PathBuf::from(".local-llm").join("gguf")));
-        assert!(root.starts_with("/home/alice"));
-        let other = default_gguf_root(std::path::Path::new("D:/Users/bob"));
-        assert!(other.starts_with("D:/Users/bob"));
-        assert_ne!(root, other, "the root follows the home, not the machine");
     }
 }

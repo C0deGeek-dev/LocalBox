@@ -38,16 +38,6 @@ pub const CLAUDE_ENV_NAMES: &[&str] = &[
     // Codex (OpenAI-protocol) agent target.
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
-    "LOCALBOX_BACKEND",
-    "LOCALBOX_LLAMA_SERVER_PID",
-    "LOCALBOX_LLAMA_SERVER_PORT",
-    "LOCALBOX_LLAMA_SERVER_OUT_LOG",
-    "LOCALBOX_LLAMA_SERVER_ERR_LOG",
-    "LOCALBOX_LLAMA_SERVER_GGUF",
-    "LOCALBOX_LLAMA_SERVER_MODEL",
-    "LOCALBOX_CONTEXT_KEY",
-    "LOCALBOX_CONTEXT_TOKENS",
-    "LOCALBOX_LOW_TPS_WARNING",
 ];
 
 /// Environment access seam.
@@ -192,39 +182,6 @@ pub fn codex_env_plan(base_url: &str, auth_token: &str) -> Vec<(&'static str, St
     ]
 }
 
-/// Inputs to the backend-telemetry env plan.
-#[derive(Debug, Clone)]
-pub struct TelemetryEnvInputs {
-    pub server_pid: u32,
-    pub server_port: u16,
-    pub out_log: String,
-    pub err_log: String,
-    pub gguf_path: String,
-    pub model: String,
-    pub context_key: String,
-    pub context_tokens: u32,
-}
-
-/// The `LOCALBOX_*` telemetry variables a launch exports for the agent.
-#[must_use]
-pub fn telemetry_env_plan(inputs: &TelemetryEnvInputs) -> Vec<(&'static str, String)> {
-    let mut plan: Vec<(&'static str, String)> = vec![
-        ("LOCALBOX_BACKEND", "llama.cpp".to_string()),
-        ("LOCALBOX_LLAMA_SERVER_PID", inputs.server_pid.to_string()),
-        ("LOCALBOX_LLAMA_SERVER_PORT", inputs.server_port.to_string()),
-        ("LOCALBOX_LLAMA_SERVER_OUT_LOG", inputs.out_log.clone()),
-        ("LOCALBOX_LLAMA_SERVER_ERR_LOG", inputs.err_log.clone()),
-        ("LOCALBOX_LLAMA_SERVER_GGUF", inputs.gguf_path.clone()),
-        ("LOCALBOX_LLAMA_SERVER_MODEL", inputs.model.clone()),
-        ("LOCALBOX_CONTEXT_KEY", inputs.context_key.clone()),
-    ];
-    if inputs.context_tokens > 0 {
-        plan.push(("LOCALBOX_CONTEXT_TOKENS", inputs.context_tokens.to_string()));
-    }
-    plan.push(("LOCALBOX_LOW_TPS_WARNING", "2".to_string()));
-    plan
-}
-
 /// The saved pre-launch state of every canonical variable: `Some` = present
 /// with that value, `None` = absent (and to be removed again on restore).
 #[derive(Debug, Clone)]
@@ -293,19 +250,6 @@ mod tests {
         inputs.context_tokens = 65_536;
         inputs.max_images_per_request = 2;
         for (name, _) in claude_env_plan(&inputs) {
-            assert!(CLAUDE_ENV_NAMES.contains(&name), "{name} not in envelope");
-        }
-        let telemetry = TelemetryEnvInputs {
-            server_pid: 1,
-            server_port: 8080,
-            out_log: "o".to_string(),
-            err_log: "e".to_string(),
-            gguf_path: "g".to_string(),
-            model: "m".to_string(),
-            context_key: "64k".to_string(),
-            context_tokens: 65_536,
-        };
-        for (name, _) in telemetry_env_plan(&telemetry) {
             assert!(CLAUDE_ENV_NAMES.contains(&name), "{name} not in envelope");
         }
     }
@@ -435,23 +379,5 @@ mod tests {
         for (name, _) in &plan {
             assert!(CLAUDE_ENV_NAMES.contains(name), "{name} not in envelope");
         }
-    }
-
-    #[test]
-    fn telemetry_plan_carries_the_session_facts() {
-        let plan = telemetry_env_plan(&TelemetryEnvInputs {
-            server_pid: 4242,
-            server_port: 8080,
-            out_log: "out.log".to_string(),
-            err_log: "err.log".to_string(),
-            gguf_path: "model.gguf".to_string(),
-            model: "apex".to_string(),
-            context_key: "64k".to_string(),
-            context_tokens: 0,
-        });
-        let names: Vec<&str> = plan.iter().map(|(n, _)| *n).collect();
-        assert!(names.contains(&"LOCALBOX_LLAMA_SERVER_PID"));
-        assert!(!names.contains(&"LOCALBOX_CONTEXT_TOKENS"), "0 = unset");
-        assert_eq!(plan.last().unwrap().1, "2", "low-TPS warning threshold");
     }
 }
