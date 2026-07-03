@@ -262,16 +262,32 @@ pub fn execute_launch(
     let binary = launcher.server_binary(request.mode, true)?;
     let log = server_log_path(home, plan.server_port);
     eprintln!("Starting the model server — log: {}", log.display());
-    let child = spawn_server(&binary, &plan.argv, &log)
+    let mut child = spawn_server(&binary, &plan.argv, &log)
         .map_err(|e| LiveError::Server(format!("{}: {e}", binary.display())))?;
     outcome.server_pid = Some(child.id());
 
     eprintln!("Loading the model into memory … (this can take a few minutes)");
-    if let Err(e) = launcher.wait_server(plan.server_port, 180) {
-        return Err(LiveError::Server(format!(
-            "{e} — the server log is at {}",
-            log.display()
-        )));
+    // Wait for /health readiness, but fail fast if the server process exits first
+    // (e.g. it OOMs while loading the model) instead of polling the full timeout
+    // for a port that will never open. Short readiness probes reuse the launcher's
+    // real health check; the child is reaped between them.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        if launcher.wait_server(plan.server_port, 2).is_ok() {
+            break;
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(LiveError::Server(format!(
+                "the model server exited before it was ready ({status}) — the server log is at {}",
+                log.display()
+            )));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(LiveError::Server(format!(
+                "the model server did not become ready within 180s — the server log is at {}",
+                log.display()
+            )));
+        }
     }
     eprintln!("Model ready on 127.0.0.1:{}.", plan.server_port);
     launcher.set_backend_session(&BackendSession {
