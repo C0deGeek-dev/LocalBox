@@ -20,10 +20,12 @@ use localbox_tui::customize::{
 use localbox_tui::driver::{ensure_utf8_output, plain_menu, plain_warning, should_degrade};
 use localbox_tui::plan::{resolve_launch_plan, DefaultLaunch, GuidedPlan, PlanOverrides};
 use localbox_tui::ui::{
-    render_guided_screen, ConfirmAction, GuidedScreen, MenuRow, ModelRow, CONFIRM_ROWS,
+    render_guided_screen, render_notice_screen, ConfirmAction, GuidedScreen, MenuRow, ModelRow,
+    CONFIRM_ROWS,
 };
 use localbox_tui::vocab::{glossary, gpu_banner, plan_summary, target_label};
 use localx_llama_core::{Mode, ModelDef, TunerBestConfig, TunerEntry};
+use ratatui::style::Color;
 
 use crate::exec::{home_dir, probe_gpu, probe_vram_gb};
 use crate::live::{execute_launch, AgentKind};
@@ -236,6 +238,19 @@ trait Chooser {
     fn set_panel(&mut self, panel: Option<(String, String)>);
     fn choose(&mut self, title: &str, rows: &[MenuRow], start: usize) -> Option<usize>;
     fn notice(&mut self, text: &str);
+    /// Show a terminal outcome (a launch result or an error) and hold it on
+    /// screen until the user acknowledges it. The rich path re-acquires the
+    /// band and waits for a key; the plain path just prints. Without this, an
+    /// outcome shown after [`Chooser::release`] is a bare line the next menu
+    /// redraw buries — invisible until the launcher exits.
+    fn announce(&mut self, text: &str) {
+        self.notice(text);
+    }
+    /// Show an *error* outcome, held on screen until acknowledged. The rich
+    /// path frames it in a red box; the plain path just prints it.
+    fn announce_error(&mut self, text: &str) {
+        self.notice(text);
+    }
     /// Hand the screen back to normal printing (before a launch).
     fn release(&mut self) {}
     /// Whether the user asked to leave the launcher entirely (Ctrl+C).
@@ -375,6 +390,49 @@ impl TuiChooser {
         self.quit = quit;
         Ok(result)
     }
+
+    /// Hold a terminal outcome on the band until the user acknowledges it.
+    /// Re-acquires the band the launch released, so the message renders as a
+    /// held screen instead of a bare line the next menu redraw buries.
+    fn dwell_notice(&mut self, title: &str, text: &str, border: Option<Color>) {
+        use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+
+        let banner = self.banner.clone();
+        let Ok(terminal) = self.ensure_terminal() else {
+            println!("{text}");
+            return;
+        };
+        if crossterm::terminal::enable_raw_mode().is_err() {
+            println!("{text}");
+            return;
+        }
+        let mut quit = false;
+        loop {
+            let _ = terminal.draw(|frame| {
+                render_notice_screen(frame, &banner, title, text, border);
+            });
+            match event::read() {
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        quit = true;
+                        break;
+                    }
+                    if matches!(
+                        key.code,
+                        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char(' ')
+                    ) {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let _ = crossterm::terminal::disable_raw_mode();
+        self.quit = quit || self.quit;
+    }
 }
 
 impl Chooser for TuiChooser {
@@ -411,6 +469,14 @@ impl Chooser for TuiChooser {
             }
             None => println!("{text}"),
         }
+    }
+
+    fn announce(&mut self, text: &str) {
+        self.dwell_notice("LocalBox", text, None);
+    }
+
+    fn announce_error(&mut self, text: &str) {
+        self.dwell_notice("Error", text, Some(Color::Red));
     }
 
     fn release(&mut self) {
@@ -1177,13 +1243,15 @@ fn auto_tune_flow(
     }
 
     match crate::exec::run_interactive("localbench", &args) {
-        Ok(status) if status.success() => chooser.notice(if choices.save {
+        Ok(status) if status.success() => chooser.announce(if choices.save {
             "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings."
         } else {
             "Auto-tune preview finished; nothing was saved."
         }),
-        Ok(_) => chooser.notice("Auto-tune did not finish; the recommended defaults still apply."),
-        Err(_) => chooser.notice(
+        Ok(_) => {
+            chooser.announce("Auto-tune did not finish; the recommended defaults still apply.");
+        }
+        Err(_) => chooser.announce_error(
             "LocalBench is not installed, so Auto-tune cannot run.\n\
              Install it, then either pick this row again or run:\n  localbench findbest --model <model>",
         ),
@@ -1220,7 +1288,7 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
     let catalog = match Catalog::load(&catalog_dir(home)) {
         Ok(c) => c,
         Err(e) => {
-            chooser.notice(&plain_warning("launch", &e.to_string()));
+            chooser.announce_error(&plain_warning("launch", &e.to_string()));
             return;
         }
     };
@@ -1228,7 +1296,7 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
     let resolved = match plan_launch(&launcher, &request) {
         Ok(p) => p,
         Err(e) => {
-            chooser.notice(&plain_warning("launch", &e.to_string()));
+            chooser.announce_error(&plain_warning("launch", &e.to_string()));
             return;
         }
     };
@@ -1238,13 +1306,13 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
     match execute_launch(&launcher, &resolved, &request, agent, home) {
         Ok(_) => {
             if agent == AgentKind::ServeOnly {
-                chooser.notice(&format!(
+                chooser.announce(&format!(
                     "Serving {} at {}",
                     resolved.key, resolved.base_url
                 ));
             }
         }
-        Err(e) => chooser.notice(&plain_warning("launch", &e.to_string())),
+        Err(e) => chooser.announce_error(&plain_warning("launch", &e.to_string())),
     }
 }
 
@@ -1255,14 +1323,15 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
 #[must_use]
 pub fn catalog_dir(home: &Path) -> PathBuf {
     let installed = home.join(".local-llm");
-    if installed.join("llm-models.json").is_file() {
-        return installed;
-    }
-    let checkout = PathBuf::from("local-llm");
-    if checkout.is_dir() {
-        return checkout;
-    }
+    // First run always seeds the user's own tree, so `llm-models.json` exists
+    // before anything reads it — no one is ever told to copy a file by hand.
+    // Seeding is idempotent and never overwrites, so it is safe every run and
+    // independent of the working directory.
     seed_installed_tree(&installed);
+    // A source checkout's `local-llm/` stays the live catalog when developing.
+    if PathBuf::from("local-llm").is_dir() {
+        return PathBuf::from("local-llm");
+    }
     installed
 }
 
@@ -1464,5 +1533,30 @@ mod tests {
         let value = serde_json::to_value(&saved).unwrap();
         assert!(value.get("Action").is_some());
         assert!(value.get("ModelKey").is_some());
+    }
+
+    #[test]
+    fn catalog_dir_seeds_the_user_catalog_so_no_one_copies_by_hand() {
+        let home = tempfile::tempdir().unwrap();
+        let _ = catalog_dir(home.path());
+        // The user's own editable catalog and its defaults exist after the
+        // first resolution — the "copy llm-models.example.json" path is gone.
+        let installed = home.path().join(".local-llm");
+        assert!(
+            installed.join("llm-models.json").is_file(),
+            "llm-models.json is seeded on first run"
+        );
+        assert!(
+            installed.join("defaults.json").is_file(),
+            "defaults.json is seeded alongside it"
+        );
+        // A user edit is never clobbered on a later run.
+        std::fs::write(installed.join("llm-models.json"), "{\"Models\":{}}").unwrap();
+        let _ = catalog_dir(home.path());
+        assert_eq!(
+            std::fs::read_to_string(installed.join("llm-models.json")).unwrap(),
+            "{\"Models\":{}}",
+            "seeding never overwrites an existing catalog"
+        );
     }
 }

@@ -289,6 +289,68 @@ pub fn render_guided_screen(frame: &mut Frame, screen: &GuidedScreen) {
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
+/// Render a terminal outcome (a launch result or an error) into the live
+/// band: the hardware banner, a bordered panel holding the message, and a
+/// dim "Press Enter to continue" footer. Unlike a bare printed line, this
+/// stays on the band until the user acknowledges it, so the next menu redraw
+/// can never bury it. `border` colors the box — `Some(Color::Red)` marks an
+/// error at a glance; `None` is the neutral default.
+pub fn render_notice_screen(
+    frame: &mut Frame,
+    banner: &str,
+    title: &str,
+    text: &str,
+    border: Option<Color>,
+) {
+    let area = frame.area();
+    let banner_height = u16::from(!banner.is_empty());
+    if banner_height == 1 {
+        let banner_widget = Paragraph::new(Line::from(Span::styled(
+            banner.to_string(),
+            Style::default().add_modifier(Modifier::DIM),
+        )));
+        frame.render_widget(banner_widget, Rect { height: 1, ..area });
+    }
+    let body = Rect {
+        y: area.y + banner_height,
+        height: area.height.saturating_sub(banner_height),
+        ..area
+    };
+    // The panel hugs its lines; the footer takes the row just below it.
+    let panel_lines = u16::try_from(text.lines().count()).unwrap_or(u16::MAX);
+    let panel_height = (panel_lines + 2).min(body.height.saturating_sub(1).max(1));
+    let border_style = border.map_or_else(Style::default, |c| Style::default().fg(c));
+    let lines: Vec<Line> = text.lines().map(|l| Line::from(l.to_string())).collect();
+    let panel = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title.to_string()),
+    );
+    frame.render_widget(
+        panel,
+        Rect {
+            height: panel_height,
+            ..body
+        },
+    );
+    let footer_y = body.y + panel_height;
+    if footer_y < body.y + body.height {
+        let footer = Paragraph::new(Line::from(Span::styled(
+            "Press Enter to continue".to_string(),
+            Style::default().add_modifier(Modifier::DIM),
+        )));
+        frame.render_widget(
+            footer,
+            Rect {
+                y: footer_y,
+                height: 1,
+                ..body
+            },
+        );
+    }
+}
+
 /// The confirm menu's five actions, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmAction {
@@ -495,6 +557,43 @@ mod tests {
             .position(|l| l.starts_with('└'))
             .expect("bottom border drawn");
         assert_eq!(bottom_border, 2, "1 row + borders = 3 lines, not 18");
+    }
+
+    #[test]
+    fn the_notice_screen_shows_the_message_and_a_dwell_footer() {
+        // A launch/auto-tune outcome must render inside the live band with an
+        // acknowledgement footer — never a bare line the next redraw buries.
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_notice_screen(
+                    frame,
+                    "Computer:  Apple M3 Max · 48 GB",
+                    "Error",
+                    "no llama-server found — install llama.cpp for the native mode first",
+                    Some(Color::Red),
+                );
+            })
+            .unwrap();
+        let screen = buffer_text(&terminal);
+        assert!(screen.contains("Error"), "title shown:\n{screen}");
+        assert!(
+            screen.contains("install llama.cpp for the native mode first"),
+            "the outcome message is on the band:\n{screen}"
+        );
+        assert!(
+            screen.contains("Press Enter to continue"),
+            "the dwell footer keeps the message until acknowledged:\n{screen}"
+        );
+        assert!(
+            screen.contains("Apple M3 Max"),
+            "the hardware banner still frames the band:\n{screen}"
+        );
+        // The error box is red: the panel's top-left corner sits just under
+        // the one-line banner, and its border carries the error color.
+        let corner = terminal.backend().buffer()[(0, 1)].clone();
+        assert_eq!(corner.fg, Color::Red, "the error border is red");
     }
 
     #[test]
