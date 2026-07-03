@@ -4,6 +4,15 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Streamed local-model replies are no longer truncated by up to ~7 characters.
+  The no-think proxy held back the last few bytes of the visible text for
+  split-`<think>`-tag safety and only released them after the stream's end
+  marker (`[DONE]` / `message_stop`) — where the agent had already stopped
+  reading — so every reply lost its final characters (e.g. "…What can I do for
+  you?" arrived as "…What can I do f"). The proxy now flushes the held-back
+  tail in-band, just before the end marker. (Shared `localx-llama` proxy fix;
+  re-pinned.)
+
 ## v2.1.0 - 2026-07-03
 
 Coordinated LocalX release.
