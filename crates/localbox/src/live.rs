@@ -5,10 +5,16 @@
 //! The plan itself is resolved read-only by the launcher library; this module
 //! is the one place its effects actually happen.
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use localbox_launcher::env::ProcessEnv;
 use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{LaunchPlan, LaunchRequest};
+use localbox_launcher::permissions::{
+    claude_permission_args, codex_bypass_args, localpilot_bypass_toml, resolve_gate, AgentGate,
+    GateSource, JsonSettingsStore, Prompter,
+};
 use localbox_launcher::proxy::{ensure_proxy, stop_any_on_port, ProxyLifecycleError};
 use localbox_launcher::smoke::{evaluate_smoke_reply, format_smoke_failure};
 use localx_llama_core::{BackendSession, Launcher, LauncherError};
@@ -87,6 +93,90 @@ pub struct LaunchOutcome {
 pub fn uses_proxy(plan: &LaunchPlan) -> bool {
     plan.base_url
         .ends_with(&format!(":{}", plan.proxy.listen_port))
+}
+
+/// The permission gate an agent launch is subject to (`ServeOnly` has none).
+#[must_use]
+fn agent_gate(agent: AgentKind) -> Option<AgentGate> {
+    match agent {
+        AgentKind::Claude => Some(AgentGate::ClaudeSkipPermissions),
+        AgentKind::Codex => Some(AgentGate::CodexBypass),
+        AgentKind::LocalPilot => Some(AgentGate::LocalPilotBypass),
+        AgentKind::ServeOnly => None,
+    }
+}
+
+/// A short phrase describing how a gate decision was reached, for the posture
+/// line.
+fn describe_source(source: &GateSource) -> String {
+    match source {
+        GateSource::Env(var) => format!("from {var}, this launch only"),
+        GateSource::Setting => "from your saved setting".to_string(),
+        GateSource::Prompted => "you chose just now (saved)".to_string(),
+        GateSource::DefaultOff => "safe default".to_string(),
+    }
+}
+
+/// The first-run permission prompt for a live launch: asks once on an
+/// interactive terminal, declines silently when there is no TTY (a
+/// non-interactive session never enables a bypass or persists a choice).
+struct TerminalPrompter;
+
+impl Prompter for TerminalPrompter {
+    fn ask(&mut self, gate: AgentGate) -> Option<bool> {
+        use std::io::Write;
+        if !std::io::stdin().is_terminal() {
+            return None;
+        }
+        eprint!(
+            "Let {} run without asking permission for each action \
+             ({})?\nThis removes the human-in-the-loop that guards against \
+             prompt injection — recommended OFF for local models. [y/N]: ",
+            gate.label(),
+            gate.flag_summary(),
+        );
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return None;
+        }
+        Some(matches!(
+            line.trim().to_ascii_lowercase().as_str(),
+            "y" | "yes"
+        ))
+    }
+}
+
+/// Resolve the agent's permission gate (env → saved setting → one-time prompt,
+/// default OFF), print the posture line, and return the launch args + the extra
+/// `.localpilot.toml` block the decision implies. A settings-read failure is
+/// treated as the safe default (gated), never as a reason to abort the launch.
+fn resolve_agent_gate(agent: AgentKind, home: &Path) -> (Vec<String>, String) {
+    let Some(gate) = agent_gate(agent) else {
+        return (Vec::new(), String::new());
+    };
+    let settings_path = home.join(".local-llm").join("settings.json");
+    let Ok(mut settings) = JsonSettingsStore::open(&settings_path) else {
+        return (Vec::new(), String::new());
+    };
+    let env = ProcessEnv;
+    let mut prompter = TerminalPrompter;
+    let decision = resolve_gate(gate, &env, &mut settings, &mut prompter, false);
+    eprintln!(
+        "Permission posture — {}: {} ({}).",
+        gate.label(),
+        if decision.enabled {
+            "bypass ENABLED"
+        } else {
+            "approvals required"
+        },
+        describe_source(&decision.source),
+    );
+    match gate {
+        AgentGate::ClaudeSkipPermissions => (claude_permission_args(&decision), String::new()),
+        AgentGate::CodexBypass => (codex_bypass_args(&decision), String::new()),
+        AgentGate::LocalPilotBypass => (Vec::new(), localpilot_bypass_toml(&decision)),
+    }
 }
 
 /// The server log path for a launch.
@@ -207,8 +297,13 @@ pub fn execute_launch(
         eprintln!("Reply check passed.");
     }
 
+    // Resolve the permission gate once (may prompt): the decision feeds both the
+    // LocalPilot config file and the Claude/Codex argv below.
+    let (gate_args, bypass_toml) = resolve_agent_gate(agent, home);
+
     if agent == AgentKind::LocalPilot {
-        std::fs::write(".localpilot.toml", &plan.provider_toml)
+        let toml = format!("{}{}", plan.provider_toml, bypass_toml);
+        std::fs::write(".localpilot.toml", toml)
             .map_err(|e| LiveError::Io(format!("could not write .localpilot.toml: {e}")))?;
     }
 
@@ -217,7 +312,7 @@ pub fn execute_launch(
         // `plan.env_plan` is already agent-correct (Anthropic for Claude/LocalPilot,
         // OpenAI for Codex — set by the caller so the dry-run preview matches).
         let _env = EnvGuard::apply(&plan.env_plan);
-        let status = run_interactive(program, &[]).map_err(|e| LiveError::Agent {
+        let status = run_interactive(program, &gate_args).map_err(|e| LiveError::Agent {
             agent: program.to_string(),
             reason: e.to_string(),
         })?;
@@ -307,6 +402,67 @@ mod tests {
         assert!(uses_proxy(&plan_with("http://127.0.0.1:11435", 11_435)));
         // Direct-to-server plans never touch the proxy lifecycle.
         assert!(!uses_proxy(&plan_with("http://127.0.0.1:8080", 11_435)));
+    }
+
+    #[test]
+    fn agent_gate_maps_each_agent_to_its_gate() {
+        assert_eq!(
+            agent_gate(AgentKind::Claude),
+            Some(AgentGate::ClaudeSkipPermissions)
+        );
+        assert_eq!(agent_gate(AgentKind::Codex), Some(AgentGate::CodexBypass));
+        assert_eq!(
+            agent_gate(AgentKind::LocalPilot),
+            Some(AgentGate::LocalPilotBypass)
+        );
+        assert_eq!(agent_gate(AgentKind::ServeOnly), None);
+    }
+
+    #[test]
+    fn a_persisted_localpilot_bypass_flows_into_the_config_block() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".local-llm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), r#"{"LocalPilotBypass": true}"#).unwrap();
+        let (args, toml) = resolve_agent_gate(AgentKind::LocalPilot, home.path());
+        assert!(args.is_empty());
+        assert!(
+            toml.contains("[permissions]") && toml.contains("bypass"),
+            "a persisted bypass must reach the config block, got {toml:?}"
+        );
+    }
+
+    #[test]
+    fn a_persisted_codex_bypass_flows_into_the_argv() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".local-llm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"CodexBypassApprovalsAndSandbox": true}"#,
+        )
+        .unwrap();
+        let (args, toml) = resolve_agent_gate(AgentKind::Codex, home.path());
+        assert!(toml.is_empty());
+        assert_eq!(
+            args,
+            vec!["--dangerously-bypass-approvals-and-sandbox".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_undecided_gate_defaults_off_and_serveonly_is_never_gated() {
+        // No env override, no persisted setting, non-interactive test stdin: the
+        // launch must fall to the safe default (approvals required), never a
+        // silent bypass. This is the wiring's fail-closed guarantee.
+        let home = tempfile::tempdir().unwrap();
+        let (args, toml) = resolve_agent_gate(AgentKind::Claude, home.path());
+        assert!(args.is_empty(), "an undecided claude gate must stay gated");
+        assert!(toml.is_empty());
+        assert_eq!(
+            resolve_agent_gate(AgentKind::ServeOnly, home.path()),
+            (Vec::new(), String::new())
+        );
     }
 
     #[test]
