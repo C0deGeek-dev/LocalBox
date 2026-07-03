@@ -16,18 +16,26 @@ pub struct GpuInfo {
     pub name: String,
     /// Total graphics memory in whole GB; `0` = the tool named no number.
     pub vram_gb: u32,
+    /// Apple Silicon shares one pool between CPU and GPU (Metal), so the
+    /// banner says "unified memory" rather than dedicated "graphics memory".
+    pub unified: bool,
 }
 
-/// The one-line hardware banner above the guided menus: what card was
-/// found (NVIDIA via `nvidia-smi`, AMD via its tools) and how much
-/// graphics memory the fit hints are judged against.
+/// The one-line hardware banner above the guided menus: what card was found
+/// (NVIDIA via `nvidia-smi`, AMD via its tools, Apple Silicon via `sysctl`)
+/// and how much memory the fit hints are judged against.
 #[must_use]
 pub fn gpu_banner(gpu: Option<&GpuInfo>) -> String {
     match gpu {
-        Some(info) if info.vram_gb > 0 => format!(
-            "Computer:  {} · {} GB graphics memory",
-            info.name, info.vram_gb
-        ),
+        Some(info) if info.vram_gb > 0 => {
+            let memory = if info.unified {
+                "unified memory (Metal)"
+            } else {
+                "graphics memory"
+            };
+            format!("Computer:  {} · {} GB {memory}", info.name, info.vram_gb)
+        }
+        Some(info) if info.unified => format!("Computer:  {} · Metal", info.name),
         Some(info) => format!("Computer:  {}", info.name),
         None => {
             "Computer:  no NVIDIA or AMD GPU found — running on the processor (slower)".to_string()
@@ -246,6 +254,7 @@ mod tests {
         let card = GpuInfo {
             name: "NVIDIA GeForce RTX 4090".to_string(),
             vram_gb: 24,
+            unified: false,
         };
         assert_eq!(
             gpu_banner(Some(&card)),
@@ -254,6 +263,7 @@ mod tests {
         let unsized_card = GpuInfo {
             name: "AMD Radeon RX 7900 XTX".to_string(),
             vram_gb: 0,
+            unified: false,
         };
         assert_eq!(
             gpu_banner(Some(&unsized_card)),
@@ -262,6 +272,27 @@ mod tests {
         let none = gpu_banner(None);
         assert!(none.contains("no NVIDIA or AMD GPU"));
         assert!(none.contains("processor"), "names the CPU fallback plainly");
+    }
+
+    #[test]
+    fn apple_silicon_reads_as_unified_metal_not_the_cpu_fallback() {
+        let mac = GpuInfo {
+            name: "Apple M3 Pro".to_string(),
+            vram_gb: 18,
+            unified: true,
+        };
+        assert_eq!(
+            gpu_banner(Some(&mac)),
+            "Computer:  Apple M3 Pro · 18 GB unified memory (Metal)"
+        );
+        // Even with no memory number, Apple Silicon still names Metal — never
+        // the misleading "running on the processor" line.
+        let mac_no_mem = GpuInfo {
+            name: "Apple M3 Pro".to_string(),
+            vram_gb: 0,
+            unified: true,
+        };
+        assert_eq!(gpu_banner(Some(&mac_no_mem)), "Computer:  Apple M3 Pro · Metal");
     }
 
     #[test]

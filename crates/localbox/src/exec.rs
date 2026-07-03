@@ -60,20 +60,27 @@ pub fn loopback_get(port: u16, path: &str, timeout: Duration) -> Option<String> 
     }
 }
 
-/// Probe total GPU VRAM in whole GB via `nvidia-smi`; `0` when unavailable.
+/// Probe total GPU memory in whole GB: `nvidia-smi` first, then Apple
+/// Silicon's unified pool on macOS; `0` when nothing answers.
 #[must_use]
 pub fn probe_vram_gb() -> u32 {
-    let output = Command::new("nvidia-smi")
+    let nvidia = Command::new("nvidia-smi")
         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
-        .output();
-    match output {
-        Ok(out) if out.status.success() => {
-            parse_nvidia_smi_vram_gb(&String::from_utf8_lossy(&out.stdout))
-                .and_then(|gb| u32::try_from(gb).ok())
-                .unwrap_or(0)
-        }
-        _ => 0,
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| parse_nvidia_smi_vram_gb(&String::from_utf8_lossy(&out.stdout)))
+        .and_then(|gb| u32::try_from(gb).ok())
+        .unwrap_or(0);
+    if nvidia > 0 {
+        return nvidia;
     }
+    // Apple Silicon shares one memory pool between the CPU and the Metal GPU.
+    #[cfg(target_os = "macos")]
+    if let Some(info) = probe_apple_silicon() {
+        return info.vram_gb;
+    }
+    0
 }
 
 /// Probe the GPU's name and memory for the guided launcher's hardware
@@ -101,7 +108,11 @@ pub fn probe_gpu() -> Option<localbox_tui::vocab::GpuInfo> {
     {
         if out.status.success() {
             if let Some(name) = parse_rocm_product_name(&String::from_utf8_lossy(&out.stdout)) {
-                return Some(localbox_tui::vocab::GpuInfo { name, vram_gb: 0 });
+                return Some(localbox_tui::vocab::GpuInfo {
+                    name,
+                    vram_gb: 0,
+                    unified: false,
+                });
             }
         }
     }
@@ -121,10 +132,20 @@ pub fn probe_gpu() -> Option<localbox_tui::vocab::GpuInfo> {
             if out.status.success() {
                 if let Some(name) = parse_amd_controller_name(&String::from_utf8_lossy(&out.stdout))
                 {
-                    return Some(localbox_tui::vocab::GpuInfo { name, vram_gb: 0 });
+                    return Some(localbox_tui::vocab::GpuInfo {
+                        name,
+                        vram_gb: 0,
+                        unified: false,
+                    });
                 }
             }
         }
+    }
+    // Apple Silicon has no vendor CLI — its GPU is the chip itself (Metal),
+    // with the machine's unified memory as the pool the fit hints judge.
+    #[cfg(target_os = "macos")]
+    if let Some(info) = probe_apple_silicon() {
+        return Some(info);
     }
     None
 }
@@ -142,6 +163,7 @@ fn parse_gpu_name_vram(raw: &str) -> Option<localbox_tui::vocab::GpuInfo> {
     Some(localbox_tui::vocab::GpuInfo {
         name: name.to_string(),
         vram_gb: (mib / 1024.0).round().max(0.0) as u32,
+        unified: false,
     })
 }
 
@@ -161,6 +183,48 @@ fn parse_amd_controller_name(raw: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| line.contains("AMD") || line.contains("Radeon"))
         .map(str::to_string)
+}
+
+/// The Apple Silicon chip name from `sysctl -n machdep.cpu.brand_string`
+/// (`Apple M3 Pro`). Intel Macs report an `Intel(R)…` string and yield
+/// `None` — only Apple Silicon carries the Metal GPU this detects.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_apple_chip(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    name.starts_with("Apple ").then(|| name.to_string())
+}
+
+/// Whole-GB unified memory from `sysctl -n hw.memsize` (a byte count).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_memsize_gb(raw: &str) -> Option<u32> {
+    let bytes: u64 = raw.trim().parse().ok()?;
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    let gb = (bytes as f64 / 1_073_741_824.0).round() as u32;
+    (gb > 0).then_some(gb)
+}
+
+/// Apple Silicon as a GPU: the chip name (Metal) and the machine's unified
+/// memory. macOS only; `None` on Intel Macs, which have no Apple GPU.
+#[cfg(target_os = "macos")]
+fn probe_apple_silicon() -> Option<localbox_tui::vocab::GpuInfo> {
+    let brand = Command::new("sysctl")
+        .args(["-n", "machdep.cpu.brand_string"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    let name = parse_apple_chip(&String::from_utf8_lossy(&brand.stdout))?;
+    let vram_gb = Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| parse_memsize_gb(&String::from_utf8_lossy(&out.stdout)))
+        .unwrap_or(0);
+    Some(localbox_tui::vocab::GpuInfo {
+        name,
+        vram_gb,
+        unified: true,
+    })
 }
 
 /// The PIDs listening on a loopback port, via the OS socket table
@@ -346,6 +410,26 @@ pub fn spawn_server(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apple_chip_detection_accepts_apple_silicon_only() {
+        assert_eq!(
+            parse_apple_chip("Apple M3 Pro\n").as_deref(),
+            Some("Apple M3 Pro")
+        );
+        assert_eq!(parse_apple_chip("  Apple M1  ").as_deref(), Some("Apple M1"));
+        // Intel Macs have no Apple GPU to claim.
+        assert_eq!(parse_apple_chip("Intel(R) Core(TM) i7-9750H"), None);
+        assert_eq!(parse_apple_chip(""), None);
+    }
+
+    #[test]
+    fn unified_memory_parses_bytes_into_whole_gb() {
+        assert_eq!(parse_memsize_gb("19327352832\n"), Some(18)); // 18 GB
+        assert_eq!(parse_memsize_gb("38654705664"), Some(36)); // 36 GB
+        assert_eq!(parse_memsize_gb("0"), None);
+        assert_eq!(parse_memsize_gb("not-a-number"), None);
+    }
 
     #[test]
     fn http_helpers_parse_status_and_body() {
