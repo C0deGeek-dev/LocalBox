@@ -404,11 +404,27 @@ pub enum UpdatePlan {
 ///
 /// # Errors
 /// A plain message when the release lookup fails or no asset fits this host.
+/// The native-mode build variant for this host: CUDA when an NVIDIA driver is
+/// present, Vulkan when an AMD GPU is present (and no NVIDIA driver), else CPU.
+/// Wiring AMD → Vulkan stops AMD hosts silently falling back to a CPU build
+/// while the GPU banner names their card.
+#[must_use]
+pub fn native_variant(driver_major: Option<u32>, amd_gpu: bool) -> Variant {
+    if driver_major.is_some() {
+        Variant::Cuda
+    } else if amd_gpu {
+        Variant::Vulkan
+    } else {
+        Variant::Cpu
+    }
+}
+
 pub async fn plan_binary_update(
     catalog: &Catalog,
     mode: localx_llama_core::Mode,
     root: &Path,
     driver_major: Option<u32>,
+    amd_gpu: bool,
 ) -> Result<UpdatePlan, String> {
     use localx_llama_core::Mode;
     let (repo, pinned_tag) = match mode {
@@ -442,11 +458,7 @@ pub async fn plan_binary_update(
     let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
     let picked = match mode {
         Mode::Native => {
-            let variant = if driver_major.is_some() {
-                Variant::Cuda
-            } else {
-                Variant::Cpu
-            };
+            let variant = native_variant(driver_major, amd_gpu);
             select_native_asset(&names, variant, driver_major)
                 .or_else(|| select_native_asset(&names, Variant::Cpu, None))
         }
@@ -530,6 +542,17 @@ mod tests {
         let banner = "| NVIDIA-SMI 591.74  Driver Version: 591.74  CUDA Version: 13.1 |";
         assert_eq!(parse_cuda_driver_major(banner), Some(13));
         assert_eq!(parse_cuda_driver_major("no gpu here"), None);
+    }
+
+    #[test]
+    fn native_variant_prefers_cuda_then_vulkan_then_cpu() {
+        // NVIDIA driver present → CUDA, regardless of an AMD card.
+        assert_eq!(native_variant(Some(13), false), Variant::Cuda);
+        assert_eq!(native_variant(Some(13), true), Variant::Cuda);
+        // No NVIDIA driver but an AMD GPU → Vulkan (was silently CPU before).
+        assert_eq!(native_variant(None, true), Variant::Vulkan);
+        // Neither → CPU.
+        assert_eq!(native_variant(None, false), Variant::Cpu);
     }
 
     #[cfg(windows)]

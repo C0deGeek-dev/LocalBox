@@ -481,12 +481,21 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
         None => vec![Mode::Native, Mode::Turboquant, Mode::Mtpturbo],
     };
     let driver_major = localbox::update::parse_cuda_driver_major(&nvidia_smi_banner());
+    // No NVIDIA driver but an AMD card present → the Vulkan build uses the GPU
+    // instead of silently falling back to CPU.
+    let amd_gpu = driver_major.is_none() && host_has_amd_gpu();
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
 
     for mode in modes {
         let root = localx_llama_core::Launcher::install_root(&launcher, mode);
         println!("== {} ==", mode.as_str());
-        match runtime.block_on(plan_binary_update(&catalog, mode, &root, driver_major)) {
+        match runtime.block_on(plan_binary_update(
+            &catalog,
+            mode,
+            &root,
+            driver_major,
+            amd_gpu,
+        )) {
             Ok(UpdatePlan::UpToDate { tag }) => println!("Up to date ({tag})."),
             Ok(UpdatePlan::MtpStatus { message }) => println!("{message}"),
             Ok(UpdatePlan::Install { release, asset }) => {
@@ -505,11 +514,7 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
                     pin.as_deref(),
                     require,
                 ))?;
-                let variant = if driver_major.is_some() {
-                    "cuda"
-                } else {
-                    "cpu"
-                };
+                let variant = localbox::update::native_variant(driver_major, amd_gpu).as_str();
                 write_stamp(&root, &release.tag, variant).map_err(|e| e.to_string())?;
                 println!("Installed {} into {}.", release.tag, root.display());
             }
@@ -517,6 +522,18 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Whether an AMD GPU is present, used to prefer a Vulkan build over CPU when no
+/// NVIDIA driver is detected. Only consulted in that no-NVIDIA case, so
+/// `probe_gpu`'s AMD fallback (rocm-smi / the video-controller table) answers.
+fn host_has_amd_gpu() -> bool {
+    localbox::exec::probe_gpu()
+        .map(|gpu| {
+            let name = gpu.name.to_ascii_uppercase();
+            name.contains("AMD") || name.contains("RADEON")
+        })
+        .unwrap_or(false)
 }
 
 fn nvidia_smi_banner() -> String {
