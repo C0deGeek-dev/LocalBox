@@ -16,7 +16,7 @@ use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{
     plan_launch, smoke_fallback, LaunchPlan, LaunchRequest, SmokeFallback,
 };
-use localx_llama_core::Mode;
+use localx_llama_core::{Mode, TunerBestConfig, TunerEntry};
 use localx_llama_runtime::proxy::{serve_proxy_on, ProxyConfig};
 
 const DEFAULT_PROXY_PORT: u16 = 11_435;
@@ -47,6 +47,9 @@ Options for launch/serve:
   --context <key>       context window key from the model catalog (e.g. 64k)
   --mode <m>            native | turboquant | mtpturbo   (default native)
   --quant <key>         quant variant from the catalog (default per model)
+  --auto-best           apply the saved localbench profile (best-<model>.json):
+                        tuned quant/context/mode/KV-cache/n-cpu-moe. Explicit
+                        --quant/--context/--mode still filter and override.
   --vision              load the vision projector when the model has one
   --keep-thinking       route the agent straight at the server so thinking
                         reaches it unfiltered (bypasses the no-think proxy, so
@@ -152,6 +155,70 @@ fn parse_agent(value: Option<&str>, default: AgentKind) -> Result<AgentKind, Str
     }
 }
 
+/// Fold the saved localbench profile (`best-<model>.json`) into the request:
+/// adopt its quant/context/mode for the fields the user did not pin, and its
+/// tuned launch params (KV types, `n-cpu-moe`, flash-attn, …). Fails loudly when
+/// no profile exists so `--auto-best` never silently launches raw defaults.
+fn apply_saved_auto_best(
+    request: &mut LaunchRequest,
+    home: &std::path::Path,
+    explicit_mode: bool,
+    explicit_quant: bool,
+    explicit_context: bool,
+) -> Result<(), String> {
+    let path = home
+        .join(".local-llm")
+        .join("tuner")
+        .join(format!("best-{}.json", request.key));
+    let store = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<TunerBestConfig>(&raw).ok())
+        .ok_or_else(|| {
+            format!(
+                "no saved AutoBest profile at {} — run `localbench findbest {}` first, \
+                 or launch through the guided launcher",
+                path.display(),
+                request.key
+            )
+        })?;
+    if !store.schema_supported() {
+        return Err("the saved AutoBest profile uses an unsupported schema version".to_string());
+    }
+    // Honor any pinned quant/context/mode as filters; among the rest, the
+    // highest-scoring entry wins.
+    let mut candidates: Vec<&TunerEntry> = store
+        .entries
+        .iter()
+        .filter(|e| !explicit_quant || request.quant.as_deref() == Some(e.quant.as_str()))
+        .filter(|e| !explicit_context || e.context_key == request.context_key)
+        .filter(|e| !explicit_mode || e.mode == request.mode)
+        .collect();
+    if candidates.is_empty() {
+        return Err("no saved AutoBest entry matches the requested quant/context/mode".to_string());
+    }
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let entry = candidates[0];
+    if !explicit_mode {
+        request.mode = entry.mode;
+    }
+    if !explicit_quant {
+        request.quant = Some(entry.quant.clone());
+    }
+    if !explicit_context {
+        request.context_key = entry.context_key.clone();
+    }
+    request.params = entry.overrides.to_launch_params();
+    eprintln!(
+        "AutoBest: {} · {} · {} (score {:.0} {})",
+        entry.quant,
+        entry.context_key,
+        entry.mode.as_str(),
+        entry.score,
+        entry.score_unit,
+    );
+    Ok(())
+}
+
 fn build_launcher(home: &std::path::Path) -> Result<LlamaLauncher, String> {
     let dir = catalog_dir(home);
     let catalog = Catalog::load(&dir).map_err(|e| e.to_string())?;
@@ -180,6 +247,20 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     request.quant = flag_value(args, "--quant").map(str::to_string);
     request.use_vision = has_flag(args, "--vision");
     request.keep_thinking = has_flag(args, "--keep-thinking");
+
+    // Opt-in: fold in the saved localbench profile so a headless serve/launch uses
+    // the tuned quant/context/mode + launch params (KV types, n-cpu-moe, …) that
+    // the interactive guided launcher applies — instead of raw defaults that OOM a
+    // large model. Explicit --quant/--context/--mode filter and override.
+    if has_flag(args, "--auto-best") {
+        apply_saved_auto_best(
+            &mut request,
+            &home,
+            flag_value(args, "--mode").is_some(),
+            flag_value(args, "--quant").is_some(),
+            flag_value(args, "--context").is_some(),
+        )?;
+    }
 
     let agent = parse_agent(flag_value(args, "--agent"), default_agent)?;
 
