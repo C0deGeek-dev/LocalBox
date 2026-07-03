@@ -54,3 +54,24 @@ jobs:
         env:
           LOCALBOX_ROOT: ${{ github.workspace }}
         run: cargo test -p localbench --test launcher_contract_localbox -- --nocapture
+
+  doc-drift:
+    name: doc drift guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: No retired PowerShell/.NET stack described as current
+        shell: bash
+        run: |
+          # The v2.0.0 native-Rust rewrite retired the PowerShell module and .NET
+          # TUI. Docs may describe them only as history (with a migration/retired
+          # tag), never as the current stack.
+          hits=$(grep -rniE '(Install-Module|\bPester\b|PSScriptAnalyzer|\.psm1|\.psd1|LocalBench\.Tui)' \
+                   docs README.md --include='*.md' 2>/dev/null \
+                 | grep -viE 'retired|removed|history|migrat|1\.x|legacy|no longer' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::a doc describes the retired PowerShell/.NET stack as current:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "no retired-stack language in docs."
