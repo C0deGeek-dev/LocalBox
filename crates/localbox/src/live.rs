@@ -219,7 +219,7 @@ fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, LiveError> {
     Ok(runtime.block_on(future))
 }
 
-async fn post_smoke(base_url: &str, model: &str) -> Result<String, String> {
+async fn post_smoke(base_url: &str, model: &str, timeout_secs: u32) -> Result<String, String> {
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 64,
@@ -229,7 +229,7 @@ async fn post_smoke(base_url: &str, model: &str) -> Result<String, String> {
     let response = client
         .post(format!("{base_url}/v1/messages"))
         .json(&body)
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(u64::from(timeout_secs)))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -271,7 +271,8 @@ pub fn execute_launch(
     // (e.g. it OOMs while loading the model) instead of polling the full timeout
     // for a port that will never open. Short readiness probes reuse the launcher's
     // real health check; the child is reaped between them.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(u64::from(launcher.health_check_timeout_secs()));
     loop {
         if launcher.wait_server(plan.server_port, 2).is_ok() {
             break;
@@ -284,7 +285,8 @@ pub fn execute_launch(
         }
         if std::time::Instant::now() >= deadline {
             return Err(LiveError::Server(format!(
-                "the model server did not become ready within 180s — the server log is at {}",
+                "the model server did not become ready within {}s — the server log is at {}",
+                launcher.health_check_timeout_secs(),
                 log.display()
             )));
         }
@@ -303,8 +305,12 @@ pub fn execute_launch(
         outcome.proxy_pid = ensured.started_pid;
 
         eprintln!("Checking the reply path (a one-word test question) …");
-        let reply = block_on(post_smoke(&plan.base_url, &plan.key))?
-            .map_err(|e| LiveError::Smoke(format!("the model did not answer: {e}")))?;
+        let reply = block_on(post_smoke(
+            &plan.base_url,
+            &plan.key,
+            launcher.smoke_timeout_secs(),
+        ))?
+        .map_err(|e| LiveError::Smoke(format!("the model did not answer: {e}")))?;
         let smoke = evaluate_smoke_reply(&reply);
         if !smoke.ok {
             return Err(LiveError::Smoke(format_smoke_failure(&smoke)));

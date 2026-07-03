@@ -91,6 +91,29 @@ impl LlamaLauncher {
             .unwrap_or(4096)
     }
 
+    fn timeout_setting(&self, key: &str) -> u32 {
+        self.catalog
+            .setting(key)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(300)
+    }
+
+    /// Seconds to wait for `/health` readiness (`LlamaCppHealthCheckTimeoutSec`,
+    /// default 300) — the shipped default the launcher previously ignored.
+    #[must_use]
+    pub fn health_check_timeout_secs(&self) -> u32 {
+        self.timeout_setting("LlamaCppHealthCheckTimeoutSec")
+    }
+
+    /// Seconds to wait for the smoke reply (`LlamaCppSmokeTestTimeoutSec`,
+    /// default 300).
+    #[must_use]
+    pub fn smoke_timeout_secs(&self) -> u32 {
+        self.timeout_setting("LlamaCppSmokeTestTimeoutSec")
+    }
+
     /// The GGUF's expected on-disk path — pure path math, no download, no
     /// existence requirement (the DryRun resolution).
     ///
