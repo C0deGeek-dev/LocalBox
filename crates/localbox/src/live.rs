@@ -334,22 +334,43 @@ pub fn is_server_process_name(name: &str) -> bool {
         .starts_with("llama-server")
 }
 
-/// Stop every llama-server process and reap whatever serves the given
-/// loopback ports (the no-think proxy, an embed server). Returns how many
-/// processes were told to stop.
+/// Whether a llama-server PID must be spared from `stop_all` because it is the
+/// recorded embedding server (which must survive a chat-model stop). With no
+/// embed server recorded, nothing is spared.
+#[must_use]
+fn is_spared_embed_pid(pid: u32, embed_pid: Option<u32>) -> bool {
+    embed_pid == Some(pid)
+}
+
+/// Stop every llama-server process — except the recorded embedding server — and
+/// reap whatever serves the given loopback ports (the no-think proxy). Returns
+/// how many processes were told to stop.
 #[must_use]
 pub fn stop_all(home: &Path, ports: &[u16]) -> usize {
     let mut stopped = 0;
+    // Spare LocalMind's embedding server. It is a llama-server too, but stopping
+    // the chat model must not take it down — LocalMind depends on the embedding
+    // endpoint surviving `localbox stop`. Skip its recorded PID, and never reap
+    // its port even if a caller passes it.
+    let embed = crate::embed::read_embed_state(home);
+    let embed_pid = embed.as_ref().and_then(|s| s.pid);
+    let embed_port = embed.as_ref().map(|s| s.port);
     let mut system = sysinfo::System::new();
     system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     for process in system.processes().values() {
         if is_server_process_name(&process.name().to_string_lossy()) {
+            if is_spared_embed_pid(process.pid().as_u32(), embed_pid) {
+                continue;
+            }
             process.kill();
             stopped += 1;
         }
     }
     let mut ops = LiveProxyOps::new(home);
     for &port in ports {
+        if Some(port) == embed_port {
+            continue;
+        }
         if stop_any_on_port(&mut ops, port) {
             stopped += 1;
         }
@@ -402,6 +423,15 @@ mod tests {
         assert!(uses_proxy(&plan_with("http://127.0.0.1:11435", 11_435)));
         // Direct-to-server plans never touch the proxy lifecycle.
         assert!(!uses_proxy(&plan_with("http://127.0.0.1:8080", 11_435)));
+    }
+
+    #[test]
+    fn stop_all_spares_the_recorded_embed_pid() {
+        // The embedding server (LocalMind's endpoint) survives `localbox stop`.
+        assert!(is_spared_embed_pid(4242, Some(4242)));
+        assert!(!is_spared_embed_pid(4242, Some(9999)));
+        // No embed server recorded → nothing is spared.
+        assert!(!is_spared_embed_pid(4242, None));
     }
 
     #[test]
