@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.1.1 - 2026-07-03
+
+Coordinated LocalX release.
+
 - Streamed local-model replies are no longer truncated by up to ~7 characters.
   The no-think proxy held back the last few bytes of the visible text for
   split-`<think>`-tag safety and only released them after the stream's end
