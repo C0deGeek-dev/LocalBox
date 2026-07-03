@@ -8,6 +8,24 @@ Past-tense record of shipped changes.
   an agent that supports it (Claude, Codex, LocalPilot) LocalBox asks once
   whether to let the model act without per-action approval — defaulting **off**,
   saving your answer, and never enabling a bypass in a non-interactive session.
+- New `--auto-best` flag for `serve`/`launch`: applies the saved localbench
+  profile (`best-<model>.json`) — tuned quant/context/mode plus KV-cache and
+  n-cpu-moe — on a headless launch, the way the guided launcher already does.
+- The documented `settings.json` tunables now actually take effect:
+  `LlamaCppMlock`, `LlamaCppNoMmap`, `LlamaCppAgentParallel`,
+  `LlamaCppAgentCacheReuse`, `LlamaCppNCpuMoe`, `LocalModelMaxOutputTokens`, and
+  the health/smoke timeouts were previously read from nothing.
+- An AMD GPU with no NVIDIA driver now installs and runs the Vulkan build
+  instead of silently falling back to CPU.
+- A turboquant/mtpturbo build that fails its reply check now falls back to native
+  llama.cpp instead of hard-stopping.
+- `localbox stop` spares the embedding server, so a chat-model stop no longer
+  takes down the embeddings endpoint LocalMind uses.
+- A model server that exits during startup (e.g. OOM) now fails in seconds with
+  its log path, instead of waiting out the full readiness timeout.
+- A configured `VRAMGB` now overrides the auto-detected value.
+- Removed phantom settings and the stale MCP page; corrected example model keys,
+  the SECURITY version table, and a retired command name in a proxy error.
   An existing saved setting or a `LOCAL_LLM_*` env override is honored, and the
   chosen posture is printed before hand-off.
 
