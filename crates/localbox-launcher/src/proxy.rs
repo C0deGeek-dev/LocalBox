@@ -18,7 +18,7 @@
 //!    killed before binding, so it cannot compete with the new proxy under
 //!    Windows `SO_REUSEADDR`.
 //! 5. **Owned vs any teardown** — stopping *this* handle is different from
-//!    `llm-stop`'s reap-anything-on-the-port; a proxy must never outlive a
+//!    `localbox stop`'s reap-anything-on-the-port; a proxy must never outlive a
 //!    full teardown.
 
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ pub enum ProxyLifecycleError {
     /// A matching foreign proxy blocks a logs-capturing start.
     #[error(
         "no-think proxy port {port} is already serving target {target}, but gateway logs \
-         were requested and this session does not own that process. Stop it with llm-stop \
+         were requested and this session does not own that process. Stop it with localbox stop \
          or free the port, then start Serve again."
     )]
     ForeignMatchingProxy { port: u16, target: String },
@@ -271,7 +271,7 @@ pub fn stop_owned(ops: &mut dyn ProxyOps, owned_pid: Option<u32>) {
 }
 
 /// Kill whatever listens on the proxy port, regardless of owner — the
-/// `llm-stop` teardown, so a proxy never outlives a full stop. Returns whether
+/// `localbox stop` teardown, so a proxy never outlives a full stop. Returns whether
 /// anything was killed.
 pub fn stop_any_on_port(ops: &mut dyn ProxyOps, listen_port: u16) -> bool {
     let mut pids = ops.listener_pids(listen_port);
@@ -489,7 +489,7 @@ mod tests {
             err,
             ProxyLifecycleError::ForeignMatchingProxy { port: 11435, .. }
         ));
-        assert!(err.to_string().contains("llm-stop"));
+        assert!(err.to_string().contains("localbox stop"));
 
         // Owned matching proxy: restarted so logs are captured.
         let mut ops = MockOps::new()
@@ -538,7 +538,7 @@ mod tests {
         stop_owned(&mut ops, None);
         assert_eq!(ops.killed, vec![77], "no owned handle, no kill");
 
-        // stop_any_on_port reaps every owner — llm-stop's guarantee.
+        // stop_any_on_port reaps every owner — localbox stop's guarantee.
         let mut ops = MockOps::new();
         ops.listeners.insert(11435, vec![77, 88, 88]);
         assert!(stop_any_on_port(&mut ops, 11435));

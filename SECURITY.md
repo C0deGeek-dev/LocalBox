@@ -7,8 +7,8 @@ maintained — upgrade to the current minor.
 
 | Version | Supported |
 | --- | --- |
-| 1.2.x   | ✅        |
-| < 1.2   | ❌        |
+| 2.0.x   | ✅        |
+| < 2.0   | ❌        |
 
 ## Reporting security issues
 
