@@ -18,7 +18,9 @@ use localbox_tui::customize::{
     CustomizeAction,
 };
 use localbox_tui::driver::{ensure_utf8_output, plain_menu, plain_warning, should_degrade};
-use localbox_tui::plan::{resolve_launch_plan, DefaultLaunch, GuidedPlan, PlanOverrides};
+use localbox_tui::plan::{
+    find_workspace_default, resolve_launch_plan, DefaultLaunch, GuidedPlan, PlanOverrides,
+};
 use localbox_tui::ui::{
     render_guided_screen, render_notice_screen, ConfirmAction, GuidedScreen, MenuRow, ModelRow,
     CONFIRM_ROWS,
@@ -551,8 +553,17 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         }
         rows.push(MenuRow::plain("[Cancel]"));
 
+        // Preselect the workspace's `.llm-default` model when the cwd (or an
+        // ancestor) names one and it is in the visible list — the documented
+        // per-workspace default that previously did nothing.
+        let start = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| find_workspace_default(&cwd))
+            .and_then(|(key, _)| keys.iter().position(|k| *k == key))
+            .unwrap_or(0);
+
         chooser.set_panel(None);
-        let Some(index) = chooser.choose("Pick a model", &rows, 0) else {
+        let Some(index) = chooser.choose("Pick a model", &rows, start) else {
             chooser.release();
             return Ok(());
         };
