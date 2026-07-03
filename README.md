@@ -19,7 +19,7 @@
   </p>
   <p>
     <img alt="version 2.1.0" src="https://img.shields.io/badge/version-2.1.0-38bdae?style=flat-square">
-    <img alt="Windows PowerShell" src="https://img.shields.io/badge/platform-Windows%20PowerShell-4d8df7?style=flat-square">
+    <img alt="Windows, Linux, macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-4d8df7?style=flat-square">
     <img alt="llama.cpp runtime" src="https://img.shields.io/badge/runtime-llama.cpp-59636e?style=flat-square">
     <img alt="GitHub stars" src="https://img.shields.io/github/stars/C0deGeek-dev/LocalBox?style=flat-square&label=stars">
   </p>
@@ -35,7 +35,7 @@ connects the result to Claude Code, Codex, or
 | **Use it when** | You have a GGUF model and want an agent-ready local runtime |
 | **It handles** | Server lifecycle, chat templates, parsers, sampling, context, KV cache, VRAM checks, and harness setup |
 | **You control** | Model, quant, context size, runtime mode, and target harness |
-| **Runs on** | Windows PowerShell (not WSL or bash) |
+| **Runs on** | Windows, Linux, and macOS — a single native binary, run from any shell |
 
 ## Privacy by design
 
