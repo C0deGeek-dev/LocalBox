@@ -16,46 +16,59 @@ point in the copied plan where its content lands.
 
 ## §2 Verification-commands rows (repo defaults, mirror CI)
 
+> LocalBox is a native **Rust** workspace since the v2.0.0 native-stack rewrite
+> (the PowerShell module and .NET TUI are retired). Confirm/correct in subject 00.
+
 | Purpose | Command | Notes |
 |---|---|---|
-| Lint (launcher) | `Invoke-ScriptAnalyzer -Path local-llm -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit` | PowerShell; from `.github/workflows/pester.yml` |
-| Test (unit) | `Invoke-Pester -Path tests/unit` | Pester 5 |
-| Proxy lint/test | `ruff check localbox-proxy tests/test_no_think_proxy.py` then `python -m pytest tests/test_no_think_proxy.py -q` | Python no-think proxy |
-| TUI build | `dotnet build tui/LocalBox.Tui/LocalBox.Tui.csproj -nologo` | .NET TUI |
-| Docs link-check | `lychee --no-progress --offline docs docs/wiki README.md` | adopt lychee (org-pinned) |
+| Build | `cargo check --workspace` | from `.github/workflows/ci.yml` |
+| Test | `cargo test --workspace` | hermetic seams (proxy ops, env, TUI TestBackend) |
+| Lint/format | `cargo fmt --check` then `cargo clippy --workspace --all-targets -- -D warnings` | both clean |
+| Docs link-check | `lychee --no-progress --offline docs docs/wiki README.md` | org-pinned |
 
-## §6 plan-specific principles (slot 16)
+## §6 plan-specific principles (slot for §6.18+)
 
-- **Windows / PowerShell only.** The launcher manages `llama-server`, drives
-  `Start-Process`, reads `nvidia-smi`, and touches `$PROFILE` — it does not work
-  in WSL/bash. A box that assumes a POSIX shell is not done.
+- **Tier-1 parity (Windows / Linux / macOS).** LocalBox is native Rust behind
+  cross-platform traits (ADR-0007); a box that only works on one OS is not done.
+  Reach the OS via the traits/`dunce`/platform-cfg seams, not a POSIX-shell or
+  PowerShell assumption.
+- **Rust engineering rules hold.** MSRV 1.82, exact-pinned workspace deps,
+  `#![forbid(unsafe_code)]`, `unwrap`/`expect`/`todo`/`dbg` denied outside
+  `#[cfg(test)]`, typed errors.
+- **Shared crate tier is rev-pinned.** Shared primitives come from `localx-llama`
+  (`localx-llama-core`/`-runtime`) as a rev-pinned git dep; advance the rev at a
+  checkpoint and re-run the suite + the LocalBench launcher-envelope contract.
+- **Plan/effect split is load-bearing.** `plan_launch` is read-only (no I/O
+  commit); `execute_launch` is the single effect site; DryRun == live plan by
+  construction. Keep it that way.
 - **Doc-ownership map (which doc owns which area).** Match a change to its owning
   doc; do not restate an area in two places.
-  - `README.md` — lean overview, install entry point, ecosystem links. Deep
-    how-to content moves into `docs/`.
-  - `docs/autobest-profile.md` — autobest profile tuning.
-  - `docs/` owned topics (created as the README is slimmed): install,
-    model-management (catalog / adding a model / quant fit), the no-think proxy,
-    harness mode (Claude Code / LocalPilot / Codex dispatch).
+  - `README.md` — lean overview, install entry point, ecosystem links.
+  - `docs/autobest-profile.md` — AutoBest replay + profile matching.
+  - `docs/` owned topics: install, model-management (catalog / quant fit),
+    the no-think proxy, harness mode (Claude Code / LocalPilot / Codex dispatch).
   - `docs/wiki/` — wiki source (see below).
   - `CHANGELOG.md` — every user-facing change, under an Unreleased/next heading.
 - **Wiki source of truth is in-repo.** `docs/wiki/` is authoritative and
   PR-reviewed; the published GitHub Wiki is a one-way generated mirror — never
-  hand-edited on github.com. Wiki Reference pages link the owned `docs/`, never
-  duplicate them.
-- **VERSION discipline.** No README/doc/wiki claim may exceed the current
-  `VERSION` (`0.3.0-beta.2`). Removed paths (e.g. Ollama) stay described only as
-  history with their migration tag.
+  hand-edited on github.com. Wiki Reference pages link the owned `docs/`.
+- **VERSION discipline, both directions.** No README/doc/wiki claim may exceed
+  the current `VERSION` (read the `VERSION` file, never hardcode a literal),
+  **and** no doc may describe the retired PowerShell/.NET stack as current —
+  removed paths stay described only as history with their migration tag.
 
 ## §7 plan-specific gates
 
-- [ ] PSScriptAnalyzer, Pester, proxy (ruff + pytest), and TUI build all pass or
-      blockers recorded.
-- [ ] No README/doc/wiki claim exceeds the current `VERSION`.
+- [ ] `cargo fmt --check`, clippy `-D warnings`, and `cargo test --workspace`
+      pass or blockers recorded.
+- [ ] No README/doc/wiki claim exceeds the current `VERSION`, and none describes
+      the retired PowerShell/.NET stack as current.
 
 ## Captain Hindsight prompt — extra "Check specifically for" lines
 
 - Any `README.md`/`docs/`/`docs/wiki/` claim that does not match shipped
-  behaviour at the current `VERSION`, or a wiki page hand-edited on github.com
-  instead of the in-repo `docs/wiki/` source.
-- PowerShell-only assumptions that silently break under WSL/bash.
+  behaviour at the current `VERSION` (in either direction — ahead of VERSION, or
+  describing the retired PowerShell/.NET stack), or a wiki page hand-edited on
+  github.com instead of the in-repo `docs/wiki/` source.
+- OS-specific assumptions that break tier-1 parity (Windows/Linux/macOS).
+- A dormant module left built-but-unwired while a doc claims it works.
