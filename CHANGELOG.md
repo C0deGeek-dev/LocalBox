@@ -4,6 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Agent launches now apply the permission/bypass gate again. On first launch of
+  an agent that supports it (Claude, Codex, LocalPilot) LocalBox asks once
+  whether to let the model act without per-action approval — defaulting **off**,
+  saving your answer, and never enabling a bypass in a non-interactive session.
+  An existing saved setting or a `LOCAL_LLM_*` env override is honored, and the
+  chosen posture is printed before hand-off.
+
 ## v2.0.2 - 2026-07-02
 
 Coordinated LocalX release.
