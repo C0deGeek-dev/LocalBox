@@ -292,7 +292,10 @@ mod tests {
             vram_gb: 0,
             unified: true,
         };
-        assert_eq!(gpu_banner(Some(&mac_no_mem)), "Computer:  Apple M3 Pro · Metal");
+        assert_eq!(
+            gpu_banner(Some(&mac_no_mem)),
+            "Computer:  Apple M3 Pro · Metal"
+        );
     }
 
     #[test]
