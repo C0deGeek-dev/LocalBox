@@ -57,7 +57,7 @@ pub struct ServeGuard {
 
 /// Decide the serve-gateway exposure: open (no-auth) HTTP on a public-looking
 /// address is refused unless explicitly opted into; password-protected public
-/// HTTP stays allowed (with the posture screen making it visible).
+/// HTTP stays allowed.
 #[must_use]
 pub fn evaluate_serve_guard(
     base_urls: &[String],

@@ -155,12 +155,14 @@ fn parse_agent(value: Option<&str>, default: AgentKind) -> Result<AgentKind, Str
 fn build_launcher(home: &std::path::Path) -> Result<LlamaLauncher, String> {
     let dir = catalog_dir(home);
     let catalog = Catalog::load(&dir).map_err(|e| e.to_string())?;
-    Ok(LlamaLauncher::new(
-        catalog,
-        product_version(),
-        home,
-        probe_vram_gb(),
-    ))
+    // A configured `VRAMGB` overrides nvidia-smi auto-detect (documented, but
+    // previously ignored — the probe always won); fall back to the probe.
+    let vram = catalog
+        .setting("VRAMGB")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|gb| u32::try_from(gb).ok())
+        .unwrap_or_else(probe_vram_gb);
+    Ok(LlamaLauncher::new(catalog, product_version(), home, vram))
 }
 
 fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
