@@ -9,11 +9,13 @@ use std::process::ExitCode;
 
 use localbox::exec::{home_dir, probe_vram_gb};
 use localbox::guided::{catalog_dir, run_guided};
-use localbox::live::{execute_launch, status_report, stop_all, AgentKind};
+use localbox::live::{execute_launch, status_report, stop_all, AgentKind, LiveError};
 use localbox::{product_envelope, product_version};
 use localbox_launcher::catalog::Catalog;
 use localbox_launcher::launcher::LlamaLauncher;
-use localbox_launcher::orchestrate::{plan_launch, LaunchRequest};
+use localbox_launcher::orchestrate::{
+    plan_launch, smoke_fallback, LaunchPlan, LaunchRequest, SmokeFallback,
+};
 use localx_llama_core::Mode;
 use localx_llama_runtime::proxy::{serve_proxy_on, ProxyConfig};
 
@@ -195,57 +197,38 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
 
     let launcher = build_launcher(&home)?;
     let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
-
-    // Apply the LAN posture BEFORE the dry-run print so `--dry-run --lan` shows
-    // the gateway plan that a live `--lan` launch would actually use.
-    if has_flag(args, "--lan") {
-        let password = flag_value(args, "--password").unwrap_or("").to_string();
-        let host = std::env::var(if cfg!(windows) {
-            "COMPUTERNAME"
-        } else {
-            "HOSTNAME"
-        })
-        .unwrap_or_else(|_| "this-machine".to_string());
-        let advertised = format!("http://{host}:{}", plan.proxy.listen_port);
-        let guard = localbox_launcher::posture::evaluate_serve_guard(
-            &[advertised.clone()],
-            &password,
-            has_flag(args, "--allow-public-no-auth"),
-        );
-        if guard.refuse {
-            return Err(guard.reason);
-        }
-        plan.proxy.listen_host = "0.0.0.0".to_string();
-        plan.proxy.api_key = (!password.trim().is_empty()).then_some(password);
-        println!(
-            "LAN gateway: {advertised} (key {})",
-            if plan.proxy.api_key.is_some() {
-                "required"
-            } else {
-                "OPEN — opted in"
-            }
-        );
-    }
-
-    // Codex speaks the OpenAI protocol: swap in its OPENAI_* env plan (pointed at
-    // the local endpoint) so both the dry-run preview and the live launch show
-    // what actually reaches Codex — the Anthropic plan would leave it on the cloud.
-    if agent == AgentKind::Codex {
-        let auth = plan
-            .proxy
-            .api_key
-            .clone()
-            .unwrap_or_else(|| "local".to_string());
-        plan.env_plan = localbox_launcher::env::codex_env_plan(&plan.base_url, &auth);
-    }
+    apply_launch_posture(&mut plan, args, agent)?;
 
     if has_flag(args, "--dry-run") {
         print_plan(&plan);
         return Ok(());
     }
 
-    let outcome =
-        execute_launch(&launcher, &plan, &request, agent, &home).map_err(|e| e.to_string())?;
+    // A fork build (turboquant/mtpturbo) that fails its reply check falls back to
+    // native llama.cpp once, rather than hard-stopping — the fork's tuned
+    // overrides don't apply to the native build, so the retry re-plans on native.
+    let outcome = match execute_launch(&launcher, &plan, &request, agent, &home) {
+        Ok(outcome) => outcome,
+        Err(LiveError::Smoke(detail))
+            if smoke_fallback(request.mode) == SmokeFallback::RetryNative =>
+        {
+            eprintln!(
+                "The {} build failed the reply check ({detail}).\n\
+                 Retrying on native llama.cpp …",
+                request.mode.as_str()
+            );
+            let _ = stop_all(&home, &[plan.proxy.listen_port]);
+            let mut native = request.clone();
+            native.mode = Mode::Native;
+            let mut native_plan = plan_launch(&launcher, &native).map_err(|e| e.to_string())?;
+            apply_launch_posture(&mut native_plan, args, agent)?;
+            let outcome = execute_launch(&launcher, &native_plan, &native, agent, &home)
+                .map_err(|e| e.to_string())?;
+            plan = native_plan;
+            outcome
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     if agent == AgentKind::ServeOnly {
         println!(
             "{}",
@@ -534,6 +517,58 @@ fn host_has_amd_gpu() -> bool {
             name.contains("AMD") || name.contains("RADEON")
         })
         .unwrap_or(false)
+}
+
+/// Apply the post-plan launch posture — LAN gateway exposure (with its
+/// serve-guard refusal) and, for Codex, the OpenAI-compatible env swap. Applied
+/// to both the primary plan and any native-fallback re-plan so they stay
+/// consistent, and before the `--dry-run` print so the preview matches.
+fn apply_launch_posture(
+    plan: &mut LaunchPlan,
+    args: &[String],
+    agent: AgentKind,
+) -> Result<(), String> {
+    if has_flag(args, "--lan") {
+        let password = flag_value(args, "--password").unwrap_or("").to_string();
+        let host = std::env::var(if cfg!(windows) {
+            "COMPUTERNAME"
+        } else {
+            "HOSTNAME"
+        })
+        .unwrap_or_else(|_| "this-machine".to_string());
+        let advertised = format!("http://{host}:{}", plan.proxy.listen_port);
+        let guard = localbox_launcher::posture::evaluate_serve_guard(
+            &[advertised.clone()],
+            &password,
+            has_flag(args, "--allow-public-no-auth"),
+        );
+        if guard.refuse {
+            return Err(guard.reason);
+        }
+        plan.proxy.listen_host = "0.0.0.0".to_string();
+        plan.proxy.api_key = (!password.trim().is_empty()).then_some(password);
+        println!(
+            "LAN gateway: {advertised} (key {})",
+            if plan.proxy.api_key.is_some() {
+                "required"
+            } else {
+                "OPEN — opted in"
+            }
+        );
+    }
+
+    // Codex speaks the OpenAI protocol: swap in its OPENAI_* env plan (pointed at
+    // the local endpoint) so both the dry-run preview and the live launch show
+    // what actually reaches Codex — the Anthropic plan would leave it on the cloud.
+    if agent == AgentKind::Codex {
+        let auth = plan
+            .proxy
+            .api_key
+            .clone()
+            .unwrap_or_else(|| "local".to_string());
+        plan.env_plan = localbox_launcher::env::codex_env_plan(&plan.base_url, &auth);
+    }
+    Ok(())
 }
 
 fn nvidia_smi_banner() -> String {
