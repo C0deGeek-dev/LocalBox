@@ -212,8 +212,10 @@ impl EnvEnvelope {
     pub fn restore(&self, env: &mut dyn EnvStore) {
         for (name, previous) in &self.backup {
             match previous {
-                Some(value) if !value.is_empty() => env.set(name, value),
-                _ => env.remove(name),
+                // Restore verbatim, including a var that was set to "" before
+                // launch (empty is a value, not "unset").
+                Some(value) => env.set(name, value),
+                None => env.remove(name),
             }
         }
     }
@@ -279,6 +281,25 @@ mod tests {
         assert_eq!(env.get("API_TIMEOUT_MS"), None);
         assert_eq!(env.get("CLAUDE_CODE_DISABLE_THINKING"), None);
         assert_eq!(env.get("ENABLE_TOOL_SEARCH"), None);
+    }
+
+    #[test]
+    fn restore_returns_a_preexisting_empty_string_verbatim() {
+        // A var explicitly set to "" before the launch is a value, not "unset":
+        // restore must bring back "", not remove it.
+        let mut env = FakeEnv::default();
+        env.set("ANTHROPIC_BASE_URL", "");
+        let envelope = EnvEnvelope::save(&env);
+        EnvEnvelope::apply(
+            &mut env,
+            &claude_env_plan(&EnvPlanInputs::new("http://127.0.0.1:11435", "apex")),
+        );
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL").as_deref(),
+            Some("http://127.0.0.1:11435")
+        );
+        envelope.restore(&mut env);
+        assert_eq!(env.get("ANTHROPIC_BASE_URL").as_deref(), Some(""));
     }
 
     #[test]

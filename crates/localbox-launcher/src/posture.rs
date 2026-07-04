@@ -74,8 +74,9 @@ pub fn evaluate_serve_guard(
     let reason = if refuse {
         format!(
             "open (no auth) HTTP on a public-looking address: {}. Set a password \
-             (-Password or LOCAL_LLM_SERVE_PASS), bind a private address \
-             (-ListenHost/-AdvertiseHost), or opt in explicitly with -AllowPublicNoAuth.",
+             (--password <key>), keep the gateway off the public network (drop \
+             --lan or bind a private address), or opt in explicitly with \
+             --allow-public-no-auth.",
             public_urls.join(", ")
         )
     } else {
@@ -131,8 +132,8 @@ mod tests {
         );
         assert!(guard.refuse);
         assert_eq!(guard.public_urls, vec!["http://93.184.216.34:11436"]);
-        assert!(guard.reason.contains("LOCAL_LLM_SERVE_PASS"));
-        assert!(guard.reason.contains("-AllowPublicNoAuth"));
+        assert!(guard.reason.contains("--password"));
+        assert!(guard.reason.contains("--allow-public-no-auth"));
     }
 
     #[test]

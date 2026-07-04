@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Docs now describe the weight-vs-VRAM fit estimate accurately: it is an
+  advisory picker colour (green/yellow/red), not a guard that blocks a launch,
+  and KV-cache pressure is not computed. Corrected the README and architecture
+  notes that overstated it.
+- The LAN-gateway refusal message now names the real CLI flags (`--password`,
+  `--lan`, `--allow-public-no-auth`) instead of retired PowerShell-module flags
+  and a `LOCAL_LLM_SERVE_PASS` env var that was never read.
+- Clarified that GGUF weight downloads are integrity-checked at the reply-path
+  smoke test, not by a per-file checksum (only the llama.cpp binary zips are
+  sha256-pinned).
+- Restoring the shell env after a launch now returns a variable that was set to
+  an empty string before launch verbatim, instead of removing it.
+
 ## v2.1.5 - 2026-07-04
 
 Coordinated LocalX release.

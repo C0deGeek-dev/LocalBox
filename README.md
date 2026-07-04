@@ -33,7 +33,7 @@ connects the result to Claude Code, Codex, or
 | At a glance | |
 |---|---|
 | **Use it when** | You have a GGUF model and want an agent-ready local runtime |
-| **It handles** | Server lifecycle, chat templates, parsers, sampling, context, KV cache, VRAM checks, and harness setup |
+| **It handles** | Server lifecycle, chat templates, parsers, sampling, context, KV cache, VRAM fit hints, and harness setup |
 | **You control** | Model, quant, context size, runtime mode, and target harness |
 | **Runs on** | Windows, Linux, and macOS — a single native binary, run from any shell |
 
@@ -60,6 +60,8 @@ path local.
 ## Quick start
 
 LocalBox is a single native binary — no PowerShell, .NET, or Python needed.
+(On Windows, AMD GPU-name detection may call the vendor's `powershell.exe`
+as a last-resort probe; the NVIDIA path and everything else are pure native.)
 Build it from this repository (or use a release binary):
 
 ```text
@@ -98,8 +100,10 @@ surface.
 
 - Chooses the correct chat template, parser, sampler, stop set, and reasoning
   policy for each supported model family.
-- Estimates weight and KV-cache pressure against your actual GPU and blocks
-  combinations likely to run out of VRAM.
+- Flags a weight-vs-VRAM fit estimate for each model in the picker
+  (green/yellow/red) so you can spot a combination likely to run out of VRAM
+  before you launch. The estimate is advisory — it colours the choice, it does
+  not block the launch.
 - Keeps agent sessions predictable with single-session defaults and prompt-cache
   reuse.
 - Sets up one consistent dispatch path for Claude Code, Codex, LocalPilot, and
@@ -110,7 +114,7 @@ surface.
 ```text
 GGUF model ──> LocalBox ──> llama-server ──> Claude Code / Codex / LocalPilot
                     │
-                    └── VRAM guardrails, templates, parsers, cache and sampling
+                    └── VRAM fit hints, templates, parsers, cache and sampling
 ```
 
 ## Choose your next guide

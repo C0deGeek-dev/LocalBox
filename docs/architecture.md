@@ -36,7 +36,10 @@ crates/
                         proxy → smoke → agent handoff; stop; status
     exec.rs             process/socket effects (spawn, EnvGuard, socket-table
                         PIDs, interactive agent launch)
-    fetch.rs            resumable pin-verified HTTP downloads (HF GGUF pulls)
+    fetch.rs            resumable HTTP downloads (HF GGUF pulls); integrity is
+                        checked at the reply-path smoke test, not by a per-file
+                        checksum. sha256 pins cover the llama.cpp binary zips
+                        (update.rs), not the GGUF weights.
     embed.rs            CPU-only embedding server lifecycle
     update.rs           llama.cpp binary install/update per mode
     manage.rs           info / purge / log conveniences
