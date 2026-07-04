@@ -16,7 +16,8 @@ use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{
     plan_launch, smoke_fallback, LaunchPlan, LaunchRequest, SmokeFallback,
 };
-use localx_llama_core::{Mode, TunerBestConfig, TunerEntry};
+use localx_llama_core::vram::resolve_vram;
+use localx_llama_core::{HardwareProbe, Mode, TunerBestConfig, TunerEntry};
 use localx_llama_runtime::proxy::{serve_proxy_on, ProxyConfig};
 
 const DEFAULT_PROXY_PORT: u16 = 11_435;
@@ -222,14 +223,36 @@ fn apply_saved_auto_best(
 fn build_launcher(home: &std::path::Path) -> Result<LlamaLauncher, String> {
     let dir = catalog_dir(home);
     let catalog = Catalog::load(&dir).map_err(|e| e.to_string())?;
-    // A configured `VRAMGB` overrides nvidia-smi auto-detect (documented, but
-    // previously ignored — the probe always won); fall back to the probe.
-    let vram = catalog
+    // Resolve VRAM through the shared ladder (config > 0 -> auto-probe ->
+    // fallback) so the resolution + its no-GPU fallback are single-sourced with
+    // the rest of the stack, not a LocalBox-only path. `probe_vram_gb()` returns
+    // 0 when no GPU tool answers; treat that as "undetected" so the shared
+    // fallback (not 0 GB, which would paint every quant `over`) applies.
+    let configured = catalog
         .setting("VRAMGB")
         .and_then(serde_json::Value::as_u64)
-        .and_then(|gb| u32::try_from(gb).ok())
-        .unwrap_or_else(probe_vram_gb);
+        .and_then(|gb| i64::try_from(gb).ok());
+    let probed = {
+        let gb = probe_vram_gb();
+        (gb > 0).then(|| i64::from(gb))
+    };
+    let vram = resolve_launcher_vram(configured, probed);
     Ok(LlamaLauncher::new(catalog, product_version(), home, vram))
+}
+
+/// Resolve the launcher's VRAM figure through the shared `resolve_vram` ladder
+/// (configured > 0 -> auto-detected -> shared fallback), narrowed to the `u32`
+/// the launcher trait carries. Split out so the ladder wiring is unit-testable
+/// without spawning nvidia-smi.
+fn resolve_launcher_vram(configured: Option<i64>, probed: Option<i64>) -> u32 {
+    struct FixedProbe(Option<i64>);
+    impl HardwareProbe for FixedProbe {
+        fn auto_vram_gb(&self) -> Option<i64> {
+            self.0
+        }
+    }
+    let info = resolve_vram(configured, &FixedProbe(probed));
+    u32::try_from(info.gb).unwrap_or(u32::MAX)
 }
 
 fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
@@ -698,4 +721,27 @@ fn cmd_nothink_proxy(args: &[String]) -> Result<(), String> {
     runtime
         .block_on(serve_proxy_on(listen_host, listen, config))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::resolve_launcher_vram;
+
+    #[test]
+    fn no_gpu_host_uses_the_shared_fallback_not_zero() {
+        // The bug this replaced: a no-detect host resolved to 0 GB, which paints
+        // every quant `over`. The shared ladder falls back to 24 GB instead.
+        assert_eq!(resolve_launcher_vram(None, None), 24);
+    }
+
+    #[test]
+    fn configured_vram_wins_over_the_probe() {
+        assert_eq!(resolve_launcher_vram(Some(48), Some(24)), 48);
+    }
+
+    #[test]
+    fn a_detected_gpu_is_used_when_unconfigured() {
+        assert_eq!(resolve_launcher_vram(None, Some(16)), 16);
+    }
 }
