@@ -111,6 +111,44 @@ pub fn localpilot_config_toml(inputs: &LocalPilotConfigInputs) -> String {
     toml
 }
 
+/// Top-level `.localpilot.toml` tables LocalBox generates and keeps in sync
+/// on every launch. Everything else (`[mcp.servers.*]`, or any other
+/// section) is user-managed and preserved verbatim across launches.
+const OWNED_TOP_LEVEL_KEYS: &[&str] = &["provider", "providers", "permissions"];
+
+/// Merge freshly generated LocalBox-owned tables into an existing
+/// `.localpilot.toml` document, leaving every other top-level table (and its
+/// original formatting/comments) untouched. `existing` is `None` on a first
+/// launch (no prior file to merge into).
+///
+/// The unconditional removal of each owned key before a conditional
+/// re-insert matters: an owned key no longer present in the freshly
+/// generated content (e.g. bypass just got turned off, so `[permissions]`
+/// no longer appears) actually disappears from the merged file too, instead
+/// of leaving a stale copy behind forever.
+///
+/// # Errors
+/// The existing file's parse error when it isn't valid TOML — the caller
+/// decides whether to fail the launch rather than silently discard content
+/// that couldn't be safely merged.
+pub fn merge_localpilot_toml(
+    existing: Option<&str>,
+    generated: &str,
+) -> Result<String, toml_edit::TomlError> {
+    let generated_doc: toml_edit::DocumentMut = generated.parse()?;
+    let Some(existing) = existing else {
+        return Ok(generated_doc.to_string());
+    };
+    let mut merged: toml_edit::DocumentMut = existing.parse()?;
+    for key in OWNED_TOP_LEVEL_KEYS {
+        merged.remove(key);
+        if let Some(item) = generated_doc.get(key) {
+            merged[key] = item.clone();
+        }
+    }
+    Ok(merged.to_string())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -209,6 +247,72 @@ mod tests {
         assert_eq!(
             toml["providers"]["local"]["max_tokens"].as_integer(),
             Some(4096)
+        );
+    }
+
+    #[test]
+    fn merge_preserves_unknown_top_level_sections_like_mcp_servers() {
+        let existing = "\
+[provider]\ndefault = \"local\"\n\n[providers.local]\nkind = \"anthropic\"\nbase_url = \"http://stale/v1\"\napi_key_env = \"ANTHROPIC_AUTH_TOKEN\"\nmodel = \"stale-model\"\n\n\
+[mcp.servers.playwright]\ncommand = \"cmd\"\nargs = [\"/c\", \"npx\", \"@playwright/mcp@latest\"]\n";
+        let generated = localpilot_config_toml(&LocalPilotConfigInputs::proxied(
+            "http://127.0.0.1:11435",
+            "q36apex",
+        ));
+        let merged = merge_localpilot_toml(Some(existing), &generated).unwrap();
+        let doc = parse(&merged);
+        assert_eq!(
+            doc["mcp"]["servers"]["playwright"]["command"].as_str(),
+            Some("cmd"),
+            "hand-added MCP section must survive: {merged}"
+        );
+        assert_eq!(doc["providers"]["local"]["model"].as_str(), Some("q36apex"));
+    }
+
+    #[test]
+    fn merge_replaces_stale_owned_sections_instead_of_leaving_them() {
+        let existing = "[provider]\ndefault = \"local\"\n\n[providers.local]\nkind = \"anthropic\"\nbase_url = \"http://stale/v1\"\napi_key_env = \"ANTHROPIC_AUTH_TOKEN\"\nmodel = \"stale-model\"\n";
+        let generated = localpilot_config_toml(&LocalPilotConfigInputs::proxied(
+            "http://127.0.0.1:11435",
+            "fresh-model",
+        ));
+        let merged = merge_localpilot_toml(Some(existing), &generated).unwrap();
+        let doc = parse(&merged);
+        assert_eq!(
+            doc["providers"]["local"]["model"].as_str(),
+            Some("fresh-model"),
+            "stale owned section must be replaced, not merged/kept: {merged}"
+        );
+    }
+
+    #[test]
+    fn merge_removes_an_owned_section_no_longer_generated() {
+        let existing = "[provider]\ndefault = \"local\"\n\n[providers.local]\nkind = \"anthropic\"\nbase_url = \"http://x/v1\"\napi_key_env = \"ANTHROPIC_AUTH_TOKEN\"\nmodel = \"m\"\n\n[permissions]\nprofile = \"bypass\"\n";
+        // bypass now off: no [permissions] in the freshly generated content.
+        let generated = localpilot_config_toml(&LocalPilotConfigInputs::proxied("http://x", "m"));
+        let merged = merge_localpilot_toml(Some(existing), &generated).unwrap();
+        let doc = parse(&merged);
+        assert!(
+            doc.get("permissions").is_none(),
+            "stale [permissions] must be dropped when no longer generated: {merged}"
+        );
+    }
+
+    #[test]
+    fn merge_with_no_existing_file_uses_generated_content_as_is() {
+        let generated = localpilot_config_toml(&LocalPilotConfigInputs::proxied("http://x", "m"));
+        let merged = merge_localpilot_toml(None, &generated).unwrap();
+        let doc = parse(&merged);
+        assert_eq!(doc["providers"]["local"]["model"].as_str(), Some("m"));
+    }
+
+    #[test]
+    fn merge_fails_on_unparseable_existing_file() {
+        let generated = localpilot_config_toml(&LocalPilotConfigInputs::proxied("http://x", "m"));
+        let err = merge_localpilot_toml(Some("not [ valid toml"), &generated);
+        assert!(
+            err.is_err(),
+            "malformed existing file must fail loudly, not be silently overwritten"
         );
     }
 }

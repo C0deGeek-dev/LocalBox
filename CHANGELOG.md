@@ -4,6 +4,12 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- A LocalPilot launch no longer wipes hand-added `.localpilot.toml` sections
+  (e.g. `[mcp.servers.*]` for Playwright/context7). Previously every launch
+  overwrote the whole file with just the provider/permissions blocks LocalBox
+  generates; it now merges those into the existing file, preserving every
+  other section untouched. A pre-existing file that fails to parse as TOML
+  now fails the launch loudly instead of being silently discarded.
 - The guided launcher's "Save as my default" now persists the
   `Images (vision)` toggle in `DefaultLaunch`. A saved vision-on recipe replays
   for that same model after restarting LocalBox, while other models still

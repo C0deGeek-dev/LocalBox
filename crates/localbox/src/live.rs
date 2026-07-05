@@ -325,7 +325,16 @@ pub fn execute_launch(
 
     if agent == AgentKind::LocalPilot {
         let toml = format!("{}{}", plan.provider_toml, bypass_toml);
-        std::fs::write(".localpilot.toml", toml)
+        let existing = std::fs::read_to_string(".localpilot.toml").ok();
+        let merged =
+            localbox_launcher::localpilot_config::merge_localpilot_toml(existing.as_deref(), &toml)
+                .map_err(|e| {
+                    LiveError::Io(format!(
+                        "existing .localpilot.toml has invalid TOML, refusing to overwrite it \
+                 blindly (fix or delete the file, then relaunch): {e}"
+                    ))
+                })?;
+        std::fs::write(".localpilot.toml", merged)
             .map_err(|e| LiveError::Io(format!("could not write .localpilot.toml: {e}")))?;
     }
 
