@@ -79,7 +79,7 @@ impl LlamaLauncher {
     }
 
     /// The agent output-token cap (`LocalModelMaxOutputTokens`), defaulting to
-    /// 4096 when unset. Documented in `settings.md`; fed to both the agent env
+    /// 16384 when unset. Documented in `settings.md`; fed to both the agent env
     /// plan and the LocalPilot provider config.
     #[must_use]
     pub fn max_output_tokens(&self) -> u32 {
@@ -88,7 +88,7 @@ impl LlamaLauncher {
             .and_then(serde_json::Value::as_u64)
             .and_then(|n| u32::try_from(n).ok())
             .filter(|&n| n > 0)
-            .unwrap_or(4096)
+            .unwrap_or(16384)
     }
 
     fn timeout_setting(&self, key: &str) -> u32 {

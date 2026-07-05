@@ -27,10 +27,11 @@ pick a model  →  read the summary  →  confirm  →  launch  →  return
   engine/KV choices while on; manual KV settings only fill gaps the profile
   left.
 - **Save as my default** persists the whole recipe; the next `localbox` run
-  offers it as a one-keystroke replay. A `.llm-default` file in a workspace
-  (a single line naming a model) overrides the saved default for that
-  directory tree — the nearest file walking up from the working directory
-  wins.
+  offers it as a one-keystroke replay. Model-specific choices such as quant,
+  context, strict, and vision replay only for the model they were saved with.
+  A `.llm-default` file in a workspace (a single line naming a model)
+  overrides the saved default for that directory tree — the nearest file
+  walking up from the working directory wins.
 - **Help** opens a plain-language glossary of every term the flow uses.
 
 After the agent session ends, the launcher returns to the picker.

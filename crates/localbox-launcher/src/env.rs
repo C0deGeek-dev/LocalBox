@@ -96,7 +96,7 @@ impl EnvPlanInputs {
             keep_thinking: false,
             auth_token: "local".to_string(),
             context_tokens: 0,
-            max_output_tokens: 4096,
+            max_output_tokens: 16384,
             max_images_per_request: 0,
         }
     }

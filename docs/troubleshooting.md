@@ -16,5 +16,11 @@ Part of the [LocalBox documentation](README.md).
   `cargo install localpilot`.
 - **Start over on model files** → `localbox purge` stops servers and deletes
   downloaded GGUFs; they download again on the next launch.
+- **Local model replies stop mid-sentence or mid-word, with no error** → the
+  agent's completion hit `LocalModelMaxOutputTokens` (default 16384), a
+  client-side output cap, not a crash. Raise it in `~/.local-llm/settings.json`
+  (e.g. `"LocalModelMaxOutputTokens": 32768`), or set it to `0` to leave the
+  client's own default (32k) untouched. A larger cap costs decode time on
+  local hardware for replies that actually need it, not extra VRAM.
 
 ---

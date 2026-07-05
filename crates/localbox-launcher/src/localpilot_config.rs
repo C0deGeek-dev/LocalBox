@@ -77,7 +77,7 @@ impl LocalPilotConfigInputs {
             base_url: base_url.into(),
             model: model.into(),
             supports_vision: false,
-            max_tokens: 4096,
+            max_tokens: 16384,
             context_tokens: 0,
             bypass: false,
         }

@@ -21,13 +21,17 @@ keys (`Models`, `CommandAliases`) can never be overridden from settings.
   "LlamaCppNoMmap": true,
   "LlamaCppAgentParallel": 1,            // agent slots (0 = llama.cpp auto)
   "LlamaCppAgentCacheReuse": 256,        // prompt-cache reuse chunk (0 = default)
-  "LocalModelMaxOutputTokens": 4096,     // cap agent completions (0 = tool default)
+  "LocalModelMaxOutputTokens": 16384,    // cap agent completions; raise if replies
+                                          // truncate mid-word, 0 = tool default (32k)
   "NoThinkProxyPort": 11435
 }
 ```
 
-The guided launcher's Customize → save-as-default flow persists its own keys
-through the same store; catalog-only keys are refused on every write path.
+The guided launcher's Customize → save-as-default flow persists its own
+`DefaultLaunch` recipe through the same store, including target, engine,
+Auto-tune, quant, context, KV cache, strict output, and vision. Model-specific
+recipe choices, including vision, replay only for the saved model; catalog-only
+keys are refused on every write path.
 
 ### Launch permission and bypass decisions
 

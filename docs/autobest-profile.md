@@ -83,9 +83,14 @@ fall back to llama.cpp defaults for that flag.
 
 Local Claude/LocalPilot launches also set
 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `LocalModelMaxOutputTokens` (default
-`4096`) before starting the client. This prevents local models from accepting
-the hosted Claude default of 32k output tokens for ordinary turns. Set the `LocalModelMaxOutputTokens` key in `settings.json` to change it, or `0` to
-leave the client default untouched.
+`16384`) before starting the client. This prevents local models from silently
+accepting the hosted Claude default of 32k output tokens for ordinary turns,
+while leaving headroom for long code-heavy replies. A larger cap only makes a
+reply that actually needs it take longer to decode locally — it does not
+reserve extra VRAM/KV-cache (that is sized by the model's context window, a
+separate setting). If replies still stop mid-sentence, raise
+`LocalModelMaxOutputTokens` further in `settings.json`, or set it to `0` to
+leave the client's own default (32k) untouched.
 
 The guided launcher exposes saved selection profiles directly: when both `balanced` and `pure` entries exist, Customize offers explicit profile choices in addition to the `auto` preference (`balanced`, then `pure`).
 

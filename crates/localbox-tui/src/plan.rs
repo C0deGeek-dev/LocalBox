@@ -49,6 +49,9 @@ pub struct DefaultLaunch {
     pub use_auto_best: Option<bool>,
     /// Per-model: applies only when the launched model matches `model_key`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    /// Per-model: applies only when the launched model matches `model_key`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub quant: Option<String>,
     /// Per-model: applies only when the launched model matches `model_key`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,7 +143,10 @@ pub fn resolve_launch_plan(
         .use_auto_best
         .or(defaults.use_auto_best)
         .unwrap_or(false);
-    let vision = overrides.vision.unwrap_or(false);
+    let vision = overrides
+        .vision
+        .or(if same_model { defaults.vision } else { None })
+        .unwrap_or(false);
     // Strict is per-model like quant/context: the saved recipe's toggle
     // replays only for the model it was saved for.
     let strict = overrides
@@ -219,6 +225,7 @@ mod tests {
             llama_cpp_mode: Some(Mode::Turboquant),
             auto_best_profile: Some("balanced".to_string()),
             use_auto_best: Some(true),
+            vision: None,
             quant: Some("apex-i-mini".to_string()),
             context_key: Some("64k".to_string()),
             kv_cache_k: None,
@@ -271,13 +278,59 @@ mod tests {
             quant: Some("apex-balanced".to_string()),
             mode: Some(Mode::Native),
             use_auto_best: Some(false),
+            vision: Some(false),
             ..PlanOverrides::default()
         };
-        let plan = resolve_launch_plan("q36apex", &def(), &saved(), &overrides);
+        let defaults = serde_json::from_value(serde_json::json!({
+            "ModelKey": "q36apex",
+            "Action": "claude",
+            "LlamaCppMode": "turboquant",
+            "AutoBestProfile": "balanced",
+            "UseAutoBest": true,
+            "Quant": "apex-i-mini",
+            "ContextKey": "64k",
+            "Vision": true
+        }))
+        .unwrap();
+        let plan = resolve_launch_plan("q36apex", &def(), &defaults, &overrides);
         assert_eq!(plan.target, "localpilot");
         assert_eq!(plan.quant, "apex-balanced");
         assert_eq!(plan.mode, Mode::Native);
         assert!(!plan.use_auto_best);
+        assert!(
+            !plan.vision,
+            "an explicit override can turn saved vision off"
+        );
+    }
+
+    #[test]
+    fn saved_vision_replays_for_its_own_model_only() {
+        let defaults: DefaultLaunch = serde_json::from_value(serde_json::json!({
+            "ModelKey": "q36apex",
+            "Action": "claude",
+            "Vision": true
+        }))
+        .unwrap();
+        let plan = resolve_launch_plan("q36apex", &def(), &defaults, &PlanOverrides::default());
+        assert!(plan.vision, "the saved vision toggle replays for its model");
+
+        let other =
+            resolve_launch_plan("other-model", &def(), &defaults, &PlanOverrides::default());
+        assert!(
+            !other.vision,
+            "vision is model-specific and must not leak to another model"
+        );
+    }
+
+    #[test]
+    fn old_recipes_without_vision_stay_text_only() {
+        let defaults: DefaultLaunch = serde_json::from_value(serde_json::json!({
+            "ModelKey": "q36apex",
+            "Action": "claude"
+        }))
+        .unwrap();
+        let plan = resolve_launch_plan("q36apex", &def(), &defaults, &PlanOverrides::default());
+        assert!(!plan.vision);
     }
 
     #[test]

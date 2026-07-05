@@ -223,6 +223,7 @@ pub fn default_launch_from_plan(plan: &GuidedPlan) -> DefaultLaunch {
         llama_cpp_mode: Some(plan.mode),
         auto_best_profile: Some(plan.auto_best_profile.clone()),
         use_auto_best: Some(plan.use_auto_best),
+        vision: Some(plan.vision),
         quant: Some(plan.quant.clone()),
         context_key: Some(plan.context_key.clone()),
         kv_cache_k: plan.kv_cache_k.clone(),
@@ -1536,6 +1537,7 @@ mod tests {
     fn saved_recipe_round_trips_the_plan() {
         let mut plan = guided("q4", "64k", Mode::Native);
         plan.target = "localpilot".to_string();
+        plan.vision = true;
         let saved = default_launch_from_plan(&plan);
         assert_eq!(saved.model_key.as_deref(), Some("m"));
         assert_eq!(saved.action.as_deref(), Some("localpilot"));
@@ -1544,6 +1546,7 @@ mod tests {
         let value = serde_json::to_value(&saved).unwrap();
         assert!(value.get("Action").is_some());
         assert!(value.get("ModelKey").is_some());
+        assert_eq!(value["Vision"], true);
     }
 
     #[test]

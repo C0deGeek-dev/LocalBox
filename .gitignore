@@ -50,11 +50,11 @@ $RECYCLE.BIN/
 
 # Log files (dev / runtime temp logs)
 *.log
+.localpilot/
 /.localpilot.toml
 
 # LocalMind / LocalPilot runtime stores (derived; never commit — ADR-0011)
 .localmind/
-.localpilot/
 .localmind.toml
 
 # Rust build output

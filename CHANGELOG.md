@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- The guided launcher's "Save as my default" now persists the
+  `Images (vision)` toggle in `DefaultLaunch`. A saved vision-on recipe replays
+  for that same model after restarting LocalBox, while other models still
+  start text-only unless vision is explicitly enabled.
 - Docs now describe the weight-vs-VRAM fit estimate accurately: it is an
   advisory picker colour (green/yellow/red), not a guard that blocks a launch,
   and KV-cache pressure is not computed. Corrected the README and architecture
@@ -16,6 +20,32 @@ Past-tense record of shipped changes.
   sha256-pinned).
 - Restoring the shell env after a launch now returns a variable that was set to
   an empty string before launch verbatim, instead of removing it.
+- Raised the default `LocalModelMaxOutputTokens` from 4096 to 16384. Agentic
+  coding replies routinely hit the old cap and stopped mid-word with no error
+  (a legitimate `finish_reason: length` that nothing in the pipeline surfaced) —
+  the no-think proxy's `<think>`-tag holdback was not at fault. The cap only
+  bounds decode time for replies that actually need it; it does not reserve
+  extra VRAM/KV-cache. `docs/troubleshooting.md` now documents the symptom and
+  how to raise it further in `settings.json`.
+- Fixed the actual cause of replies vanishing silently mid-sentence: the
+  no-think proxy's `<think>`-tag stripper discarded everything after a
+  `<think>` tag that never got a matching `</think>` before the turn ended —
+  and did so incrementally on every chunk, not just once at the end — with no
+  warning and no effect on the stream's terminal marker, so the client saw a
+  clean, seemingly-complete reply that was actually missing real content. Any
+  local model that ever emits a stray/unclosed `<think>`-like substring
+  mid-turn triggered this, independent of platform or model. Unterminated
+  `<think>` spans are now flushed as visible text instead of discarded.
+  (Shared `localx-llama` fix; re-pinned.)
+- Fixed a second, more common cause of the same symptom: an unterminated
+  `<think>` span was only recovered once the stream reached its own natural
+  end, so a false-positive `<think>`-like substring in ordinary (non-reasoning)
+  text — confirmed via llama-server's own log to leave generation completely
+  healthy, with no further reasoning activity — could freeze the visible
+  reply for the rest of the turn if the caller gave up on the stream first.
+  The no-think proxy now bails out of a `<think>` span that runs past 32KB
+  without closing, flushing it as visible text and resuming normal streaming
+  instead of waiting indefinitely. (Shared `localx-llama` fix; re-pinned.)
 
 ## v2.1.5 - 2026-07-04
 
