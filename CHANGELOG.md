@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.2.0 - 2026-07-06
+
+Coordinated LocalX release.
+
 - A LocalPilot launch no longer wipes hand-added `.localpilot.toml` sections
   (e.g. `[mcp.servers.*]` for Playwright/context7). Previously every launch
   overwrote the whole file with just the provider/permissions blocks LocalBox

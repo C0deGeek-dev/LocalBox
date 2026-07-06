@@ -876,7 +876,7 @@ checksum = "23fb14cb19457329c82206317a5663005a4d404783dc74f4252769b0d5f42856"
 
 [[package]]
 name = "localbox"
-version = "2.1.5"
+version = "2.2.0"
 dependencies = [
  "crossterm",
  "localbox-launcher",
@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "localbox-launcher"
-version = "2.1.5"
+version = "2.2.0"
 dependencies = [
  "localx-llama-core",
  "localx-llama-runtime",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "localbox-tui"
-version = "2.1.5"
+version = "2.2.0"
 dependencies = [
  "localx-llama-core",
  "ratatui",
