@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.3.0 - 2026-07-07
+
+Coordinated LocalX release.
+
 - The shared crate tier advanced: the no-think proxy's gateway key check is
   now constant-time (SHA-256 digest comparison instead of a short-circuiting
   string equality), and its docs state the LAN posture honestly — the key
