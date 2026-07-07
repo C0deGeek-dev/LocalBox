@@ -7,17 +7,16 @@
 
 use std::process::ExitCode;
 
-use localbox::exec::{home_dir, probe_vram_gb};
+use localbox::exec::{build_launcher, home_dir};
 use localbox::guided::{catalog_dir, run_guided};
 use localbox::live::{execute_launch, status_report, stop_all, AgentKind, LiveError};
-use localbox::{product_envelope, product_version};
+use localbox::product_envelope;
 use localbox_launcher::catalog::Catalog;
 use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{
     plan_launch, smoke_fallback, LaunchPlan, LaunchRequest, SmokeFallback,
 };
-use localx_llama_core::vram::resolve_vram;
-use localx_llama_core::{HardwareProbe, Mode, TunerBestConfig, TunerEntry};
+use localx_llama_core::{Mode, TunerBestConfig, TunerEntry};
 use localx_llama_runtime::proxy::{serve_proxy_on, ProxyConfig};
 
 const DEFAULT_PROXY_PORT: u16 = 11_435;
@@ -220,50 +219,20 @@ fn apply_saved_auto_best(
     Ok(())
 }
 
-fn build_launcher(home: &std::path::Path) -> Result<LlamaLauncher, String> {
-    let dir = catalog_dir(home);
-    let catalog = Catalog::load(&dir).map_err(|e| e.to_string())?;
-    // Resolve VRAM through the shared ladder (config > 0 -> auto-probe ->
-    // fallback) so the resolution + its no-GPU fallback are single-sourced with
-    // the rest of the stack, not a LocalBox-only path. `probe_vram_gb()` returns
-    // 0 when no GPU tool answers; treat that as "undetected" so the shared
-    // fallback (not 0 GB, which would paint every quant `over`) applies.
-    let configured = catalog
-        .setting("VRAMGB")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|gb| i64::try_from(gb).ok());
-    let probed = {
-        let gb = probe_vram_gb();
-        (gb > 0).then(|| i64::from(gb))
-    };
-    let vram = resolve_launcher_vram(configured, probed);
-    Ok(LlamaLauncher::new(catalog, product_version(), home, vram))
-}
-
-/// Resolve the launcher's VRAM figure through the shared `resolve_vram` ladder
-/// (configured > 0 -> auto-detected -> shared fallback), narrowed to the `u32`
-/// the launcher trait carries. Split out so the ladder wiring is unit-testable
-/// without spawning nvidia-smi.
-fn resolve_launcher_vram(configured: Option<i64>, probed: Option<i64>) -> u32 {
-    struct FixedProbe(Option<i64>);
-    impl HardwareProbe for FixedProbe {
-        fn auto_vram_gb(&self) -> Option<i64> {
-            self.0
-        }
-    }
-    let info = resolve_vram(configured, &FixedProbe(probed));
-    u32::try_from(info.gb).unwrap_or(u32::MAX)
-}
-
-fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
-    let model = args
-        .first()
-        .filter(|a| !a.starts_with("--"))
-        .ok_or("a model key is required (run `localbox launch <model>`)")?;
-    let home = home_dir().ok_or("could not determine the user home directory")?;
-
+/// Build the launch request a `launch`/`serve` invocation asks for. Called for
+/// the primary plan and — with `auto_best` forced off — for the native retry
+/// after a failed smoke, so the retry re-derives clean defaults instead of
+/// carrying fork-tuned AutoBest params/quant/context into the native build.
+fn build_request(
+    args: &[String],
+    model: &str,
+    home: &std::path::Path,
+    launcher: &LlamaLauncher,
+    agent: AgentKind,
+    auto_best: bool,
+) -> Result<LaunchRequest, String> {
     let mut request = LaunchRequest::new(
-        model.clone(),
+        model.to_string(),
         flag_value(args, "--context").unwrap_or("").to_string(),
         parse_mode(flag_value(args, "--mode"))?,
     );
@@ -275,18 +244,15 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     // the tuned quant/context/mode + launch params (KV types, n-cpu-moe, …) that
     // the interactive guided launcher applies — instead of raw defaults that OOM a
     // large model. Explicit --quant/--context/--mode filter and override.
-    if has_flag(args, "--auto-best") {
+    if auto_best {
         apply_saved_auto_best(
             &mut request,
-            &home,
+            home,
             flag_value(args, "--mode").is_some(),
             flag_value(args, "--quant").is_some(),
             flag_value(args, "--context").is_some(),
         )?;
     }
-
-    let agent = parse_agent(flag_value(args, "--agent"), default_agent)?;
-    let launcher = build_launcher(&home)?;
 
     // Fill any llama-server tunable the user set in settings.json but that neither
     // an AutoBest profile nor a flag already provided. Settings are the lowest
@@ -313,6 +279,26 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
             request.params.cache_reuse = Some(256);
         }
     }
+    Ok(request)
+}
+
+fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
+    let model = args
+        .first()
+        .filter(|a| !a.starts_with("--"))
+        .ok_or("a model key is required (run `localbox launch <model>`)")?;
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+
+    let agent = parse_agent(flag_value(args, "--agent"), default_agent)?;
+    let launcher = build_launcher(&home)?;
+    let request = build_request(
+        args,
+        model,
+        &home,
+        &launcher,
+        agent,
+        has_flag(args, "--auto-best"),
+    )?;
 
     let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
     apply_launch_posture(&mut plan, args, agent)?;
@@ -323,8 +309,10 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     }
 
     // A fork build (turboquant/mtpturbo) that fails its reply check falls back to
-    // native llama.cpp once, rather than hard-stopping — the fork's tuned
-    // overrides don't apply to the native build, so the retry re-plans on native.
+    // native llama.cpp once, rather than hard-stopping. The retry re-derives its
+    // request with AutoBest off — the fork's tuned params/quant/context don't
+    // apply to the native build (fork-only KV types would even fail its plan) —
+    // and the failed launch already tore its own server/proxy down.
     let outcome = match execute_launch(&launcher, &plan, &request, agent, &home) {
         Ok(outcome) => outcome,
         Err(LiveError::Smoke(detail))
@@ -335,8 +323,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
                  Retrying on native llama.cpp …",
                 request.mode.as_str()
             );
-            let _ = stop_all(&home, &[plan.proxy.listen_port]);
-            let mut native = request.clone();
+            let mut native = build_request(args, model, &home, &launcher, agent, false)?;
             native.mode = Mode::Native;
             let mut native_plan = plan_launch(&launcher, &native).map_err(|e| e.to_string())?;
             apply_launch_posture(&mut native_plan, args, agent)?;
@@ -647,6 +634,17 @@ fn apply_launch_posture(
     agent: AgentKind,
 ) -> Result<(), String> {
     if has_flag(args, "--lan") {
+        // The gateway (no-think proxy) is the only LAN-bindable listener;
+        // `--keep-thinking` routes the agent straight at the server, which
+        // binds loopback-only — the combination would announce a gateway
+        // that never starts. Refuse it instead of lying about the posture.
+        if has_flag(args, "--keep-thinking") {
+            return Err(
+                "--lan needs the gateway, but --keep-thinking bypasses it (the server \
+                 itself stays loopback-only). Drop one of the two flags."
+                    .to_string(),
+            );
+        }
         let password = flag_value(args, "--password").unwrap_or("").to_string();
         let host = std::env::var(if cfg!(windows) {
             "COMPUTERNAME"
@@ -665,6 +663,11 @@ fn apply_launch_posture(
         }
         plan.proxy.listen_host = "0.0.0.0".to_string();
         plan.proxy.api_key = (!password.trim().is_empty()).then_some(password);
+        if let Some(key) = &plan.proxy.api_key {
+            // The agent authenticates with the same key the gateway enforces
+            // (Codex gets its own env swap below).
+            localbox_launcher::env::set_auth_token(&mut plan.env_plan, key);
+        }
         println!(
             "LAN gateway: {advertised} (key {})",
             if plan.proxy.api_key.is_some() {
@@ -726,22 +729,128 @@ fn cmd_nothink_proxy(args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::resolve_launcher_vram;
+    use super::*;
+    use localbox_launcher::proxy::EnsureProxyConfig;
 
-    #[test]
-    fn no_gpu_host_uses_the_shared_fallback_not_zero() {
-        // The bug this replaced: a no-detect host resolved to 0 GB, which paints
-        // every quant `over`. The shared ladder falls back to 24 GB instead.
-        assert_eq!(resolve_launcher_vram(None, None), 24);
+    fn plan(base_url: &str) -> LaunchPlan {
+        LaunchPlan {
+            key: "m".into(),
+            context_key: String::new(),
+            context_tokens: 0,
+            gguf_path: std::path::PathBuf::from("m.gguf"),
+            gguf_downloaded: true,
+            vision_module: None,
+            argv: vec![],
+            server_port: 8080,
+            proxy: EnsureProxyConfig::new(11_435, 8080),
+            base_url: base_url.to_string(),
+            provider_toml: String::new(),
+            env_plan: localbox_launcher::env::claude_env_plan(
+                &localbox_launcher::env::EnvPlanInputs::new(base_url, "m"),
+            ),
+            notes: vec![],
+        }
+    }
+
+    fn args(flags: &[&str]) -> Vec<String> {
+        flags.iter().map(|s| (*s).to_string()).collect()
     }
 
     #[test]
-    fn configured_vram_wins_over_the_probe() {
-        assert_eq!(resolve_launcher_vram(Some(48), Some(24)), 48);
+    fn the_native_retry_request_drops_the_saved_auto_best_profile() {
+        // A fork smoke failure retries on native with AutoBest off (the tuned
+        // overrides were tuned for the failing fork; fork-only KV types would
+        // even fail the native plan). The retry re-derives the request, so the
+        // profile's params/quant/context must not survive into it.
+        let home = tempfile::tempdir().unwrap();
+        let tuner = home.path().join(".local-llm").join("tuner");
+        std::fs::create_dir_all(&tuner).unwrap();
+        std::fs::write(
+            tuner.join("best-m.json"),
+            r#"{
+                "schema": 1,
+                "key": "m",
+                "entries": [{
+                    "quant": "tuned-quant",
+                    "contextKey": "64k",
+                    "mode": "turboquant",
+                    "vramGB": 24,
+                    "prompt_length": "short",
+                    "profile": "balanced",
+                    "score": 9.0,
+                    "scoreUnit": "tok/s",
+                    "args": [],
+                    "overrides": { "NCpuMoe": 12 },
+                    "measured_at": "2026-01-01T00:00:00Z",
+                    "tuner_version": 1
+                }]
+            }"#,
+        )
+        .unwrap();
+        let catalog = localbox_launcher::catalog::Catalog::from_layers(
+            &serde_json::Map::new(),
+            &serde_json::from_str(r#"{"Models":{"m":{"Repo":"o/m"}}}"#).unwrap(),
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        let launcher = LlamaLauncher::new(catalog, "0.0.0", home.path().to_path_buf(), 24);
+        let args = args(&["--auto-best"]);
+
+        let tuned =
+            build_request(&args, "m", home.path(), &launcher, AgentKind::Claude, true).unwrap();
+        assert_eq!(tuned.quant.as_deref(), Some("tuned-quant"));
+        assert_eq!(tuned.params.n_cpu_moe, Some(12));
+
+        let mut retry =
+            build_request(&args, "m", home.path(), &launcher, AgentKind::Claude, false).unwrap();
+        retry.mode = Mode::Native;
+        assert_eq!(retry.quant, None, "AutoBest quant must not carry over");
+        assert_eq!(
+            retry.context_key, "",
+            "AutoBest context must not carry over"
+        );
+        assert_eq!(
+            retry.params.n_cpu_moe, None,
+            "fork-tuned params must not carry over"
+        );
+        assert_eq!(retry.mode, Mode::Native);
     }
 
     #[test]
-    fn a_detected_gpu_is_used_when_unconfigured() {
-        assert_eq!(resolve_launcher_vram(None, Some(16)), 16);
+    fn lan_with_keep_thinking_is_refused_not_announced() {
+        // The gateway is the only LAN-bindable listener; keep-thinking
+        // bypasses it. The old behaviour printed a "key required" banner for
+        // a gateway that never started.
+        let mut p = plan("http://127.0.0.1:8080");
+        let err = apply_launch_posture(
+            &mut p,
+            &args(&["--lan", "--keep-thinking", "--password", "k"]),
+            AgentKind::Claude,
+        )
+        .unwrap_err();
+        assert!(err.contains("--keep-thinking"), "{err}");
+    }
+
+    #[test]
+    fn a_keyed_lan_posture_reaches_the_proxy_and_the_agent_env() {
+        let mut p = plan("http://127.0.0.1:11435");
+        apply_launch_posture(
+            &mut p,
+            &args(&["--lan", "--password", "sesame"]),
+            AgentKind::Claude,
+        )
+        .unwrap();
+        assert_eq!(p.proxy.listen_host, "0.0.0.0");
+        assert_eq!(p.proxy.api_key.as_deref(), Some("sesame"));
+        let token = p
+            .env_plan
+            .iter()
+            .find(|(n, _)| *n == "ANTHROPIC_AUTH_TOKEN")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            token,
+            Some("sesame"),
+            "agent env must carry the gateway key"
+        );
     }
 }

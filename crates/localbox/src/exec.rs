@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use localbox_launcher::env::{EnvEnvelope, ProcessEnv};
 use localbox_launcher::proxy::{
-    parse_lsof_pids, parse_netstat_listeners, parse_proxy_health, EnsureProxyConfig, ProxyHealth,
-    ProxyOps,
+    parse_lsof_pids, parse_netstat_listeners, parse_proxy_health, posture_from_argv,
+    EnsureProxyConfig, ProxyHealth, ProxyOps, ProxyPosture,
 };
 use localx_llama_runtime::net::is_port_listening;
 use localx_llama_runtime::probe::parse_nvidia_smi_vram_gb;
@@ -257,6 +257,53 @@ pub fn kill_pid(pid: u32) {
     }
 }
 
+/// Build the launcher every entry point uses — catalog from the shared
+/// catalog directory, VRAM through the shared ladder. Single-sourced so the
+/// guided and CLI paths cannot fork on VRAM resolution (the guided path once
+/// fed a raw 0-GB probe result in, painting every quant `over`).
+///
+/// # Errors
+/// The catalog load failure, in user terms.
+pub fn build_launcher(home: &Path) -> Result<localbox_launcher::launcher::LlamaLauncher, String> {
+    let dir = crate::guided::catalog_dir(home);
+    let catalog = localbox_launcher::catalog::Catalog::load(&dir).map_err(|e| e.to_string())?;
+    // Resolve VRAM through the shared ladder (config > 0 -> auto-probe ->
+    // fallback). `probe_vram_gb()` returns 0 when no GPU tool answers; treat
+    // that as "undetected" so the shared fallback (not 0 GB, which would paint
+    // every quant `over`) applies.
+    let configured = catalog
+        .setting("VRAMGB")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|gb| i64::try_from(gb).ok());
+    let probed = {
+        let gb = probe_vram_gb();
+        (gb > 0).then(|| i64::from(gb))
+    };
+    let vram = resolve_launcher_vram(configured, probed);
+    Ok(localbox_launcher::launcher::LlamaLauncher::new(
+        catalog,
+        crate::product_version(),
+        home,
+        vram,
+    ))
+}
+
+/// Resolve the launcher's VRAM figure through the shared `resolve_vram` ladder
+/// (configured > 0 -> auto-detected -> shared fallback), narrowed to the `u32`
+/// the launcher trait carries. Split out so the ladder wiring is unit-testable
+/// without spawning nvidia-smi.
+#[must_use]
+pub fn resolve_launcher_vram(configured: Option<i64>, probed: Option<i64>) -> u32 {
+    struct FixedProbe(Option<i64>);
+    impl localx_llama_core::HardwareProbe for FixedProbe {
+        fn auto_vram_gb(&self) -> Option<i64> {
+            self.0
+        }
+    }
+    let info = localx_llama_core::vram::resolve_vram(configured, &FixedProbe(probed));
+    u32::try_from(info.gb).unwrap_or(u32::MAX)
+}
+
 /// The live [`ProxyOps`]: real sockets, the OS socket table, and the proxy
 /// hosted by re-invoking this executable's `nothink-proxy` command.
 #[derive(Debug)]
@@ -279,6 +326,24 @@ impl ProxyOps for LiveProxyOps {
     fn health(&mut self, listen_port: u16) -> Option<ProxyHealth> {
         loopback_get(listen_port, "/health", Duration::from_secs(2))
             .map(|body| parse_proxy_health(&body))
+    }
+
+    fn posture(&mut self, listen_port: u16) -> Option<ProxyPosture> {
+        // Ground truth, not a state file: the proxy's exposure posture is
+        // read off the live process's own command line (the `nothink-proxy`
+        // argv carries `--listen-host`/`--api-key`). An unrecognizable
+        // listener has no verifiable posture and is never reused.
+        let pid = os_listener_pids(listen_port).first().copied()?;
+        let target = sysinfo::Pid::from_u32(pid);
+        let mut system = sysinfo::System::new();
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
+        let argv: Vec<String> = system
+            .process(target)?
+            .cmd()
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        posture_from_argv(&argv)
     }
 
     fn port_listening(&mut self, port: u16) -> bool {
@@ -410,6 +475,19 @@ pub fn spawn_server(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_gpu_host_uses_the_shared_fallback_not_zero() {
+        // The bug this replaced: a no-detect host resolved to 0 GB, which paints
+        // every quant `over`. The shared ladder falls back to 24 GB instead.
+        assert_eq!(resolve_launcher_vram(None, None), 24);
+    }
+
+    #[test]
+    fn configured_vram_wins_over_the_probe() {
+        assert_eq!(resolve_launcher_vram(Some(16), Some(48)), 16);
+        assert_eq!(resolve_launcher_vram(None, Some(48)), 48);
+    }
 
     #[test]
     fn apple_chip_detection_accepts_apple_silicon_only() {

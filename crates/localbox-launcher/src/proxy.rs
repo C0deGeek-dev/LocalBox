@@ -50,6 +50,37 @@ pub fn parse_proxy_health(body: &str) -> ProxyHealth {
     })
 }
 
+/// The exposure posture a live proxy serves with: its listen host and the
+/// key forwarding requests must carry. `/health` reports only the target, so
+/// posture comes from ground truth — the proxy process's own command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyPosture {
+    /// The host the proxy was bound to (`0.0.0.0` = LAN gateway).
+    pub listen_host: String,
+    /// The bearer key it enforces; `None` = keyless.
+    pub api_key: Option<String>,
+}
+
+/// Read a proxy's posture off its spawn argv (the `nothink-proxy` command
+/// line). `None` for anything that is not recognizably a no-think proxy —
+/// an unrecognized listener has no verifiable posture and is never reused.
+#[must_use]
+pub fn posture_from_argv(argv: &[String]) -> Option<ProxyPosture> {
+    if !argv.iter().any(|a| a == "nothink-proxy") {
+        return None;
+    }
+    let value_of = |flag: &str| {
+        argv.iter()
+            .position(|a| a == flag)
+            .and_then(|i| argv.get(i + 1))
+            .cloned()
+    };
+    Some(ProxyPosture {
+        listen_host: value_of("--listen-host").unwrap_or_else(|| "127.0.0.1".to_string()),
+        api_key: value_of("--api-key"),
+    })
+}
+
 /// Everything `ensure_proxy` needs to know about the wanted proxy.
 #[derive(Debug, Clone)]
 pub struct EnsureProxyConfig {
@@ -91,6 +122,9 @@ impl EnsureProxyConfig {
 pub trait ProxyOps {
     /// `GET /health` on the loopback proxy port; `None` when unreachable.
     fn health(&mut self, listen_port: u16) -> Option<ProxyHealth>;
+    /// The posture the live proxy on `listen_port` serves with; `None` when
+    /// nothing listens there or its posture cannot be determined.
+    fn posture(&mut self, listen_port: u16) -> Option<ProxyPosture>;
     /// Whether something is listening on the (loopback) port.
     fn port_listening(&mut self, port: u16) -> bool;
     /// The PIDs listening on a local port (socket→PID).
@@ -152,6 +186,14 @@ fn target_matches(
     Some(health.target_host == target_host && health.target_port == target_port)
 }
 
+/// The tri-state posture test: `Some(true)` the live proxy serves with the
+/// wanted listen host and key, `Some(false)` it serves with a different
+/// posture, `None` posture unverifiable.
+fn posture_matches(ops: &mut dyn ProxyOps, config: &EnsureProxyConfig) -> Option<bool> {
+    let posture = ops.posture(config.listen_port)?;
+    Some(posture.listen_host == config.listen_host && posture.api_key == config.api_key)
+}
+
 /// Reap an orphaned proxy whose upstream is dead (it still answers `/health`,
 /// so it must go before any target comparison). Returns whether it reaped.
 fn reap_stale(ops: &mut dyn ProxyOps, listen_port: u16) -> bool {
@@ -199,20 +241,34 @@ pub fn ensure_proxy(
         config.target_port,
     ) {
         Some(true) => {
-            if !config.logs_requested {
-                return Ok(outcome); // reuse as-is
-            }
-            match config.owned_pid {
-                Some(pid) => {
-                    // Restart the owned proxy so gateway logs are captured.
+            // A target match alone is not reuse: the posture (listen host +
+            // key) must match too, or a keyless/open-LAN proxy would keep
+            // serving behind a stricter banner — and a wider bind would
+            // outlive the launch that requested it. Unverifiable posture is
+            // never reused either (fail-safe restart).
+            if posture_matches(ops, config) == Some(true) {
+                if !config.logs_requested {
+                    return Ok(outcome); // reuse as-is
+                }
+                match config.owned_pid {
+                    Some(pid) => {
+                        // Restart the owned proxy so gateway logs are captured.
+                        ops.kill(pid);
+                        ops.sleep_ms(300);
+                    }
+                    None => {
+                        return Err(ProxyLifecycleError::ForeignMatchingProxy {
+                            port: config.listen_port,
+                            target,
+                        });
+                    }
+                }
+            } else {
+                // Posture mismatch: repoint exactly like a target mismatch.
+                outcome.repointed = true;
+                if let Some(pid) = config.owned_pid {
                     ops.kill(pid);
                     ops.sleep_ms(300);
-                }
-                None => {
-                    return Err(ProxyLifecycleError::ForeignMatchingProxy {
-                        port: config.listen_port,
-                        target,
-                    });
                 }
             }
         }
@@ -340,6 +396,8 @@ mod tests {
         listeners: BTreeMap<u16, Vec<u32>>,
         /// port -> health payload.
         health: BTreeMap<u16, ProxyHealth>,
+        /// port -> the posture the live proxy serves with.
+        postures: BTreeMap<u16, ProxyPosture>,
         /// What `start` returns; on success the mock wires the new proxy up.
         start_result: Result<u32, String>,
         /// The target the STARTED proxy will report (readiness simulation).
@@ -354,6 +412,7 @@ mod tests {
             Self {
                 listeners: BTreeMap::new(),
                 health: BTreeMap::new(),
+                postures: BTreeMap::new(),
                 start_result: Ok(4242),
                 started_reports: None,
                 killed: Vec::new(),
@@ -370,6 +429,26 @@ mod tests {
                     status: "ok".to_string(),
                     target_host: "127.0.0.1".to_string(),
                     target_port,
+                },
+            );
+            // The default scripted proxy serves the loopback keyless posture
+            // (matching `EnsureProxyConfig::new`).
+            self.postures.insert(
+                listen,
+                ProxyPosture {
+                    listen_host: "127.0.0.1".to_string(),
+                    api_key: None,
+                },
+            );
+            self
+        }
+
+        fn with_posture(mut self, listen: u16, listen_host: &str, api_key: Option<&str>) -> Self {
+            self.postures.insert(
+                listen,
+                ProxyPosture {
+                    listen_host: listen_host.to_string(),
+                    api_key: api_key.map(str::to_string),
                 },
             );
             self
@@ -390,6 +469,12 @@ mod tests {
                 return None;
             }
             self.health.get(&listen_port).cloned()
+        }
+        fn posture(&mut self, listen_port: u16) -> Option<ProxyPosture> {
+            if !self.port_listening(listen_port) {
+                return None;
+            }
+            self.postures.get(&listen_port).cloned()
         }
         fn port_listening(&mut self, port: u16) -> bool {
             self.listeners.get(&port).is_some_and(|p| !p.is_empty())
@@ -416,6 +501,7 @@ mod tests {
                 .collect();
             for port in dead {
                 self.health.remove(&port);
+                self.postures.remove(&port);
             }
         }
         fn start(&mut self, config: &EnsureProxyConfig) -> Result<u32, String> {
@@ -431,6 +517,14 @@ mod tests {
                 target_port: config.target_port,
             });
             self.health.insert(config.listen_port, report);
+            // A freshly started proxy serves exactly the wanted posture.
+            self.postures.insert(
+                config.listen_port,
+                ProxyPosture {
+                    listen_host: config.listen_host.clone(),
+                    api_key: config.api_key.clone(),
+                },
+            );
             Ok(pid)
         }
         fn sleep_ms(&mut self, ms: u64) {
@@ -447,6 +541,86 @@ mod tests {
         assert_eq!(outcome.started_pid, None, "reused, not restarted");
         assert!(ops.killed.is_empty());
         assert_eq!(ops.started, 0);
+    }
+
+    #[test]
+    fn a_keyless_proxy_is_never_reused_for_a_keyed_plan() {
+        // The silent-unkeyed-reuse branch: a pre-existing keyless proxy
+        // matches the target, but the plan wants a key. Reusing it would
+        // serve unkeyed behind a "key required" banner — it must be
+        // repointed and restarted with the key.
+        let mut ops = MockOps::new()
+            .with_proxy(11435, 77, 8080)
+            .with_upstream(8080);
+        let mut config = EnsureProxyConfig::new(11435, 8080);
+        config.listen_host = "0.0.0.0".to_string();
+        config.api_key = Some("sesame".to_string());
+        let outcome = ensure_proxy(&mut ops, &config).unwrap();
+        assert!(outcome.repointed, "posture mismatch repoints");
+        assert!(ops.killed.contains(&77), "keyless proxy torn down");
+        assert_eq!(outcome.started_pid, Some(4242));
+        assert_eq!(
+            ops.postures.get(&11435).unwrap().api_key.as_deref(),
+            Some("sesame"),
+            "the serving proxy now enforces the plan's key"
+        );
+    }
+
+    #[test]
+    fn an_open_lan_proxy_is_repointed_for_a_loopback_plan() {
+        // The exposure-outlives-the-launch branch: an earlier open-LAN proxy
+        // still matches the target, but this launch wants loopback-only. It
+        // must not keep serving the wider bind.
+        let mut ops = MockOps::new()
+            .with_proxy(11435, 77, 8080)
+            .with_upstream(8080)
+            .with_posture(11435, "0.0.0.0", None);
+        let outcome = ensure_proxy(&mut ops, &EnsureProxyConfig::new(11435, 8080)).unwrap();
+        assert!(outcome.repointed, "wider bind repointed");
+        assert!(ops.killed.contains(&77));
+        assert_eq!(
+            ops.postures.get(&11435).unwrap().listen_host,
+            "127.0.0.1",
+            "the serving proxy is back on loopback"
+        );
+    }
+
+    #[test]
+    fn an_unverifiable_posture_restarts_instead_of_reusing() {
+        // Target matches but the listener's posture cannot be read (not a
+        // recognizable no-think proxy): fail-safe restart, never reuse.
+        let mut ops = MockOps::new()
+            .with_proxy(11435, 77, 8080)
+            .with_upstream(8080);
+        ops.postures.remove(&11435);
+        let outcome = ensure_proxy(&mut ops, &EnsureProxyConfig::new(11435, 8080)).unwrap();
+        assert!(outcome.repointed);
+        assert!(ops.killed.contains(&77));
+        assert_eq!(outcome.started_pid, Some(4242));
+    }
+
+    #[test]
+    fn posture_parses_off_the_spawn_argv() {
+        let argv = |extra: &[&str]| {
+            let mut v = vec![
+                "localbox".to_string(),
+                "nothink-proxy".to_string(),
+                "--listen".to_string(),
+                "11435".to_string(),
+            ];
+            v.extend(extra.iter().map(|s| (*s).to_string()));
+            v
+        };
+        let lan =
+            posture_from_argv(&argv(&["--listen-host", "0.0.0.0", "--api-key", "sesame"])).unwrap();
+        assert_eq!(lan.listen_host, "0.0.0.0");
+        assert_eq!(lan.api_key.as_deref(), Some("sesame"));
+        // No explicit listen host = the loopback default; no key = keyless.
+        let plain = posture_from_argv(&argv(&[])).unwrap();
+        assert_eq!(plain.listen_host, "127.0.0.1");
+        assert_eq!(plain.api_key, None);
+        // A foreign process is not a verifiable proxy.
+        assert_eq!(posture_from_argv(&["python".to_string()]), None);
     }
 
     #[test]

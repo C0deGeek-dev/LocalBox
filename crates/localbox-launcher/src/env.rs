@@ -168,6 +168,18 @@ pub fn claude_env_plan(inputs: &EnvPlanInputs) -> Vec<(&'static str, String)> {
     plan
 }
 
+/// Re-point an already-built Anthropic env plan at a gateway token. The
+/// keyed-LAN posture is decided after planning, so the plan is built with the
+/// loopback default (`local`) and the launch posture swaps the real key in —
+/// the agent must present the same key the proxy enforces.
+pub fn set_auth_token(plan: &mut [(&'static str, String)], token: &str) {
+    for (name, value) in plan.iter_mut() {
+        if *name == "ANTHROPIC_AUTH_TOKEN" {
+            *value = token.to_string();
+        }
+    }
+}
+
 /// The variables a **Codex** (OpenAI-protocol) agent launch sets. Codex reads
 /// `OPENAI_BASE_URL` + `OPENAI_API_KEY`, so it must be pointed at the local
 /// OpenAI-compatible endpoint — otherwise it silently talks to the cloud. Point
@@ -379,6 +391,23 @@ mod tests {
             assert_eq!(get(alias).as_deref(), Some("apex-i-quality"));
         }
         assert_eq!(get("ANTHROPIC_AUTH_TOKEN").as_deref(), Some("local"));
+        assert_eq!(get("ANTHROPIC_API_KEY").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_gateway_key_replaces_the_loopback_auth_token() {
+        // The keyed-LAN launch: the agent env must carry the proxy's key, or
+        // every request 401s behind the "key required" banner.
+        let mut plan = claude_env_plan(&EnvPlanInputs::new("http://127.0.0.1:11435", "m"));
+        set_auth_token(&mut plan, "sesame");
+        let get = |name: &str| {
+            plan.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(get("ANTHROPIC_AUTH_TOKEN").as_deref(), Some("sesame"));
+        // The key-precedence blank stays: a stray ANTHROPIC_API_KEY would
+        // win over the auth token.
         assert_eq!(get("ANTHROPIC_API_KEY").as_deref(), Some(""));
     }
 

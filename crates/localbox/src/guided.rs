@@ -10,7 +10,6 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use localbox_launcher::catalog::Catalog;
-use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{plan_launch, LaunchRequest};
 use localbox_launcher::permissions::JsonSettingsStore;
 use localbox_tui::customize::{
@@ -29,7 +28,7 @@ use localbox_tui::vocab::{glossary, gpu_banner, plan_summary, target_label};
 use localx_llama_core::{Mode, ModelDef, TunerBestConfig, TunerEntry};
 use ratatui::style::Color;
 
-use crate::exec::{home_dir, probe_gpu, probe_vram_gb};
+use crate::exec::{home_dir, probe_gpu};
 use crate::live::{execute_launch, AgentKind};
 
 /// Model rows visible by default: the `recommended` tier only (a definition
@@ -1286,7 +1285,17 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
     } else {
         None
     };
-    let vram = i64::from(probe_vram_gb());
+    // The same launcher construction as the CLI path (shared VRAM ladder:
+    // config > probe > fallback) — a raw probe here once ignored the VRAMGB
+    // setting and painted every quant `over` on a no-probe host.
+    let launcher = match crate::exec::build_launcher(home) {
+        Ok(l) => l,
+        Err(e) => {
+            chooser.announce_error(&plain_warning("launch", &e));
+            return;
+        }
+    };
+    let vram = i64::from(localx_llama_core::Launcher::vram_gb(&launcher));
     let entry = auto_store
         .as_ref()
         .and_then(|store| pick_auto_best(store, plan, vram));
@@ -1296,15 +1305,6 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
         );
     }
     let (request, agent) = request_from_guided(plan, entry);
-
-    let catalog = match Catalog::load(&catalog_dir(home)) {
-        Ok(c) => c,
-        Err(e) => {
-            chooser.announce_error(&plain_warning("launch", &e.to_string()));
-            return;
-        }
-    };
-    let launcher = LlamaLauncher::new(catalog, crate::product_version(), home, probe_vram_gb());
     let resolved = match plan_launch(&launcher, &request) {
         Ok(p) => p,
         Err(e) => {

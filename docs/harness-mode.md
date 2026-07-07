@@ -87,6 +87,20 @@ localbox serve q36plus --context 64k --lan --password chosenpass
 forwarding request must present it (`Authorization: Bearer` or `x-api-key`);
 `/health` stays open for target checks. Serving without a password is
 refused unless you explicitly opt in with `--allow-public-no-auth`.
+The launch's own reply check authenticates with the same key, and the agent
+environment it hands off carries it.
+
+`--lan` cannot be combined with `--keep-thinking`: the gateway is the proxy,
+and `--keep-thinking` bypasses the proxy to talk to the loopback-only server
+directly — the launch refuses the combination.
+
+Proxy reuse is posture-aware: a launch reuses a running gateway only when its
+listen host **and** key match what the launch asked for; any mismatch (or an
+unverifiable listener) restarts the proxy with the wanted posture. A keyed
+plan never silently reuses a keyless proxy, and an open-LAN gateway never
+outlives the launch that asked for it into a later loopback-only launch.
+A failed reply check stops the server and proxy that launch had just started;
+a reused gateway from an earlier launch keeps serving.
 
 On the client, no LocalBox helper is required — set the Anthropic-compatible
 environment for your agent:

@@ -4,6 +4,33 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Fixed the keyed LAN launch end-to-end: the reply-path smoke test now
+  authenticates with the gateway key, and the Claude/LocalPilot agent
+  environment carries that key instead of the loopback placeholder — a
+  `--lan --password` launch previously aborted at the smoke stage against a
+  fresh key-enforcing proxy (and the agent would have been refused anyway).
+- Proxy reuse is now posture-aware: an existing proxy is reused only when its
+  listen host and key match the plan, read from the live process itself. A
+  keyless proxy can no longer be silently reused behind a "key required"
+  banner, and an earlier open-LAN gateway no longer keeps serving after a
+  loopback-only launch — mismatches restart the proxy with the wanted
+  posture. Existing proxies started before this change restart once on the
+  next launch.
+- `--lan --keep-thinking` is refused up front: `--keep-thinking` routes the
+  agent straight at the loopback-only server, so the LAN gateway it announced
+  never actually started.
+- A failed reply check now stops the server (and any proxy) that launch had
+  just started instead of stranding them; a reused proxy from an earlier
+  launch keeps serving.
+- The guided launcher resolves VRAM through the same shared ladder as the
+  CLI path: the `VRAMGB` setting is honored and a host with no detectable
+  GPU falls back to the shared default instead of 0 GB (which painted every
+  quant over-budget).
+- The native retry after a failed fork reply check re-derives its launch
+  request with AutoBest off — as its own docs already claimed — instead of
+  carrying fork-tuned params/quant/context into the native build (fork-only
+  KV-cache types made that retry fail outright).
+
 ## v2.2.0 - 2026-07-06
 
 Coordinated LocalX release.

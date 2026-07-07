@@ -219,21 +219,44 @@ fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, LiveError> {
     Ok(runtime.block_on(future))
 }
 
-async fn post_smoke(base_url: &str, model: &str, timeout_secs: u32) -> Result<String, String> {
+async fn post_smoke(
+    base_url: &str,
+    model: &str,
+    timeout_secs: u32,
+    api_key: Option<&str>,
+) -> Result<String, String> {
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 64,
         "messages": [{"role": "user", "content": "Reply with the single word: ready"}],
     });
     let client = reqwest::Client::new();
-    let response = client
+    let mut request = client
         .post(format!("{base_url}/v1/messages"))
         .json(&body)
-        .timeout(std::time::Duration::from_secs(u64::from(timeout_secs)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .timeout(std::time::Duration::from_secs(u64::from(timeout_secs)));
+    if let Some(key) = api_key {
+        // A keyed gateway enforces its key on every forwarding request —
+        // the smoke test must authenticate like the agent will.
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
     response.text().await.map_err(|e| e.to_string())
+}
+
+/// A failed reply check must not strand what this launch just started: the
+/// spawned server always goes down; the proxy only when this launch started
+/// it (a reused proxy belongs to an earlier launch and keeps serving).
+fn cleanup_after_failed_smoke(
+    ops: &mut dyn localbox_launcher::proxy::ProxyOps,
+    started_proxy: Option<u32>,
+    kill_server: impl FnOnce(),
+) {
+    eprintln!("Stopping what this launch started (the reply check failed).");
+    if started_proxy.is_some() {
+        localbox_launcher::proxy::stop_owned(ops, started_proxy);
+    }
+    kill_server();
 }
 
 /// Execute a resolved launch plan: download the model when missing, spawn
@@ -305,14 +328,25 @@ pub fn execute_launch(
         outcome.proxy_pid = ensured.started_pid;
 
         eprintln!("Checking the reply path (a one-word test question) …");
-        let reply = block_on(post_smoke(
+        let reply = match block_on(post_smoke(
             &plan.base_url,
             &plan.key,
             launcher.smoke_timeout_secs(),
-        ))?
-        .map_err(|e| LiveError::Smoke(format!("the model did not answer: {e}")))?;
+            plan.proxy.api_key.as_deref(),
+        ))? {
+            Ok(reply) => reply,
+            Err(e) => {
+                cleanup_after_failed_smoke(&mut ops, ensured.started_pid, || {
+                    let _ = child.kill();
+                });
+                return Err(LiveError::Smoke(format!("the model did not answer: {e}")));
+            }
+        };
         let smoke = evaluate_smoke_reply(&reply);
         if !smoke.ok {
+            cleanup_after_failed_smoke(&mut ops, ensured.started_pid, || {
+                let _ = child.kill();
+            });
             return Err(LiveError::Smoke(format_smoke_failure(&smoke)));
         }
         outcome.smoke_text = smoke.visible_text;
@@ -541,5 +575,136 @@ mod tests {
         let report = status_report(59_998, 59_999);
         assert!(!report.trim().is_empty());
         assert!(report.contains("remedy:"));
+    }
+
+    /// A minimal scripted ProxyOps for the abort-cleanup legs.
+    struct RecordingOps {
+        killed: Vec<u32>,
+    }
+
+    impl localbox_launcher::proxy::ProxyOps for RecordingOps {
+        fn health(&mut self, _: u16) -> Option<localbox_launcher::proxy::ProxyHealth> {
+            None
+        }
+        fn posture(&mut self, _: u16) -> Option<localbox_launcher::proxy::ProxyPosture> {
+            None
+        }
+        fn port_listening(&mut self, _: u16) -> bool {
+            false
+        }
+        fn listener_pids(&mut self, _: u16) -> Vec<u32> {
+            Vec::new()
+        }
+        fn kill(&mut self, pid: u32) {
+            self.killed.push(pid);
+        }
+        fn start(&mut self, _: &EnsureProxyConfig) -> Result<u32, String> {
+            Err("not scripted".to_string())
+        }
+        fn sleep_ms(&mut self, _: u64) {}
+    }
+
+    #[test]
+    fn a_failed_smoke_tears_down_what_this_launch_started() {
+        // Fresh proxy: both the proxy and the server go down.
+        let mut ops = RecordingOps { killed: Vec::new() };
+        let mut server_killed = false;
+        cleanup_after_failed_smoke(&mut ops, Some(4242), || server_killed = true);
+        assert_eq!(ops.killed, vec![4242]);
+        assert!(server_killed);
+
+        // Reused proxy (started_pid None): it belongs to an earlier launch
+        // and keeps serving; only the server this launch spawned goes down.
+        let mut ops = RecordingOps { killed: Vec::new() };
+        let mut server_killed = false;
+        cleanup_after_failed_smoke(&mut ops, None, || server_killed = true);
+        assert!(ops.killed.is_empty());
+        assert!(server_killed);
+    }
+
+    /// The composed keyed-LAN seam: a key-enforcing gateway (the real shared
+    /// proxy) in front of a scripted upstream. The smoke request must
+    /// authenticate exactly like the agent env will — this is the flow all
+    /// unit suites missed while it was broken end-to-end.
+    #[test]
+    fn a_keyed_plan_smokes_through_a_key_enforcing_proxy_and_the_env_matches() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            // Scripted upstream: answers any request with a real reply body.
+            let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let upstream_port = upstream.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut sock, _)) = upstream.accept().await else {
+                        return;
+                    };
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 65_536];
+                        let _ = sock.read(&mut buf).await;
+                        let body = r#"{"content":[{"type":"text","text":"ready"}]}"#;
+                        let reply = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = sock.write_all(reply.as_bytes()).await;
+                    });
+                }
+            });
+
+            // The real shared proxy, key-enforcing, on an ephemeral port.
+            let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let proxy_port = holder.local_addr().unwrap().port();
+            drop(holder);
+            tokio::spawn(localx_llama_runtime::proxy::serve_proxy_on(
+                "127.0.0.1",
+                proxy_port,
+                localx_llama_runtime::proxy::ProxyConfig {
+                    target_host: "127.0.0.1".to_string(),
+                    target_port: upstream_port,
+                    merge_system: true,
+                    api_key: Some("sesame".to_string()),
+                },
+            ));
+            let base_url = format!("http://127.0.0.1:{proxy_port}");
+            let health = format!("{base_url}/health");
+            let mut ready = false;
+            for _ in 0..100 {
+                if reqwest::get(&health).await.is_ok() {
+                    ready = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            assert!(ready, "proxy never became ready");
+
+            // Unkeyed smoke: the gateway refuses it — the pre-fix abort.
+            let unkeyed = post_smoke(&base_url, "m", 10, None).await.unwrap();
+            assert!(
+                !evaluate_smoke_reply(&unkeyed).ok,
+                "an unauthenticated smoke must not pass a keyed gateway: {unkeyed}"
+            );
+
+            // Keyed smoke: passes end-to-end.
+            let keyed = post_smoke(&base_url, "m", 10, Some("sesame"))
+                .await
+                .unwrap();
+            let smoke = evaluate_smoke_reply(&keyed);
+            assert!(smoke.ok, "keyed smoke failed: {keyed}");
+            assert_eq!(smoke.visible_text, "ready");
+
+            // And the emitted agent env authenticates with the same key.
+            let mut plan = localbox_launcher::env::claude_env_plan(
+                &localbox_launcher::env::EnvPlanInputs::new(base_url.clone(), "m"),
+            );
+            localbox_launcher::env::set_auth_token(&mut plan, "sesame");
+            let token = plan
+                .iter()
+                .find(|(n, _)| *n == "ANTHROPIC_AUTH_TOKEN")
+                .map(|(_, v)| v.clone());
+            assert_eq!(token.as_deref(), Some("sesame"));
+        });
     }
 }
