@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- The shared crate tier advanced: the no-think proxy's gateway key check is
+  now constant-time (SHA-256 digest comparison instead of a short-circuiting
+  string equality), and its docs state the LAN posture honestly — the key
+  gates access over plain HTTP, and `/health` deliberately stays open.
 - Fixed the keyed LAN launch end-to-end: the reply-path smoke test now
   authenticates with the gateway key, and the Claude/LocalPilot agent
   environment carries that key instead of the loopback placeholder — a

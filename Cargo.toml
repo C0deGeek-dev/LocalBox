@@ -50,5 +50,5 @@ ratatui = { version = "=0.29.0", default-features = false }
 crossterm = "=0.28.1"
 tokio = { version = "=1.44.2", features = ["macros", "rt-multi-thread", "net", "time"] }
 reqwest = { version = "=0.12.11", features = ["json", "stream", "rustls-tls"], default-features = false }
-localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "6fd0e502f4030d8b7234921bd8c2b17a324e75d7" }
-localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "6fd0e502f4030d8b7234921bd8c2b17a324e75d7" }
+localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "47b81f4a99007165bdd4c6a271343e7ce596c289" }
+localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "47b81f4a99007165bdd4c6a271343e7ce596c289" }
