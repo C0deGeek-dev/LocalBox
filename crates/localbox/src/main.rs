@@ -228,7 +228,6 @@ fn build_request(
     model: &str,
     home: &std::path::Path,
     launcher: &LlamaLauncher,
-    agent: AgentKind,
     auto_best: bool,
 ) -> Result<LaunchRequest, String> {
     let mut request = LaunchRequest::new(
@@ -254,31 +253,12 @@ fn build_request(
         )?;
     }
 
-    // Fill any llama-server tunable the user set in settings.json but that neither
-    // an AutoBest profile nor a flag already provided. Settings are the lowest
-    // precedence: an unset key stays None and the defaults below (or an AutoBest
-    // profile) win.
-    let overlay = launcher.settings_launch_params();
-    let params = &mut request.params;
-    params.parallel = params.parallel.or(overlay.parallel);
-    params.cache_reuse = params.cache_reuse.or(overlay.cache_reuse);
-    params.n_cpu_moe = params.n_cpu_moe.or(overlay.n_cpu_moe);
-    params.mlock = params.mlock.or(overlay.mlock);
-    params.no_mmap = params.no_mmap.or(overlay.no_mmap);
-
-    // Single-session defaults for an interactive agent launch: one slot and a
-    // prompt-cache-reuse window keep the session predictable (llama-server's
-    // default multi-slot competition destabilizes a single agent's cache). A
-    // headless `serve` keeps the server defaults; a setting or AutoBest override
-    // wins because it already arrives as `Some(_)`.
-    if agent != AgentKind::ServeOnly {
-        if request.params.parallel.is_none() {
-            request.params.parallel = Some(1);
-        }
-        if request.params.cache_reuse.is_none() {
-            request.params.cache_reuse = Some(256);
-        }
-    }
+    // Settings are the lowest precedence (an AutoBest profile or a flag already
+    // arrived as `Some(_)`), then the single-session one-slot default — for
+    // every launch, headless `serve` included: llama-server's own `--parallel`
+    // default is now multi-slot auto, which allocates the full context per slot
+    // and OOMs a model sized for one slot. See `apply_session_defaults`.
+    request.apply_session_defaults(&launcher.settings_launch_params());
     Ok(request)
 }
 
@@ -291,14 +271,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
 
     let agent = parse_agent(flag_value(args, "--agent"), default_agent)?;
     let launcher = build_launcher(&home)?;
-    let request = build_request(
-        args,
-        model,
-        &home,
-        &launcher,
-        agent,
-        has_flag(args, "--auto-best"),
-    )?;
+    let request = build_request(args, model, &home, &launcher, has_flag(args, "--auto-best"))?;
 
     let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
     apply_launch_posture(&mut plan, args, agent)?;
@@ -323,7 +296,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
                  Retrying on native llama.cpp …",
                 request.mode.as_str()
             );
-            let mut native = build_request(args, model, &home, &launcher, agent, false)?;
+            let mut native = build_request(args, model, &home, &launcher, false)?;
             native.mode = Mode::Native;
             let mut native_plan = plan_launch(&launcher, &native).map_err(|e| e.to_string())?;
             apply_launch_posture(&mut native_plan, args, agent)?;
@@ -796,13 +769,15 @@ mod tests {
         let launcher = LlamaLauncher::new(catalog, "0.0.0", home.path().to_path_buf(), 24);
         let args = args(&["--auto-best"]);
 
-        let tuned =
-            build_request(&args, "m", home.path(), &launcher, AgentKind::Claude, true).unwrap();
+        let tuned = build_request(&args, "m", home.path(), &launcher, true).unwrap();
         assert_eq!(tuned.quant.as_deref(), Some("tuned-quant"));
         assert_eq!(tuned.params.n_cpu_moe, Some(12));
+        // Every request — `launch` and `serve` alike — carries the
+        // single-session defaults unless a setting/profile chose otherwise.
+        assert_eq!(tuned.params.parallel, Some(1));
+        assert_eq!(tuned.params.cache_reuse, Some(256));
 
-        let mut retry =
-            build_request(&args, "m", home.path(), &launcher, AgentKind::Claude, false).unwrap();
+        let mut retry = build_request(&args, "m", home.path(), &launcher, false).unwrap();
         retry.mode = Mode::Native;
         assert_eq!(retry.quant, None, "AutoBest quant must not carry over");
         assert_eq!(

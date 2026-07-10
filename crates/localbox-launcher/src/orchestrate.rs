@@ -56,6 +56,34 @@ impl LaunchRequest {
             params: LaunchParams::default(),
         }
     }
+
+    /// Fold the settings-file launch params under any explicit/AutoBest values,
+    /// then default to a single-session server — one slot plus a
+    /// prompt-cache-reuse window — when nothing above chose otherwise.
+    ///
+    /// Every launch path (agent, guided, headless serve) must call this.
+    /// llama-server's own `--parallel` default became `-1 = auto`, which
+    /// allocates the **full configured context per slot** (4 slots on auto),
+    /// multiplying KV-cache memory several-fold over the single slot these
+    /// launches were sized for — enough to OOM a model tuned to fit the GPU.
+    /// A launch that wants the server's auto slot count can set the
+    /// `LlamaCppAgentParallel` setting to `-1`: a non-positive value is kept
+    /// here and the argv builder then omits `--parallel`, leaving the server
+    /// default in charge.
+    pub fn apply_session_defaults(&mut self, overlay: &LaunchParams) {
+        let params = &mut self.params;
+        params.parallel = params.parallel.or(overlay.parallel);
+        params.cache_reuse = params.cache_reuse.or(overlay.cache_reuse);
+        params.n_cpu_moe = params.n_cpu_moe.or(overlay.n_cpu_moe);
+        params.mlock = params.mlock.or(overlay.mlock);
+        params.no_mmap = params.no_mmap.or(overlay.no_mmap);
+        if params.parallel.is_none() {
+            params.parallel = Some(1);
+        }
+        if params.cache_reuse.is_none() {
+            params.cache_reuse = Some(256);
+        }
+    }
 }
 
 /// Everything a launch resolved, ready to print (DryRun) or execute (live).
@@ -326,6 +354,44 @@ mod tests {
         assert_eq!(smoke_fallback(Mode::Turboquant), SmokeFallback::RetryNative);
         assert_eq!(smoke_fallback(Mode::Mtpturbo), SmokeFallback::RetryNative);
         assert_eq!(smoke_fallback(Mode::Native), SmokeFallback::Fail);
+    }
+
+    #[test]
+    fn session_defaults_pin_one_slot_unless_something_chose_otherwise() {
+        // Nothing chosen anywhere: the single-session defaults apply. Relying
+        // on llama-server's own default instead is a several-fold KV-cache
+        // memory multiplier now that its `--parallel` default is multi-slot
+        // auto with the full context allocated per slot.
+        let mut request = LaunchRequest::new("m", "", Mode::Native);
+        request.apply_session_defaults(&LaunchParams::default());
+        assert_eq!(request.params.parallel, Some(1));
+        assert_eq!(request.params.cache_reuse, Some(256));
+
+        // An explicit value (flag or AutoBest) outranks the settings overlay,
+        // and the overlay outranks the default.
+        let mut request = LaunchRequest::new("m", "", Mode::Native);
+        request.params.parallel = Some(2);
+        let overlay = LaunchParams {
+            parallel: Some(4),
+            cache_reuse: Some(512),
+            n_cpu_moe: Some(9),
+            ..LaunchParams::default()
+        };
+        request.apply_session_defaults(&overlay);
+        assert_eq!(request.params.parallel, Some(2));
+        assert_eq!(request.params.cache_reuse, Some(512));
+        assert_eq!(request.params.n_cpu_moe, Some(9));
+
+        // The escape hatch: a non-positive setting is kept, and the argv
+        // builder omits `--parallel` for it, restoring the server's auto
+        // slot count for the launch that genuinely wants it.
+        let mut request = LaunchRequest::new("m", "", Mode::Native);
+        let auto = LaunchParams {
+            parallel: Some(-1),
+            ..LaunchParams::default()
+        };
+        request.apply_session_defaults(&auto);
+        assert_eq!(request.params.parallel, Some(-1));
     }
 
     #[test]

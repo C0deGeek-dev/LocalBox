@@ -19,8 +19,12 @@ keys (`Models`, `CommandAliases`) can never be overridden from settings.
   "LlamaCppNCpuMoe": 35,                 // MoE expert CPU offload (0 disables)
   "LlamaCppMlock": true,                 // RAM locking
   "LlamaCppNoMmap": true,
-  "LlamaCppAgentParallel": 1,            // agent slots (0 = llama.cpp auto)
-  "LlamaCppAgentCacheReuse": 256,        // prompt-cache reuse chunk (0 = default)
+  "LlamaCppAgentParallel": 1,            // server slots, every launch incl. serve
+                                          // (unset = 1; 0 or -1 = llama.cpp auto —
+                                          // auto allocates the FULL context per slot,
+                                          // multiplying KV-cache memory)
+  "LlamaCppAgentCacheReuse": 256,        // prompt-cache reuse chunk (unset = 256,
+                                          // 0 or -1 = llama.cpp default)
   "LocalModelMaxOutputTokens": 16384,    // cap agent completions; raise if replies
                                           // truncate mid-word, 0 = tool default (32k)
   "NoThinkProxyPort": 11435

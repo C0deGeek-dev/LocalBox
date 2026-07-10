@@ -1304,7 +1304,12 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
             "No auto-tuned profile matches these settings; using the recommended defaults.",
         );
     }
-    let (request, agent) = request_from_guided(plan, entry);
+    let (mut request, agent) = request_from_guided(plan, entry);
+    // The same finalization as the CLI path: settings-file params under any
+    // AutoBest values, then the single-session one-slot default — without it a
+    // guided launch (serve included) fell to llama-server's multi-slot auto
+    // default, allocating the full context per slot and OOMing the GPU.
+    request.apply_session_defaults(&launcher.settings_launch_params());
     let resolved = match plan_launch(&launcher, &request) {
         Ok(p) => p,
         Err(e) => {

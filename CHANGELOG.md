@@ -4,6 +4,20 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Fixed runaway GPU memory on `localbox serve` (and guided "for other tools"
+  launches): those paths omitted `--parallel`, and llama-server's own default
+  is now multi-slot auto (`-np -1` → 4 slots), which allocates the **full
+  configured context per slot** — roughly 4× the KV-cache memory the launch
+  was sized for, OOMing models that fit fine under `launch`. Every launch
+  path (CLI `launch`/`serve`, the guided launcher, and the native retry) now
+  applies the same single-session defaults `--parallel 1 --cache-reuse 256`
+  through one shared finalizer, restoring v1.x behaviour. The guided launcher
+  also picks up the `settings.json` launch tunables (`LlamaCppAgentParallel`,
+  `LlamaCppAgentCacheReuse`, `LlamaCppNCpuMoe`, `LlamaCppMlock`,
+  `LlamaCppNoMmap`) it previously ignored. To deliberately use llama-server's
+  auto slot count, set `LlamaCppAgentParallel` to `-1` (a non-positive value
+  is not emitted, leaving the server default in charge).
+
 ## v2.3.0 - 2026-07-07
 
 Coordinated LocalX release.
