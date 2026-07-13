@@ -72,6 +72,12 @@ Starts the model (and the no-think proxy) and returns without attaching an
 agent — for a separate `localpilot` run, a script, CI. The endpoint stays up
 until `localbox stop`. Loopback only by default.
 
+`serve` pins the same single-slot server defaults as every other launch path
+(`--parallel 1 --cache-reuse 256`), so a serve-launched server does not
+multiply its KV-cache across llama-server's auto slot count. To deliberately
+run with llama-server's own auto slots, set `LlamaCppAgentParallel` to `-1`
+in `settings.json`.
+
 `localbox status` reports the health tri-state (proxy and server up /
 proxy up but its upstream down / fully down) with the remedy; a bare `502`
 from the proxy means its upstream model server is down — run

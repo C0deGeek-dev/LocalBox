@@ -104,8 +104,8 @@ surface.
   (green/yellow/red) so you can spot a combination likely to run out of VRAM
   before you launch. The estimate is advisory — it colours the choice, it does
   not block the launch.
-- Keeps agent sessions predictable with single-session defaults and prompt-cache
-  reuse.
+- Keeps every launch path — `launch`, `serve`, and guided launches alike —
+  predictable with single-session server defaults and prompt-cache reuse.
 - Sets up one consistent dispatch path for Claude Code, Codex, LocalPilot, and
   plain server mode.
 - Saves measured [LocalBench](https://github.com/C0deGeek-dev/LocalBench)

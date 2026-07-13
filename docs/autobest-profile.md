@@ -74,12 +74,16 @@ AutoBest launch aborts so a high-throughput profile cannot silently become an
 unusable interactive session. The smoke request timeout defaults to 300 seconds
 and can be overridden with `LlamaCppSmokeTestTimeoutSec` in `settings.json`.
 
-Claude/LocalPilot llama.cpp launches are single-session agent workloads, so the
-launcher also applies `--parallel 1` and `--cache-reuse 256` by default outside
-the saved tuner override set. This keeps title/smoke/sidebar requests from
-competing with the main agent turn across multiple slots and gives repeated
-large prompts a stable cache path. Override these with the `LlamaCppAgentParallel` and `LlamaCppAgentCacheReuse` keys in `settings.json`; set either value to `0` to
-fall back to llama.cpp defaults for that flag.
+Every llama.cpp launch path — CLI `launch` and `serve`, the guided launcher,
+and the native retry — applies `--parallel 1` and `--cache-reuse 256` by
+default, outside the saved tuner override set, through one shared finalizer.
+This keeps title/smoke/sidebar requests from competing with the main session
+across multiple slots and gives repeated large prompts a stable cache path.
+Override these with the `LlamaCppAgentParallel` and `LlamaCppAgentCacheReuse`
+keys in `settings.json`; a non-positive value (`0` or `-1`) opts into
+llama.cpp's own default for that flag. Beware that llama-server's own parallel
+default is multi-slot auto, which allocates the full configured context per
+slot — roughly 4× the KV-cache memory the launch was sized for.
 
 Local Claude/LocalPilot launches also set
 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `LocalModelMaxOutputTokens` (default
