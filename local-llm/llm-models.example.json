@@ -85,6 +85,45 @@
     "apex-i-compact": "APEX-I-COMPACT · ~16.5 GB · imatrix · long-context headroom"
     },
     "VisionModule": "mmproj-Ornith-1.0-35B-heretic-f16.gguf"
+  },
+  "tbonsai27b": {
+    "DisplayName": "Ternary Bonsai 27B GGUF",
+    "Root": "tbonsai27b",
+    "SourceType": "gguf",
+    "Repo": "prism-ml/Ternary-Bonsai-27B-gguf",
+    "Quants": {
+    "q2-0": "Ternary-Bonsai-27B-Q2_0.gguf",
+    "pq2-0": "Ternary-Bonsai-27B-PQ2_0.gguf",
+    "q2-g64": "Ternary-Bonsai-27B-Q2_g64.gguf",
+    "f16": "Ternary-Bonsai-27B-F16.gguf"
+    },
+    "Quant": "q2-0",
+    "Parser": "qwen36",
+    "LimitTools": true,
+    "Tier": "experimental",
+    "Contexts": {
+    "": 65536,
+    "16k": 16384,
+    "32k": 32768,
+    "64k": 65536,
+    "128k": 131072,
+    "256k": 262144
+    },
+    "Strict": true,
+    "Description": "Prism ML Ternary Bonsai 27B — Qwen3.6-27B compressed to end-to-end ternary weights (GGUF Q2_0_g128, ~1.71 bits/weight true, ~7.2 GB deployed vs ~54 GB FP16; claims 95% of FP16 intelligence). Hybrid attention (~75% linear), native 262k window; ~14.7 GB peak at 100k ctx without KV compression. Vision via mmproj (HQQ 4-bit, loaded only for image input). NOTE: the ternary kernels need the PrismML llama.cpp fork (CUDA/Metal) — pinned mainline/turboquant builds may not load Q2_0_g128. Repo also ships an optional DSpark Q4_1 drafter (1.34x decode on CUDA), not wired here.",
+    "QuantSizesGB": {
+    "q2-0": 7.2,
+    "pq2-0": 7.2,
+    "q2-g64": 7.6,
+    "f16": 53.8
+    },
+    "QuantNotes": {
+    "q2-0": "Q2_0_g128 ternary · ~7.2 GB · primary pack (PrismML llama.cpp fork)",
+    "pq2-0": "PQ2_0 · ~7.2 GB · alternate pack (see model card)",
+    "q2-g64": "Q2 group-64 · ~7.6 GB · matches llama.cpp 64-value-group Q2_0 packing",
+    "f16": "F16 · ~53.8 GB · full-precision reference"
+    },
+    "VisionModule": "Ternary-Bonsai-27B-mmproj-Q8_0.gguf"
   }
   },
   "CommandAliases": {}
