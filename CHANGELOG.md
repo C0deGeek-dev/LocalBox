@@ -4,6 +4,21 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Fixed Prism responses being misreported by LocalPilot as truncated streams.
+  The vendored shared proxy now synthesizes a missing Anthropic
+  `content_block_start` and flushes held-back visible text before
+  `content_block_stop`, while genuine EOFs still remain truncations.
+- Added the Ternary Bonsai 27B runtime path end-to-end. The catalog now marks
+  `tbonsai27b` as requiring the new `prism` engine, so CLI, guided launches,
+  saved defaults, and AutoBest cannot route its low-bit weights through an
+  incompatible llama.cpp build. The pinned PrismML release installs the
+  Windows x64 CUDA 12.4 binary plus runtime DLLs, or the standard Apple
+  Silicon Metal archive; KleidiAI and DSpark are intentionally out of scope.
+- Configured vision projectors now download on demand when `--vision` is used.
+  Dry-run shows whether the mmproj is present or will download, and a failed
+  projector download stops the launch instead of silently claiming vision or
+  degrading to text-only.
+
 - Fixed runaway GPU memory on `localbox serve` (and guided "for other tools"
   launches): those paths omitted `--parallel`, and llama-server's own default
   is now multi-slot auto (`-np -1` → 4 slots), which allocates the **full

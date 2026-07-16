@@ -91,6 +91,12 @@ impl LlamaLauncher {
             .unwrap_or(16384)
     }
 
+    /// Catalog-required engine for a model, when one is declared or inferred.
+    #[must_use]
+    pub fn required_mode(&self, key: &str) -> Option<Mode> {
+        self.catalog.required_mode(key)
+    }
+
     fn timeout_setting(&self, key: &str) -> u32 {
         self.catalog
             .setting(key)
@@ -141,6 +147,37 @@ impl LlamaLauncher {
         let root = expand_path_with_home(&root.to_string_lossy(), &self.home);
         let folder = def.root.clone().unwrap_or_else(|| key_fallback.to_string());
         Ok(root.join(folder))
+    }
+
+    /// The configured projector's expected path, whether downloaded yet or not.
+    /// Unconfigured models retain the legacy on-disk auto-detection behavior.
+    #[must_use]
+    pub fn expected_vision_module_path(&self, key: &str, def: &ModelDef) -> Option<PathBuf> {
+        let folder = self.model_folder(def, key).ok()?;
+        if let Some(configured) = def
+            .vision_module
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        {
+            return Some(folder.join(configured));
+        }
+        self.detect_vision_module(&folder)
+    }
+
+    fn detect_vision_module(&self, folder: &Path) -> Option<PathBuf> {
+        let entries = std::fs::read_dir(folder).ok()?;
+        let mut candidates: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("mmproj") && n.ends_with(".gguf"))
+            })
+            .collect();
+        candidates.sort();
+        candidates.into_iter().next()
     }
 
     /// The GGUF filename for a definition and optional quant override.
@@ -259,25 +296,8 @@ impl Launcher for LlamaLauncher {
     }
 
     fn vision_module_path(&self, key: &str, def: &ModelDef) -> Option<PathBuf> {
-        let folder = self.model_folder(def, key).ok()?;
-        // A configured module wins; otherwise auto-detect a local mmproj.
-        if let Some(configured) = &def.vision_module {
-            let path = folder.join(configured);
-            return path.is_file().then_some(path);
-        }
-        let entries = std::fs::read_dir(&folder).ok()?;
-        let mut candidates: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.is_file()
-                    && p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("mmproj") && n.ends_with(".gguf"))
-            })
-            .collect();
-        candidates.sort();
-        candidates.into_iter().next()
+        self.expected_vision_module_path(key, def)
+            .filter(|path| path.is_file())
     }
 
     fn resolve_quant_key(&self, def: &ModelDef, quant: &str) -> Result<String, LauncherError> {
@@ -333,6 +353,7 @@ impl Launcher for LlamaLauncher {
             Mode::Native => "llama-cpp",
             Mode::Turboquant => "llama-cpp-turboquant",
             Mode::Mtpturbo => "llama-cpp-mtpturbo",
+            Mode::PrismMl => "llama-cpp-prism",
         };
         self.home.join(".local-llm").join(dir)
     }
@@ -542,8 +563,13 @@ mod tests {
             .vision_module_path("q36apex", &def)
             .unwrap()
             .ends_with("mmproj-f16.gguf"));
-        // A configured module wins — and only when it actually exists.
+        // A configured module has an expected path even before download, while
+        // the trait's resolved path remains existence-gated.
         def.vision_module = Some("mmproj-custom.gguf".to_string());
+        assert!(launcher
+            .expected_vision_module_path("q36apex", &def)
+            .unwrap()
+            .ends_with("mmproj-custom.gguf"));
         assert!(launcher.vision_module_path("q36apex", &def).is_none());
         std::fs::write(folder.join("mmproj-custom.gguf"), "x").unwrap();
         assert!(launcher
@@ -568,6 +594,10 @@ mod tests {
         assert_eq!(
             launcher.install_root(Mode::Mtpturbo),
             home.join(".local-llm").join("llama-cpp-mtpturbo")
+        );
+        assert_eq!(
+            launcher.install_root(Mode::PrismMl),
+            home.join(".local-llm").join("llama-cpp-prism")
         );
         // Missing binary: actionable per-mode error.
         let err = launcher.server_binary(Mode::Turboquant, true).unwrap_err();

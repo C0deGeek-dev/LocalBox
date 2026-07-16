@@ -98,8 +98,10 @@ pub struct LaunchPlan {
     /// Whether the GGUF is already on disk (a live launch downloads first
     /// when false; DryRun just reports it).
     pub gguf_downloaded: bool,
-    /// The resolved projector, when vision was requested and one exists.
+    /// The resolved or planned projector when vision was requested.
     pub vision_module: Option<PathBuf>,
+    /// Whether the planned projector is already present locally.
+    pub vision_module_downloaded: bool,
     /// The full llama-server argv.
     pub argv: Vec<String>,
     pub server_port: u16,
@@ -129,6 +131,23 @@ pub fn plan_launch(
     use localx_llama_core::Launcher;
 
     let def = launcher.model_def(&request.key)?;
+    if let Some(required) = launcher.required_mode(&request.key) {
+        if request.mode != required {
+            let label = |mode: Mode| {
+                if mode == Mode::PrismMl {
+                    "prism"
+                } else {
+                    mode.as_str()
+                }
+            };
+            return Err(LauncherError::Unavailable(format!(
+                "{} requires the '{}' engine; requested '{}'",
+                request.key,
+                label(required),
+                label(request.mode)
+            )));
+        }
+    }
     let context_key = launcher.resolve_context_key(&def, &request.context_key)?;
     let context_tokens = launcher.context_value(&def, &context_key).unwrap_or(0);
 
@@ -137,7 +156,7 @@ pub fn plan_launch(
 
     let mut notes = Vec::new();
     let vision_module = if request.use_vision {
-        let resolved = launcher.vision_module_path(&request.key, &def);
+        let resolved = launcher.expected_vision_module_path(&request.key, &def);
         if resolved.is_none() {
             notes.push(format!(
                 "vision requested but no mmproj found for {}; launching text-only",
@@ -148,10 +167,11 @@ pub fn plan_launch(
     } else {
         None
     };
+    let vision_module_downloaded = vision_module.as_ref().is_some_and(|path| path.is_file());
 
     let server_port = launcher.free_port(request.server_port_start)?;
 
-    // --mmproj enters the argv only for an actually-resolved projector.
+    // --mmproj enters argv for an existing projector or one planned for download.
     let mut params = request.params.clone();
     params.vision_module_path = vision_module
         .as_ref()
@@ -202,6 +222,7 @@ pub fn plan_launch(
         gguf_path,
         gguf_downloaded,
         vision_module,
+        vision_module_downloaded,
         argv,
         server_port,
         proxy,
@@ -229,6 +250,7 @@ pub fn smoke_fallback(mode: Mode) -> SmokeFallback {
     match mode {
         Mode::Native => SmokeFallback::Fail,
         Mode::Turboquant | Mode::Mtpturbo => SmokeFallback::RetryNative,
+        Mode::PrismMl => SmokeFallback::Fail,
     }
 }
 
@@ -249,6 +271,14 @@ mod tests {
                     "Quants": { "apex-i-quality": "APEX-I-Quality.gguf" },
                     "Quant": "apex-i-quality",
                     "Contexts": { "": 32768, "64k": 65536 }
+                },
+                "bonsai": {
+                    "Root": "bonsai",
+                    "Repo": "prism-ml/bonsai",
+                    "File": "bonsai.gguf",
+                    "RequiredMode": "prism",
+                    "VisionModule": "mmproj-Q8_0.gguf",
+                    "Contexts": { "": 65536 }
                 }
             }
         }"#,
@@ -324,6 +354,27 @@ mod tests {
     }
 
     #[test]
+    fn configured_projector_is_planned_for_download_and_required_mode_is_enforced() {
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher(dir.path());
+
+        let wrong = LaunchRequest::new("bonsai", "", Mode::Native);
+        let err = plan_launch(&launcher, &wrong).unwrap_err();
+        assert!(err.to_string().contains("requires the 'prism' engine"));
+
+        let mut request = LaunchRequest::new("bonsai", "", Mode::PrismMl);
+        request.use_vision = true;
+        let plan = plan_launch(&launcher, &request).unwrap();
+        assert!(plan
+            .vision_module
+            .as_ref()
+            .is_some_and(|path| path.ends_with("mmproj-Q8_0.gguf")));
+        assert!(!plan.vision_module_downloaded);
+        assert!(plan.argv.contains(&"--mmproj".to_string()));
+        assert!(plan.provider_toml.contains("supports_vision = true"));
+    }
+
+    #[test]
     fn keep_thinking_routes_direct_to_the_server_not_the_proxy() {
         let dir = tempfile::tempdir().unwrap();
         let launcher = launcher(dir.path());
@@ -354,6 +405,7 @@ mod tests {
         assert_eq!(smoke_fallback(Mode::Turboquant), SmokeFallback::RetryNative);
         assert_eq!(smoke_fallback(Mode::Mtpturbo), SmokeFallback::RetryNative);
         assert_eq!(smoke_fallback(Mode::Native), SmokeFallback::Fail);
+        assert_eq!(smoke_fallback(Mode::PrismMl), SmokeFallback::Fail);
     }
 
     #[test]

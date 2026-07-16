@@ -28,9 +28,9 @@ Options for `launch` / `serve`:
 | Flag | Effect |
 |------|--------|
 | `--context <key>` | One of the model's context keys (see `localbox info <model>`). Omit for the default. |
-| `--mode <m>` | `native` / `turboquant` / `mtpturbo` — which llama-server binary to use. |
+| `--mode <m>` | `native` / `turboquant` / `mtpturbo` / `prism` — which llama-server binary to use. A model's `RequiredMode` wins. |
 | `--quant <key>` | Switch the GGUF quant for this launch (default per model). |
-| `--vision` | Load the model's multimodal projector when it has one. |
+| `--vision` | Load the model's multimodal projector when it has one; a configured missing projector downloads on demand. |
 | `--keep-thinking` | Let the model's thinking reach the agent unfiltered. |
 | `--agent <a>` | `claude` (default) / `localpilot` / `codex` / `none`. |
 | `--dry-run` | Print the full plan (GGUF, argv, env) and change nothing. |

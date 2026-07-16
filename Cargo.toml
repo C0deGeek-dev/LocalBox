@@ -50,5 +50,7 @@ ratatui = { version = "=0.29.0", default-features = false }
 crossterm = "=0.28.1"
 tokio = { version = "=1.44.2", features = ["macros", "rt-multi-thread", "net", "time"] }
 reqwest = { version = "=0.12.11", features = ["json", "stream", "rustls-tls"], default-features = false }
-localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "0ab9ef92e07baa9fdc76599ec67e599a0b4dbb63" }
-localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "0ab9ef92e07baa9fdc76599ec67e599a0b4dbb63" }
+# Exact revision contains both the Prism engine contract and the Anthropic SSE
+# lifecycle normalization required by Prism's llama.cpp fork.
+localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "0f5cecdca63cd16c98d71ba8bf40c764ec9f6556" }
+localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "0f5cecdca63cd16c98d71ba8bf40c764ec9f6556" }

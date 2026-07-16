@@ -25,9 +25,14 @@ A catalog entry:
 }
 ```
 
+Models whose weight format needs a specific engine can add
+`"RequiredMode": "prism"`; LocalBox then selects and locks that engine.
+
 The GGUF itself downloads from Hugging Face on first launch (resumable,
-verified against the expected destination). `localbox info <model>` shows the
-entry as LocalBox resolved it; unknown names list the known keys.
+verified against the expected destination). When `--vision` is requested and
+`VisionModule` names a missing file in the same repo, that projector downloads
+the same way before the server starts. `localbox info <model>` shows the entry
+as LocalBox resolved it; unknown names list the known keys.
 
 Removing a model is editing it out of the catalog; `localbox purge` stops
 servers and deletes every downloaded model folder under the GGUF root (models

@@ -63,7 +63,8 @@ LocalBox downloads `llama-server` binaries from third-party GitHub releases.
 Out of the box, every binary download is pinned and verified:
 
 - **`defaults.json` ships pinned release tags** (`LlamaCppPinnedTag` for
-  llama.cpp, `LlamaCppTurboquantPinnedTag` for turboquant) **and a
+  llama.cpp, `LlamaCppTurboquantPinnedTag` for turboquant, and
+  `LlamaCppPrismPinnedTag` for PrismML) **and a
   `LlamaCppDownloadPins` table** with the SHA-256 of every asset those tags can
   install. Downloads target the pinned tag, and a checksum mismatch deletes the
   file and aborts the install.
@@ -73,8 +74,8 @@ Out of the box, every binary download is pinned and verified:
 **Updating the pins** (e.g. to move to a newer llama.cpp build) is a deliberate
 loop, done in `~/.local-llm/settings.json`:
 
-1. Pick the new tag on the release page and set `LlamaCppPinnedTag` (or
-   `LlamaCppTurboquantPinnedTag`) to it.
+1. Pick the new tag on the release page and set `LlamaCppPinnedTag`,
+   `LlamaCppTurboquantPinnedTag`, or `LlamaCppPrismPinnedTag` to it.
 2. Take each asset's SHA-256 from the GitHub release API's `digest` field
    (`https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/<tag>`)
    and record it under `LlamaCppDownloadPins`, keyed by the exact asset

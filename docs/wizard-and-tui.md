@@ -20,12 +20,15 @@ pick a model  →  read the summary  →  confirm  →  launch  →  return
 - **The confirm menu** offers exactly five actions: launch, customize, save
   as my default, help, and back.
 - **Customize** is the power level: quant variant, context window, engine
-  (`native` / `turboquant` / `mtpturbo`), KV cache, vision, strict, and
+  (`native` / `turboquant` / `mtpturbo` / `prism`), KV cache, vision, strict, and
   auto-tune. Rows the current selection locks out explain *why* instead of
   disappearing. Auto-tune (on by default when a measured profile exists)
   replays the best saved `localbench findbest` result and owns the
   engine/KV choices while on; manual KV settings only fill gaps the profile
   left.
+  A catalog `RequiredMode` locks the engine row with an explanation, which
+  prevents low-bit models such as Ternary Bonsai from starting on an
+  incompatible llama.cpp build.
 - **Save as my default** persists the whole recipe; the next `localbox` run
   offers it as a one-keystroke replay. Model-specific choices such as quant,
   context, strict, and vision replay only for the model they were saved with.

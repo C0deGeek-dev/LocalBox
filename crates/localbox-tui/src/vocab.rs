@@ -62,6 +62,7 @@ pub fn engine_label(mode: Mode) -> &'static str {
         Mode::Native => "Standard",
         Mode::Turboquant => "Turbo (auto-tuned for your GPU)",
         Mode::Mtpturbo => "Turbo+ (draft speed-ups)",
+        Mode::PrismMl => "Prism (Bonsai low-bit)",
     }
 }
 

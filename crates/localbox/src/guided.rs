@@ -13,12 +13,13 @@ use localbox_launcher::catalog::Catalog;
 use localbox_launcher::orchestrate::{plan_launch, LaunchRequest};
 use localbox_launcher::permissions::JsonSettingsStore;
 use localbox_tui::customize::{
-    customize_menu, locked_explanation, save_gate, set_auto_tune_off, set_auto_tune_on,
-    CustomizeAction,
+    customize_menu_with_required_mode, locked_explanation, save_gate, set_auto_tune_off,
+    set_auto_tune_on, CustomizeAction,
 };
 use localbox_tui::driver::{ensure_utf8_output, plain_menu, plain_warning, should_degrade};
 use localbox_tui::plan::{
-    find_workspace_default, resolve_launch_plan, DefaultLaunch, GuidedPlan, PlanOverrides,
+    find_workspace_default, resolve_launch_plan_with_required_mode, DefaultLaunch, GuidedPlan,
+    PlanOverrides,
 };
 use localbox_tui::ui::{
     render_guided_screen, render_notice_screen, ConfirmAction, GuidedScreen, MenuRow, ModelRow,
@@ -598,13 +599,15 @@ fn confirm_flow(
     vram: i64,
 ) {
     let defaults = load_default_launch(catalog);
+    let required_mode = catalog.required_mode(key);
     let mut overrides = PlanOverrides::default();
     let gguf_root = catalog.gguf_root().map(|root| {
         localbox_launcher::launcher::expand_path_with_home(&root.to_string_lossy(), home)
     });
 
     loop {
-        let plan = resolve_launch_plan(key, def, &defaults, &overrides);
+        let plan =
+            resolve_launch_plan_with_required_mode(key, def, &defaults, &overrides, required_mode);
         chooser.set_panel(Some((
             "Recommended plan".to_string(),
             plan_summary(&plan, def),
@@ -631,13 +634,22 @@ fn confirm_flow(
                     &mut overrides,
                     vram,
                     gguf_root.as_deref(),
+                    required_mode,
                 );
                 if chooser.quit_requested() {
                     return;
                 }
             }
             ConfirmAction::AutoTune => {
-                auto_tune_flow(chooser, key, def, &plan, vram, gguf_root.as_deref());
+                auto_tune_flow(
+                    chooser,
+                    key,
+                    def,
+                    &plan,
+                    vram,
+                    gguf_root.as_deref(),
+                    required_mode,
+                );
             }
             ConfirmAction::Help => chooser.notice(glossary()),
             ConfirmAction::BackToModels => return,
@@ -655,6 +667,7 @@ fn customize_flow(
     overrides: &mut PlanOverrides,
     vram: i64,
     gguf_root: Option<&Path>,
+    required_mode: Option<Mode>,
 ) {
     // The cursor survives the loop: a toggle re-renders with the selection
     // still on the row that was toggled, not jumped back to the top.
@@ -663,9 +676,10 @@ fn customize_flow(
         if chooser.quit_requested() {
             return;
         }
-        let plan = resolve_launch_plan(key, def, defaults, overrides);
+        let plan =
+            resolve_launch_plan_with_required_mode(key, def, defaults, overrides, required_mode);
         chooser.set_panel(Some(("Current plan".to_string(), plan_summary(&plan, def))));
-        let menu = customize_menu(&plan, def);
+        let menu = customize_menu_with_required_mode(&plan, def, required_mode);
         let rows: Vec<MenuRow> = menu
             .iter()
             .map(|row| MenuRow::plain(row.label.clone()))
@@ -759,7 +773,7 @@ fn customize_flow(
                 }
             }
             CustomizeAction::PickKv => {
-                let fork = plan.mode != Mode::Native;
+                let fork = matches!(plan.mode, Mode::Turboquant | Mode::Mtpturbo);
                 let mut kinds = vec!["auto", "q8_0", "q4_0", "f16"];
                 if fork {
                     kinds.extend(["turbo3", "turbo4"]);
@@ -819,7 +833,9 @@ fn customize_flow(
                 Err(reason) => chooser.notice(&reason),
             },
             CustomizeAction::Done => return,
-            CustomizeAction::ModeLocked | CustomizeAction::KvLocked => {}
+            CustomizeAction::ModeLocked
+            | CustomizeAction::ModeRequired
+            | CustomizeAction::KvLocked => {}
         }
     }
 }
@@ -899,6 +915,11 @@ const TUNE_ENGINES: &[(&str, Mode, &str)] = &[
         "Turbo+",
         Mode::Mtpturbo,
         "Turbo+ (mtpturbo) — Turbo plus draft speed-ups, fastest when the model supports it",
+    ),
+    (
+        "Prism",
+        Mode::PrismMl,
+        "Prism (prism) — PrismML's low-bit Bonsai engine",
     ),
 ];
 const TUNE_BUDGETS: &[(&str, &str, &str)] = &[
@@ -981,7 +1002,8 @@ Auto-tune settings:
 \x20                agent-style workload; Generation speed times answers;\n\
 \x20                Prompt processing times reading long context.\n\
 \x20 Engine       – Standard is plain llama.cpp; Turbo and Turbo+ are the\n\
-\x20                tuned forks (Turbo+ adds draft speed-ups).\n\
+\x20                tuned forks (Turbo+ adds draft speed-ups); Prism runs\n\
+\x20                models that explicitly require the PrismML fork.\n\
 \x20 Quality      – which build of the model to measure. The winner only\n\
 \x20                replays on launches with the same Quality.\n\
 \x20 Memory       – the conversation size to measure at; also part of\n\
@@ -1009,6 +1031,7 @@ fn auto_tune_flow(
     plan: &GuidedPlan,
     vram: i64,
     gguf_root: Option<&Path>,
+    required_mode: Option<Mode>,
 ) {
     let quants: Vec<String> = def.quants.keys().cloned().collect();
     let contexts: Vec<String> = def.contexts.keys().cloned().collect();
@@ -1060,7 +1083,15 @@ fn auto_tune_flow(
                 "Workload:      {}",
                 TUNE_WORKLOADS[choices.workload].0
             )),
-            MenuRow::plain(format!("Engine:        {}", TUNE_ENGINES[choices.engine].0)),
+            MenuRow::plain(format!(
+                "Engine:        {}{}",
+                TUNE_ENGINES[choices.engine].0,
+                if required_mode.is_some() {
+                    " (required)"
+                } else {
+                    ""
+                }
+            )),
             MenuRow::plain(format!("Quality:       {quant_value}")),
             MenuRow::plain(format!("Memory:        {context_value}")),
             MenuRow::plain(format!("Trials:        {}", TUNE_BUDGETS[choices.budget].0)),
@@ -1113,6 +1144,10 @@ fn auto_tune_flow(
                 }
             }
             2 => {
+                if required_mode.is_some() {
+                    chooser.notice("This model requires this engine; it cannot be changed.");
+                    continue;
+                }
                 let options = TUNE_ENGINES
                     .iter()
                     .map(|(_, _, desc)| MenuRow::plain(*desc))

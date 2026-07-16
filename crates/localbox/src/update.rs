@@ -79,17 +79,21 @@ pub fn is_archive(name: &str) -> bool {
     lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tar.xz")
 }
 
-/// Parse the driver's CUDA major from `nvidia-smi` output
-/// (`CUDA Version: 13.1` → 13).
+/// Parse the driver's CUDA major from old and new `nvidia-smi` banners
+/// (`CUDA Version: 13.1` or `CUDA UMD Version: 13.3` → 13).
 #[must_use]
 pub fn parse_cuda_driver_major(output: &str) -> Option<u32> {
-    let start = output.find("CUDA Version:")?;
-    output[start + "CUDA Version:".len()..]
-        .trim_start()
-        .split(['.', ' ', '\n', '\r'])
-        .next()?
-        .parse()
-        .ok()
+    ["CUDA UMD Version:", "CUDA Version:"]
+        .into_iter()
+        .find_map(|label| {
+            let start = output.find(label)?;
+            output[start + label.len()..]
+                .trim_start()
+                .split(['.', ' ', '\n', '\r'])
+                .next()?
+                .parse()
+                .ok()
+        })
 }
 
 /// Select the native llama.cpp asset for this OS and variant. CUDA tries the
@@ -188,6 +192,55 @@ pub fn select_turbo_asset<'a>(
         }
     }
     (eligible.first().copied(), None)
+}
+
+/// Select the PrismML assets required by this host. Windows CUDA needs both
+/// the fork binaries and the separately packaged CUDA runtime DLLs; Apple
+/// Silicon uses the standard Metal archive (not the CPU-focused KleidiAI one).
+pub fn select_prism_assets<'a>(
+    names: &[&'a str],
+    driver_major: Option<u32>,
+) -> Result<Vec<&'a str>, String> {
+    if cfg!(windows) {
+        if !cfg!(target_arch = "x86_64") {
+            return Err("the Prism engine currently supports Windows x64 only".to_string());
+        }
+        if driver_major.is_none() {
+            return Err("the Prism engine requires an NVIDIA CUDA driver on Windows".to_string());
+        }
+        if driver_major.is_some_and(|major| major < 12) {
+            return Err("the Prism Windows build requires a CUDA 12-compatible driver".to_string());
+        }
+        let binary = names
+            .iter()
+            .copied()
+            .find(|name| {
+                let lower = name.to_ascii_lowercase();
+                lower.ends_with("-bin-win-cuda-12.4-x64.zip") && !lower.starts_with("cudart-")
+            })
+            .ok_or("the Prism release has no Windows x64 CUDA 12.4 binary")?;
+        let runtime = names
+            .iter()
+            .copied()
+            .find(|name| name.eq_ignore_ascii_case("cudart-llama-bin-win-cuda-12.4-x64.zip"))
+            .ok_or("the Prism release has no Windows CUDA 12.4 runtime bundle")?;
+        return Ok(vec![binary, runtime]);
+    }
+    if cfg!(target_os = "macos") {
+        if !cfg!(target_arch = "aarch64") {
+            return Err("the Prism engine currently supports Apple Silicon only".to_string());
+        }
+        let metal = names
+            .iter()
+            .copied()
+            .find(|name| {
+                name.to_ascii_lowercase()
+                    .ends_with("-bin-macos-arm64.tar.gz")
+            })
+            .ok_or("the Prism release has no macOS Apple Silicon Metal archive")?;
+        return Ok(vec![metal]);
+    }
+    Err("the Prism engine currently supports only Windows CUDA and Apple Silicon Metal".to_string())
 }
 
 /// Read a build stamp's first line (the installed release tag), when present.
@@ -394,13 +447,16 @@ pub fn pin_for(catalog: &Catalog, asset_name: &str) -> Option<String> {
 pub enum UpdatePlan {
     /// The installed build already matches the wanted tag.
     UpToDate { tag: String },
-    /// Install this asset (fresh install or stale stamp).
-    Install { release: Release, asset: Asset },
+    /// Install these assets (fresh install or stale stamp).
+    Install {
+        release: Release,
+        assets: Vec<Asset>,
+    },
     /// mtpturbo staleness verdict (source-built; no prebuilt asset exists).
     MtpStatus { message: String },
 }
 
-/// Decide the update plan for the native or turboquant mode.
+/// Decide the update plan for a downloadable engine mode.
 ///
 /// # Errors
 /// A plain message when the release lookup fails or no asset fits this host.
@@ -446,6 +502,15 @@ pub async fn plan_binary_update(
                 message: mtp_status(catalog, root),
             })
         }
+        Mode::PrismMl => (
+            catalog
+                .setting_str("LlamaCppPrismRepo")
+                .unwrap_or("PrismML-Eng/llama.cpp")
+                .to_string(),
+            catalog
+                .setting_str("LlamaCppPrismPinnedTag")
+                .map(str::to_string),
+        ),
     };
     let release = fetch_release(&repo, pinned_tag.as_deref()).await?;
 
@@ -456,35 +521,43 @@ pub async fn plan_binary_update(
     }
 
     let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
-    let picked = match mode {
+    let picked: Vec<&str> = match mode {
         Mode::Native => {
             let variant = native_variant(driver_major, amd_gpu);
             select_native_asset(&names, variant, driver_major)
                 .or_else(|| select_native_asset(&names, Variant::Cpu, None))
+                .into_iter()
+                .collect()
         }
         Mode::Turboquant => {
             let (choice, warning) = select_turbo_asset(&names, driver_major);
             if let Some(warning) = warning {
                 eprintln!("Warning: {warning}");
             }
-            choice
+            choice.into_iter().collect()
         }
-        Mode::Mtpturbo => None,
+        Mode::Mtpturbo => Vec::new(),
+        Mode::PrismMl => select_prism_assets(&names, driver_major)?,
     };
-    let name = picked.ok_or_else(|| {
-        format!(
+    if picked.is_empty() {
+        return Err(format!(
             "release {} has no prebuilt asset for this platform; provide your own \
              llama-server (bring-your-own) or pin a different tag",
             release.tag
-        )
-    })?;
-    let asset = release
-        .assets
+        ));
+    }
+    let assets: Vec<Asset> = picked
         .iter()
-        .find(|a| a.name == name)
-        .cloned()
-        .ok_or("selected asset vanished from the release listing")?;
-    Ok(UpdatePlan::Install { release, asset })
+        .map(|name| {
+            release
+                .assets
+                .iter()
+                .find(|asset| asset.name == *name)
+                .cloned()
+                .ok_or_else(|| "selected asset vanished from the release listing".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(UpdatePlan::Install { release, assets })
 }
 
 fn mtp_status(catalog: &Catalog, root: &Path) -> String {
@@ -539,8 +612,10 @@ mod tests {
 
     #[test]
     fn cuda_driver_major_parses_from_nvidia_smi_banner() {
-        let banner = "| NVIDIA-SMI 591.74  Driver Version: 591.74  CUDA Version: 13.1 |";
-        assert_eq!(parse_cuda_driver_major(banner), Some(13));
+        let legacy = "| NVIDIA-SMI 591.74  Driver Version: 591.74  CUDA Version: 13.1 |";
+        let current = "| NVIDIA-SMI 610.62  KMD Version: 610.62  CUDA UMD Version: 13.3 |";
+        assert_eq!(parse_cuda_driver_major(legacy), Some(13));
+        assert_eq!(parse_cuda_driver_major(current), Some(13));
         assert_eq!(parse_cuda_driver_major("no gpu here"), None);
     }
 
@@ -616,6 +691,40 @@ mod tests {
         let (asset, warning) = select_turbo_asset(&names, Some(12));
         assert!(asset.is_some());
         assert!(warning.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prism_windows_selection_includes_binary_and_cuda_runtime() {
+        let names = [
+            "llama-prism-b9591-62061f9-bin-macos-arm64-kleidiai.tar.gz",
+            "llama-prism-b9591-62061f9-bin-macos-arm64.tar.gz",
+            "llama-prism-b1-62061f9-bin-win-cuda-12.4-x64.zip",
+            "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        ];
+        let picked = select_prism_assets(&names, Some(13)).unwrap();
+        assert_eq!(
+            picked,
+            vec![
+                "llama-prism-b1-62061f9-bin-win-cuda-12.4-x64.zip",
+                "cudart-llama-bin-win-cuda-12.4-x64.zip"
+            ]
+        );
+        assert!(select_prism_assets(&names, None).is_err());
+        assert!(select_prism_assets(&names, Some(11)).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn prism_macos_selection_prefers_standard_metal_over_kleidiai() {
+        let names = [
+            "llama-prism-b9591-62061f9-bin-macos-arm64-kleidiai.tar.gz",
+            "llama-prism-b9591-62061f9-bin-macos-arm64.tar.gz",
+        ];
+        assert_eq!(
+            select_prism_assets(&names, None).unwrap(),
+            vec!["llama-prism-b9591-62061f9-bin-macos-arm64.tar.gz"]
+        );
     }
 
     #[test]

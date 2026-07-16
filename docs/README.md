@@ -9,7 +9,7 @@ before editing; don't restate the same area in two places. The top-level
 | Project overview, install quickstart, day-to-day cheatsheet | top-level `README.md` |
 | Install, symlink/dev mode, companion checkouts | [`install.md`](install.md) |
 | Harness mode — Claude Code / LocalPilot / Codex / serve / strict | [`harness-mode.md`](harness-mode.md) |
-| llama.cpp modes — native / turboquant / mtpturbo | [`llamacpp-modes.md`](llamacpp-modes.md) |
+| llama.cpp modes — native / turboquant / mtpturbo / prism | [`llamacpp-modes.md`](llamacpp-modes.md) |
 | Day-to-day usage, flags, quant keys, 256k recipe | [`usage.md`](usage.md) |
 | Model management — adding a model, VRAM-aware fit | [`model-management.md`](model-management.md) |
 | Per-machine settings (`settings.json`), verified downloads, per-workspace default | [`settings.md`](settings.md) |

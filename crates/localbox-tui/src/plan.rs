@@ -96,6 +96,18 @@ pub fn resolve_launch_plan(
     defaults: &DefaultLaunch,
     overrides: &PlanOverrides,
 ) -> GuidedPlan {
+    resolve_launch_plan_with_required_mode(model_key, def, defaults, overrides, None)
+}
+
+/// Resolve a guided plan with LocalBox-specific catalog engine policy.
+#[must_use]
+pub fn resolve_launch_plan_with_required_mode(
+    model_key: &str,
+    def: &ModelDef,
+    defaults: &DefaultLaunch,
+    overrides: &PlanOverrides,
+    required_mode: Option<Mode>,
+) -> GuidedPlan {
     let same_model = defaults.model_key.as_deref() == Some(model_key);
     let def_quant = def.quant.clone().unwrap_or_default();
     let first_quant = def.quants.keys().next().cloned().unwrap_or_default();
@@ -106,8 +118,8 @@ pub fn resolve_launch_plan(
         Some("localpilot"),
     ])
     .unwrap_or_default();
-    let mode = overrides
-        .mode
+    let mode = required_mode
+        .or(overrides.mode)
         .or(defaults.llama_cpp_mode)
         .unwrap_or(Mode::Native);
     let auto_best_profile = first_non_blank(&[
@@ -348,6 +360,23 @@ mod tests {
         assert_eq!(plan.quant, "apex-balanced", "the def's default quant");
         assert!(plan.strict, "the def's strict default applies");
         assert!(!plan.vision, "vision is always opt-in");
+    }
+
+    #[test]
+    fn a_model_required_mode_beats_saved_and_explicit_engine_choices() {
+        let model = def();
+        let overrides = PlanOverrides {
+            mode: Some(Mode::Native),
+            ..PlanOverrides::default()
+        };
+        let plan = resolve_launch_plan_with_required_mode(
+            "q36apex",
+            &model,
+            &saved(),
+            &overrides,
+            Some(Mode::PrismMl),
+        );
+        assert_eq!(plan.mode, Mode::PrismMl);
     }
 
     #[test]

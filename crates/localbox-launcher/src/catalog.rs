@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use localx_llama_core::config::assemble_config;
-use localx_llama_core::ModelDef;
+use localx_llama_core::{Mode, ModelDef};
 
 /// A catalog/config failure.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +37,28 @@ pub enum CatalogError {
 pub struct Catalog {
     cfg: Map<String, Value>,
     models: BTreeMap<String, ModelDef>,
+    required_modes: BTreeMap<String, Mode>,
+}
+
+fn parse_required_mode(value: &Value, def: &ModelDef) -> Result<Option<Mode>, String> {
+    let configured = value.get("RequiredMode");
+    let parsed = match configured {
+        None | Some(Value::Null) => None,
+        Some(Value::String(raw)) if raw.trim().is_empty() => None,
+        Some(Value::String(raw)) => Some(match raw.trim().to_ascii_lowercase().as_str() {
+            "native" => Mode::Native,
+            "turboquant" => Mode::Turboquant,
+            "mtpturbo" => Mode::Mtpturbo,
+            "prism" | "prismml" => Mode::PrismMl,
+            other => return Err(format!("unknown RequiredMode '{other}'")),
+        }),
+        Some(_) => return Err("RequiredMode must be a string".to_string()),
+    };
+    Ok(parsed.or_else(|| {
+        def.repo
+            .eq_ignore_ascii_case("prism-ml/Ternary-Bonsai-27B-gguf")
+            .then_some(Mode::PrismMl)
+    }))
 }
 
 fn read_layer(path: &Path) -> Result<Map<String, Value>, CatalogError> {
@@ -90,6 +112,7 @@ impl Catalog {
         let legacy = Map::new();
         let cfg = assemble_config(defaults, &legacy, catalog, settings);
         let mut models = BTreeMap::new();
+        let mut required_modes = BTreeMap::new();
         if let Some(entries) = cfg.get("Models").and_then(Value::as_object) {
             for (key, value) in entries {
                 let def: ModelDef =
@@ -97,16 +120,38 @@ impl Catalog {
                         key: key.clone(),
                         reason: e.to_string(),
                     })?;
+                // Existing user catalogs are never overwritten during upgrades.
+                // RequiredMode is LocalBox catalog policy rather than shared
+                // model-domain data; infer Bonsai for pre-RequiredMode files.
+                if let Some(mode) =
+                    parse_required_mode(value, &def).map_err(|reason| CatalogError::BadModel {
+                        key: key.clone(),
+                        reason,
+                    })?
+                {
+                    required_modes.insert(key.clone(), mode);
+                }
                 models.insert(key.clone(), def);
             }
         }
-        Ok(Self { cfg, models })
+        Ok(Self {
+            cfg,
+            models,
+            required_modes,
+        })
     }
 
     /// The model definition for a key, when the catalog knows it.
     #[must_use]
     pub fn model(&self, key: &str) -> Option<&ModelDef> {
         self.models.get(key)
+    }
+
+    /// Engine policy declared by this catalog entry, including compatibility
+    /// inference for Bonsai entries created before `RequiredMode` existed.
+    #[must_use]
+    pub fn required_mode(&self, key: &str) -> Option<Mode> {
+        self.required_modes.get(key).copied()
     }
 
     /// Every catalog model key, sorted.
@@ -190,6 +235,18 @@ mod tests {
         let def = catalog.model("q36apex").unwrap();
         assert_eq!(def.root.as_deref(), Some("q36apex"));
         assert_eq!(def.quants["apex-i-quality"].file, "APEX-I-Quality.gguf");
+    }
+
+    #[test]
+    fn an_existing_bonsai_catalog_infers_its_required_prism_engine() {
+        let catalog = Catalog::from_layers(
+            &Map::new(),
+            &obj(r#"{"Models":{"bonsai":{"Repo":"prism-ml/Ternary-Bonsai-27B-gguf"}}}"#),
+            &Map::new(),
+        )
+        .unwrap();
+
+        assert_eq!(catalog.required_mode("bonsai"), Some(Mode::PrismMl));
     }
 
     #[test]

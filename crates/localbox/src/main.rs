@@ -16,7 +16,7 @@ use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{
     plan_launch, smoke_fallback, LaunchPlan, LaunchRequest, SmokeFallback,
 };
-use localx_llama_core::{Mode, TunerBestConfig, TunerEntry};
+use localx_llama_core::{Launcher, Mode, TunerBestConfig, TunerEntry};
 use localx_llama_runtime::proxy::{serve_proxy_on, ProxyConfig};
 
 const DEFAULT_PROXY_PORT: u16 = 11_435;
@@ -45,7 +45,7 @@ Usage:
 
 Options for launch/serve:
   --context <key>       context window key from the model catalog (e.g. 64k)
-  --mode <m>            native | turboquant | mtpturbo   (default native)
+  --mode <m>            native | turboquant | mtpturbo | prism   (default native)
   --quant <key>         quant variant from the catalog (default per model)
   --auto-best           apply the saved localbench profile (best-<model>.json):
                         tuned quant/context/mode/KV-cache/n-cpu-moe. Explicit
@@ -136,9 +136,17 @@ fn parse_mode(value: Option<&str>) -> Result<Mode, String> {
         "native" => Ok(Mode::Native),
         "turboquant" => Ok(Mode::Turboquant),
         "mtpturbo" => Ok(Mode::Mtpturbo),
+        "prism" | "prismml" => Ok(Mode::PrismMl),
         other => Err(format!(
-            "unknown mode '{other}' (expected native, turboquant, or mtpturbo)"
+            "unknown mode '{other}' (expected native, turboquant, mtpturbo, or prism)"
         )),
+    }
+}
+
+fn cli_mode_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::PrismMl => "prism",
+        _ => mode.as_str(),
     }
 }
 
@@ -230,10 +238,24 @@ fn build_request(
     launcher: &LlamaLauncher,
     auto_best: bool,
 ) -> Result<LaunchRequest, String> {
+    launcher.model_def(model).map_err(|e| e.to_string())?;
+    let required_mode = launcher.required_mode(model);
+    let explicit_mode = flag_value(args, "--mode").is_some();
+    let mut mode = parse_mode(flag_value(args, "--mode"))?;
+    if let Some(required) = required_mode {
+        if explicit_mode && mode != required {
+            return Err(format!(
+                "{model} requires --mode {}; '{}' is incompatible",
+                cli_mode_name(required),
+                cli_mode_name(mode)
+            ));
+        }
+        mode = required;
+    }
     let mut request = LaunchRequest::new(
         model.to_string(),
         flag_value(args, "--context").unwrap_or("").to_string(),
-        parse_mode(flag_value(args, "--mode"))?,
+        mode,
     );
     request.quant = flag_value(args, "--quant").map(str::to_string);
     request.use_vision = has_flag(args, "--vision");
@@ -247,7 +269,7 @@ fn build_request(
         apply_saved_auto_best(
             &mut request,
             home,
-            flag_value(args, "--mode").is_some(),
+            explicit_mode || required_mode.is_some(),
             flag_value(args, "--quant").is_some(),
             flag_value(args, "--context").is_some(),
         )?;
@@ -330,7 +352,15 @@ fn print_plan(plan: &localbox_launcher::orchestrate::LaunchPlan) {
         }
     );
     if let Some(vision) = &plan.vision_module {
-        println!("Vision:    {}", vision.display());
+        println!(
+            "Vision:    {} ({})",
+            vision.display(),
+            if plan.vision_module_downloaded {
+                "downloaded"
+            } else {
+                "will download"
+            }
+        );
     }
     println!("Server:    127.0.0.1:{}", plan.server_port);
     println!("Endpoint:  {}", plan.base_url);
@@ -539,7 +569,12 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     let check_only = has_flag(args, "--check");
     let modes: Vec<Mode> = match flag_value(args, "--mode") {
         Some(m) => vec![parse_mode(Some(m))?],
-        None => vec![Mode::Native, Mode::Turboquant, Mode::Mtpturbo],
+        None => vec![
+            Mode::Native,
+            Mode::Turboquant,
+            Mode::Mtpturbo,
+            Mode::PrismMl,
+        ],
     };
     let driver_major = localbox::update::parse_cuda_driver_major(&nvidia_smi_banner());
     // No NVIDIA driver but an AMD card present → the Vulkan build uses the GPU
@@ -559,23 +594,37 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
         )) {
             Ok(UpdatePlan::UpToDate { tag }) => println!("Up to date ({tag})."),
             Ok(UpdatePlan::MtpStatus { message }) => println!("{message}"),
-            Ok(UpdatePlan::Install { release, asset }) => {
+            Ok(UpdatePlan::Install { release, assets }) => {
                 if check_only {
-                    println!("Update available: {} (asset {}).", release.tag, asset.name);
+                    println!(
+                        "Update available: {} (assets {}).",
+                        release.tag,
+                        assets
+                            .iter()
+                            .map(|asset| asset.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                     continue;
                 }
-                let pin = localbox::update::pin_for(&catalog, &asset.name);
                 let require = catalog
                     .setting("LlamaCppRequireDownloadPins")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
-                runtime.block_on(localbox::update::install_asset(
-                    &asset,
-                    &root,
-                    pin.as_deref(),
-                    require,
-                ))?;
-                let variant = localbox::update::native_variant(driver_major, amd_gpu).as_str();
+                for asset in &assets {
+                    let pin = localbox::update::pin_for(&catalog, &asset.name);
+                    runtime.block_on(localbox::update::install_asset(
+                        asset,
+                        &root,
+                        pin.as_deref(),
+                        require,
+                    ))?;
+                }
+                let variant = match mode {
+                    Mode::PrismMl if cfg!(windows) => "cuda-12.4",
+                    Mode::PrismMl => "metal",
+                    _ => localbox::update::native_variant(driver_major, amd_gpu).as_str(),
+                };
                 write_stamp(&root, &release.tag, variant).map_err(|e| e.to_string())?;
                 println!("Installed {} into {}.", release.tag, root.display());
             }
@@ -713,6 +762,7 @@ mod tests {
             gguf_path: std::path::PathBuf::from("m.gguf"),
             gguf_downloaded: true,
             vision_module: None,
+            vision_module_downloaded: false,
             argv: vec![],
             server_port: 8080,
             proxy: EnsureProxyConfig::new(11_435, 8080),
@@ -789,6 +839,34 @@ mod tests {
             "fork-tuned params must not carry over"
         );
         assert_eq!(retry.mode, Mode::Native);
+    }
+
+    #[test]
+    fn required_prism_mode_is_automatic_and_conflicting_cli_mode_is_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        let catalog = localbox_launcher::catalog::Catalog::from_layers(
+            &serde_json::Map::new(),
+            &serde_json::from_str(
+                r#"{"Models":{"bonsai":{"Repo":"prism-ml/bonsai","RequiredMode":"prism"}}}"#,
+            )
+            .unwrap(),
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        let launcher = LlamaLauncher::new(catalog, "0.0.0", home.path().to_path_buf(), 24);
+
+        let request = build_request(&[], "bonsai", home.path(), &launcher, false).unwrap();
+        assert_eq!(request.mode, Mode::PrismMl);
+
+        let err = build_request(
+            &args(&["--mode", "native"]),
+            "bonsai",
+            home.path(),
+            &launcher,
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("requires --mode prism"));
     }
 
     #[test]

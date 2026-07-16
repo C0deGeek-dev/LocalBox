@@ -159,6 +159,14 @@ pub fn render_model_detail(catalog: &Catalog, name: &str) -> Result<String, Stri
     if let Some(policy) = def.thinking_policy.as_deref() {
         let _ = writeln!(out, "  Thinking : {policy}");
     }
+    if let Some(mode) = catalog.required_mode(&key) {
+        let label = if mode == localx_llama_core::Mode::PrismMl {
+            "prism"
+        } else {
+            mode.as_str()
+        };
+        let _ = writeln!(out, "  Engine   : {label} (required)");
+    }
     Ok(out)
 }
 

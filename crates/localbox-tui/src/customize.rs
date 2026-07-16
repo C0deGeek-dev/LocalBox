@@ -10,7 +10,7 @@
 //! - **Save is target-gated.** A launch target that isn't a resumable agent
 //!   (`serve`) cannot be saved as the default launch.
 
-use localx_llama_core::ModelDef;
+use localx_llama_core::{Mode, ModelDef};
 
 use crate::plan::{GuidedPlan, PlanOverrides};
 use crate::vocab;
@@ -31,6 +31,8 @@ pub enum CustomizeAction {
     PickMode,
     /// Engine is auto-tuned; explains instead of editing.
     ModeLocked,
+    /// The model format requires a specific engine.
+    ModeRequired,
     PickAutoTune,
     PickKv,
     /// KV is auto-tuned; explains instead of editing.
@@ -48,6 +50,9 @@ pub fn locked_explanation(action: &CustomizeAction) -> Option<&'static str> {
         CustomizeAction::ModeLocked => Some(
             "Auto-tune selects and tunes the engine for you. Turn Auto-tune off to choose it yourself.",
         ),
+        CustomizeAction::ModeRequired => Some(
+            "This model's weight format requires this engine, so it cannot be changed.",
+        ),
         CustomizeAction::KvLocked => Some(
             "Auto-tune chooses the KV cache for you. Turn Auto-tune off to set it yourself.",
         ),
@@ -60,6 +65,16 @@ pub fn locked_explanation(action: &CustomizeAction) -> Option<&'static str> {
 /// auto-tune is on.
 #[must_use]
 pub fn customize_menu(plan: &GuidedPlan, def: &ModelDef) -> Vec<CustomizeRow> {
+    customize_menu_with_required_mode(plan, def, None)
+}
+
+/// Build the customize menu with LocalBox-specific catalog engine policy.
+#[must_use]
+pub fn customize_menu_with_required_mode(
+    plan: &GuidedPlan,
+    def: &ModelDef,
+    required_mode: Option<Mode>,
+) -> Vec<CustomizeRow> {
     let mut rows = Vec::new();
     let row = |label: String, action: CustomizeAction| CustomizeRow { label, action };
 
@@ -82,7 +97,12 @@ pub fn customize_menu(plan: &GuidedPlan, def: &ModelDef) -> Vec<CustomizeRow> {
         format!("Memory (context): {ctx}"),
         CustomizeAction::PickContext,
     ));
-    if plan.use_auto_best {
+    if required_mode.is_some() {
+        rows.push(row(
+            format!("Engine (mode):    {}  (required)", plan.mode.as_str()),
+            CustomizeAction::ModeRequired,
+        ));
+    } else if plan.use_auto_best {
         rows.push(row(
             format!("Engine (mode):    {}  (auto-tuned)", plan.mode.as_str()),
             CustomizeAction::ModeLocked,

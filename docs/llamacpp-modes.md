@@ -2,7 +2,7 @@
 
 Part of the [LocalBox documentation](README.md).
 
-The launcher supports three flavors of `llama-server`:
+The launcher supports four flavors of `llama-server`:
 
 - **`native`** — upstream `llama-server.exe`. Mainline KV types only
   (`q8_0`, `f16`, `q5_1`, `q5_0`, `q4_1`, `q4_0`, `iq4_nl`, `bf16`, `f32`).
@@ -24,8 +24,15 @@ The launcher supports three flavors of `llama-server`:
   stamp still matches the pinned source; when no build is present, LocalBox
   explains honestly that this mode has no prebuilt download and how to
   provide the binary yourself.
+- **`prism`** — the pinned [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp)
+  with the group-128 low-bit kernels required by Bonsai. LocalBox installs the
+  Windows x64 CUDA 12.4 binary plus its CUDA runtime DLL bundle, or the regular
+  Apple Silicon Metal archive. The KleidiAI archive is deliberately not used:
+  KleidiAI accelerates the Arm CPU backend, while normal Apple launches use
+  Metal. This first integration does not install Prism builds on Linux,
+  Windows CPU/Vulkan/HIP, or Intel macOS.
 
-All three modes start a native `llama-server` process on a free port (default
+All four modes start a native `llama-server` process on a free port (default
 search starts at `8080`), wait for readiness, then point the agent at
 `http://127.0.0.1:<port>` (through the no-think proxy when thinking is
 stripped).
@@ -41,6 +48,9 @@ localbox launch q3635ba3bapex --context 256k --mode turboquant
 # SpecType=draft-mtp (mainline canonical); LocalBox translates it to the
 # fork's spelling at emit time for this mode automatically.
 localbox launch genesisv2 --context 128k --mode mtpturbo
+
+# The catalog requires Prism automatically for this model; --mode is optional.
+localbox launch tbonsai27b --context 64k --vision
 
 localbox status               # serve health (proxy + server) and the remedy
 localbox log                  # tail the most recent server log
