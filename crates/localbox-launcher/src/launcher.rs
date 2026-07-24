@@ -164,6 +164,18 @@ impl LlamaLauncher {
         self.detect_vision_module(&folder)
     }
 
+    /// The configured drafter's expected path, whether downloaded yet or not.
+    /// Configured-only: a draft model is never auto-detected from disk — an
+    /// arbitrary GGUF beside the model is not a safe drafter guess.
+    #[must_use]
+    pub fn expected_draft_module_path(&self, key: &str, def: &ModelDef) -> Option<PathBuf> {
+        let folder = self.model_folder(def, key).ok()?;
+        def.draft_module
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(|configured| folder.join(configured))
+    }
+
     fn detect_vision_module(&self, folder: &Path) -> Option<PathBuf> {
         let entries = std::fs::read_dir(folder).ok()?;
         let mut candidates: Vec<PathBuf> = entries

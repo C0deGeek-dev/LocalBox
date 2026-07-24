@@ -49,6 +49,13 @@ localbox
 # Direct
 localbox launch q3635ba3bapex --context 256k --mode turboquant
 
+# Classic draft-model speculation (any mode): the catalog's DraftModule
+# downloads on demand and runs as --spec-type draft-simple. Distinct from
+# MTP — one speculation engine per launch; combining them is refused.
+# The drafter must share the main model's tokenizer or the server
+# refuses at startup.
+localbox launch tbonsai27b --context 64k --draft
+
 # MTP + turbo KV together — the 256K-on-24GB recipe. The catalog stores
 # SpecType=draft-mtp (mainline canonical); LocalBox translates it to the
 # fork's spelling at emit time for this mode automatically.

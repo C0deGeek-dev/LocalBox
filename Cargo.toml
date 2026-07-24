@@ -52,5 +52,5 @@ tokio = { version = "=1.44.2", features = ["macros", "rt-multi-thread", "net", "
 reqwest = { version = "=0.12.11", features = ["json", "stream", "rustls-tls"], default-features = false }
 # Exact revision contains both the Prism engine contract and the Anthropic SSE
 # lifecycle normalization required by Prism's llama.cpp fork.
-localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "0f5cecdca63cd16c98d71ba8bf40c764ec9f6556" }
-localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "0f5cecdca63cd16c98d71ba8bf40c764ec9f6556" }
+localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "c4f91f180168a0d7a62e9de2ec4c9acf358f5430" }
+localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "c4f91f180168a0d7a62e9de2ec4c9acf358f5430" }

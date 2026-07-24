@@ -233,6 +233,25 @@ pub fn vision_module_url(
     Ok(hf_download_url(&def.repo, file))
 }
 
+/// The configured draft model's Hugging Face URL.
+pub fn draft_module_url(
+    launcher: &LlamaLauncher,
+    plan: &LaunchPlan,
+) -> Result<String, LauncherError> {
+    let def = launcher.model_def(&plan.key)?;
+    let file = def
+        .draft_module
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| {
+            LauncherError::Unavailable(format!(
+                "model {} has no configured DraftModule to download",
+                plan.key
+            ))
+        })?;
+    Ok(hf_download_url(&def.repo, file))
+}
+
 fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, LiveError> {
     let runtime = tokio::runtime::Runtime::new().map_err(|e| LiveError::Io(e.to_string()))?;
     Ok(runtime.block_on(future))
@@ -310,6 +329,17 @@ pub fn execute_launch(
         eprintln!("Downloading vision projector ({url}) ...");
         let client = reqwest::Client::new();
         block_on(download_with_resume(&client, &url, projector))??;
+    }
+
+    if let Some(drafter) = plan
+        .draft_module
+        .as_ref()
+        .filter(|_| !plan.draft_module_downloaded)
+    {
+        let url = draft_module_url(launcher, plan)?;
+        eprintln!("Downloading draft model ({url}) ...");
+        let client = reqwest::Client::new();
+        block_on(download_with_resume(&client, &url, drafter))??;
     }
 
     let binary = launcher.server_binary(request.mode, true)?;
@@ -504,6 +534,8 @@ mod tests {
             gguf_downloaded: true,
             vision_module: None,
             vision_module_downloaded: false,
+            draft_module: None,
+            draft_module_downloaded: false,
             argv: vec![],
             server_port: 8080,
             proxy: EnsureProxyConfig::new(listen_port, 8080),

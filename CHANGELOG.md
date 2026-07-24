@@ -4,6 +4,15 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Classic draft-model speculative decoding is a first-class catalog surface.
+  A model entry can name a `DraftModule` (a drafter GGUF in its repo);
+  `localbox launch <model> --draft` resolves it like the vision projector —
+  shown in dry-run as present or will-download, fetched on demand, a failed
+  download stops the launch — and the server runs it as `draft-simple`
+  speculation. A drafter cannot combine with an MTP spec-type (one
+  speculation engine per launch; refused up front), and a drafter with a
+  mismatched tokenizer is refused by the server at startup. Both Bonsai
+  entries wire their DSpark Q4_1 drafters.
 - Added Bonsai 27B 1-bit (`bonsai27b`, GGUF Q1_0, ~3.8 GB) to the shipped
   catalog. Q1_0 is upstream llama.cpp, so it runs in plain native mode on the
   pinned mainline build — no Prism fork required — making it the working

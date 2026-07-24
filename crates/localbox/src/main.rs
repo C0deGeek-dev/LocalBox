@@ -58,6 +58,8 @@ Options for launch/serve:
                         tuned quant/context/mode/KV-cache/n-cpu-moe. Explicit
                         --quant/--context/--mode still filter and override.
   --vision              load the vision projector when the model has one
+  --draft               load the catalog's draft model for speculative
+                        decoding (faster generation; needs a DraftModule)
   --keep-thinking       route the agent straight at the server so thinking
                         reaches it unfiltered (bypasses the no-think proxy, so
                         its system-message merge does not apply)
@@ -266,6 +268,7 @@ fn build_request(
     );
     request.quant = flag_value(args, "--quant").map(str::to_string);
     request.use_vision = has_flag(args, "--vision");
+    request.use_draft = has_flag(args, "--draft");
     request.keep_thinking = has_flag(args, "--keep-thinking");
 
     // Opt-in: fold in the saved localbench profile so a headless serve/launch uses
@@ -363,6 +366,17 @@ fn print_plan(plan: &localbox_launcher::orchestrate::LaunchPlan) {
             "Vision:    {} ({})",
             vision.display(),
             if plan.vision_module_downloaded {
+                "downloaded"
+            } else {
+                "will download"
+            }
+        );
+    }
+    if let Some(drafter) = &plan.draft_module {
+        println!(
+            "Drafter:   {} ({})",
+            drafter.display(),
+            if plan.draft_module_downloaded {
                 "downloaded"
             } else {
                 "will download"
@@ -964,6 +978,8 @@ mod tests {
             gguf_downloaded: true,
             vision_module: None,
             vision_module_downloaded: false,
+            draft_module: None,
+            draft_module_downloaded: false,
             argv: vec![],
             server_port: 8080,
             proxy: EnsureProxyConfig::new(11_435, 8080),

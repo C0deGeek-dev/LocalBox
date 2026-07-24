@@ -22,6 +22,13 @@ already have is never rewritten, and everything else in the file
 from a directory outside the repo — inside it, `local-llm/` in the checkout is
 the live catalog by design.
 
+Beside `VisionModule` (a multimodal projector loaded with `--vision`), an
+entry may name a `DraftModule` — a small drafter GGUF in the same repo for
+classic speculative decoding, loaded with `--draft` and downloaded on demand.
+The drafter must share the main model's tokenizer (the server refuses a
+mismatch at startup), and it cannot combine with an MTP `SpecType` — one
+speculation engine per launch.
+
 A catalog entry:
 
 ```jsonc

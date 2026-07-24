@@ -27,6 +27,9 @@ pub struct LaunchRequest {
     pub quant: Option<String>,
     /// Vision opt-in: the projector loads only when requested AND resolvable.
     pub use_vision: bool,
+    /// Drafter opt-in: classic speculative decoding loads only when requested
+    /// AND the catalog configures a `DraftModule`.
+    pub use_draft: bool,
     /// Route thinking through the model instead of the no-think strip.
     pub keep_thinking: bool,
     /// The (persisted, opt-in) LocalPilot bypass decision.
@@ -49,6 +52,7 @@ impl LaunchRequest {
             mode,
             quant: None,
             use_vision: false,
+            use_draft: false,
             keep_thinking: false,
             bypass: false,
             proxy_port: 11_435,
@@ -102,6 +106,10 @@ pub struct LaunchPlan {
     pub vision_module: Option<PathBuf>,
     /// Whether the planned projector is already present locally.
     pub vision_module_downloaded: bool,
+    /// The resolved or planned drafter when draft speculation was requested.
+    pub draft_module: Option<PathBuf>,
+    /// Whether the planned drafter is already present locally.
+    pub draft_module_downloaded: bool,
     /// The full llama-server argv.
     pub argv: Vec<String>,
     pub server_port: u16,
@@ -169,11 +177,29 @@ pub fn plan_launch(
     };
     let vision_module_downloaded = vision_module.as_ref().is_some_and(|path| path.is_file());
 
+    let draft_module = if request.use_draft {
+        let resolved = launcher.expected_draft_module_path(&request.key, &def);
+        if resolved.is_none() {
+            notes.push(format!(
+                "draft speculation requested but {} configures no DraftModule; launching without it",
+                request.key
+            ));
+        }
+        resolved
+    } else {
+        None
+    };
+    let draft_module_downloaded = draft_module.as_ref().is_some_and(|path| path.is_file());
+
     let server_port = launcher.free_port(request.server_port_start)?;
 
     // --mmproj enters argv for an existing projector or one planned for download.
     let mut params = request.params.clone();
     params.vision_module_path = vision_module
+        .as_ref()
+        .and_then(|p| p.to_str().map(str::to_string));
+    // The drafter likewise enters argv when resolved or planned for download.
+    params.draft_module_path = draft_module
         .as_ref()
         .and_then(|p| p.to_str().map(str::to_string));
     let argv = build_llama_server_args(
@@ -223,6 +249,8 @@ pub fn plan_launch(
         gguf_downloaded,
         vision_module,
         vision_module_downloaded,
+        draft_module,
+        draft_module_downloaded,
         argv,
         server_port,
         proxy,
@@ -278,6 +306,7 @@ mod tests {
                     "File": "bonsai.gguf",
                     "RequiredMode": "prism",
                     "VisionModule": "mmproj-Q8_0.gguf",
+                    "DraftModule": "bonsai-dspark-Q4_1.gguf",
                     "Contexts": { "": 65536 }
                 }
             }
@@ -372,6 +401,39 @@ mod tests {
         assert!(!plan.vision_module_downloaded);
         assert!(plan.argv.contains(&"--mmproj".to_string()));
         assert!(plan.provider_toml.contains("supports_vision = true"));
+    }
+
+    #[test]
+    fn draft_speculation_is_opt_in_and_honest() {
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher(dir.path());
+
+        // Requested on a model with no DraftModule: launched without, noted.
+        let mut request = LaunchRequest::new("q36apex", "", Mode::Native);
+        request.use_draft = true;
+        let plan = plan_launch(&launcher, &request).expect("plan");
+        assert!(plan.draft_module.is_none());
+        assert!(!plan.argv.contains(&"--spec-draft-model".to_string()));
+        assert!(plan.notes.iter().any(|n| n.contains("no DraftModule")));
+
+        // Configured drafter: planned for download, argv wired as draft-simple.
+        let mut request = LaunchRequest::new("bonsai", "", Mode::PrismMl);
+        request.use_draft = true;
+        let plan = plan_launch(&launcher, &request).expect("plan");
+        assert!(plan
+            .draft_module
+            .as_ref()
+            .is_some_and(|path| path.ends_with("bonsai-dspark-Q4_1.gguf")));
+        assert!(!plan.draft_module_downloaded);
+        let argv = plan.argv.join(" ");
+        assert!(argv.contains("--spec-type draft-simple"));
+        assert!(argv.contains("--spec-draft-model"));
+
+        // Not requested: a configured drafter stays unused (opt-in).
+        let request = LaunchRequest::new("bonsai", "", Mode::PrismMl);
+        let plan = plan_launch(&launcher, &request).expect("plan");
+        assert!(plan.draft_module.is_none());
+        assert!(!plan.argv.contains(&"--spec-draft-model".to_string()));
     }
 
     #[test]
