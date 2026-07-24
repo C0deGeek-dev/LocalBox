@@ -21,6 +21,10 @@ use localx_llama_runtime::download::{
 pub struct Asset {
     pub name: String,
     pub url: String,
+    /// Upstream-reported SHA-256 (lowercase hex), when the release API
+    /// carries one. A cross-check for freshly recorded pins — the local pin
+    /// table stays the install-time authority.
+    pub digest: Option<String>,
 }
 
 /// A resolved release: the tag and its assets.
@@ -299,6 +303,7 @@ pub async fn fetch_release(repo: &str, tag: Option<&str>) -> Result<Release, Str
                     Some(Asset {
                         name: a["name"].as_str()?.to_string(),
                         url: a["browser_download_url"].as_str()?.to_string(),
+                        digest: a["digest"].as_str().and_then(parse_github_digest),
                     })
                 })
                 .collect()
@@ -307,7 +312,22 @@ pub async fn fetch_release(repo: &str, tag: Option<&str>) -> Result<Release, Str
     Ok(Release { tag, assets })
 }
 
+/// The lowercase hex from a GitHub `digest` field (`sha256:<hex>`); other
+/// algorithms are ignored rather than mistrusted as SHA-256.
+#[must_use]
+pub fn parse_github_digest(digest: &str) -> Option<String> {
+    digest
+        .strip_prefix("sha256:")
+        .map(|hex| hex.trim().to_ascii_lowercase())
+        .filter(|hex| hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 /// Download an asset, apply the pin posture, and unpack it into `root`.
+/// Returns the SHA-256 of the installed bytes so a pin-refresh can record it.
+///
+/// Without a local pin, the upstream release digest (when present) is the
+/// integrity check: a mismatch refuses the install rather than recording a
+/// hash of unknown bytes.
 ///
 /// # Errors
 /// A plain message on download, verification, or extraction failure.
@@ -316,7 +336,7 @@ pub async fn install_asset(
     root: &Path,
     pin: Option<&str>,
     require_pins: bool,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let client = reqwest::Client::new();
     eprintln!("Downloading {} ...", asset.name);
     let bytes = client
@@ -330,16 +350,26 @@ pub async fn install_asset(
         .await
         .map_err(|e| e.to_string())?;
 
-    match check_download_pin(&bytes, pin, require_pins).map_err(|e| e.to_string())? {
-        PinOutcome::Verified => {}
+    let computed = match check_download_pin(&bytes, pin, require_pins).map_err(|e| e.to_string())? {
+        PinOutcome::Verified => localx_llama_runtime::download::sha256_hex(&bytes),
         PinOutcome::Unpinned { computed } => {
+            if let Some(digest) = asset.digest.as_deref() {
+                if !computed.eq_ignore_ascii_case(digest) {
+                    return Err(format!(
+                        "{}: downloaded bytes (sha256={computed}) do not match the \
+                         upstream release digest ({digest}); refusing to install or pin them",
+                        asset.name
+                    ));
+                }
+            }
             eprintln!("  Downloaded {} sha256={computed} (unpinned).", asset.name);
             eprintln!(
                 "  To pin it, add \"{}\": \"{computed}\" under LlamaCppDownloadPins in settings.json.",
                 asset.name
             );
+            computed
         }
-    }
+    };
 
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let archive = root.join(&asset.name);
@@ -360,7 +390,7 @@ pub async fn install_asset(
     flatten_extracted(root);
     #[cfg(unix)]
     set_unix_exec_bits(root);
-    Ok(())
+    Ok(computed)
 }
 
 /// Ensure the extracted `llama-*` binaries are executable. `.zip` assets do not
@@ -475,6 +505,105 @@ pub fn native_variant(driver_major: Option<u32>, amd_gpu: bool) -> Variant {
     }
 }
 
+/// The settings key holding a mode's pinned release tag (`None` for the
+/// source-built mtpturbo, which has no downloadable release).
+#[must_use]
+pub fn pinned_tag_setting_key(mode: localx_llama_core::Mode) -> Option<&'static str> {
+    use localx_llama_core::Mode;
+    match mode {
+        Mode::Native => Some("LlamaCppPinnedTag"),
+        Mode::Turboquant => Some("LlamaCppTurboquantPinnedTag"),
+        Mode::PrismMl => Some("LlamaCppPrismPinnedTag"),
+        Mode::Mtpturbo => None,
+    }
+}
+
+/// The GitHub repo and configured pinned tag a mode's releases come from
+/// (`None` for mtpturbo — see [`pinned_tag_setting_key`]).
+#[must_use]
+pub fn mode_release_source(
+    catalog: &Catalog,
+    mode: localx_llama_core::Mode,
+) -> Option<(String, Option<String>)> {
+    use localx_llama_core::Mode;
+    let repo = match mode {
+        Mode::Native => "ggerganov/llama.cpp".to_string(),
+        Mode::Turboquant => catalog
+            .setting_str("LlamaCppTurboquantRepo")
+            .unwrap_or("C0deGeek-dev/llama-cpp-turboquant")
+            .to_string(),
+        Mode::PrismMl => catalog
+            .setting_str("LlamaCppPrismRepo")
+            .unwrap_or("PrismML-Eng/llama.cpp")
+            .to_string(),
+        Mode::Mtpturbo => return None,
+    };
+    let pinned = pinned_tag_setting_key(mode)
+        .and_then(|key| catalog.setting_str(key))
+        .map(str::to_string);
+    Some((repo, pinned))
+}
+
+/// Whether a configured pin lags the latest upstream release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinFreshness {
+    /// The pinned tag is the latest release.
+    Current,
+    /// The latest release differs from the pin.
+    Behind {
+        /// The configured pinned tag.
+        pinned: String,
+        /// The upstream latest tag.
+        latest: String,
+    },
+}
+
+/// Compare a pinned tag against the latest release tag.
+#[must_use]
+pub fn pin_freshness(pinned: &str, latest: &str) -> PinFreshness {
+    if pinned.trim() == latest.trim() {
+        PinFreshness::Current
+    } else {
+        PinFreshness::Behind {
+            pinned: pinned.trim().to_string(),
+            latest: latest.trim().to_string(),
+        }
+    }
+}
+
+/// Merge a refreshed pin set into a settings layer: set the mode's pinned-tag
+/// key and upsert each asset hash under `LlamaCppDownloadPins`, leaving every
+/// unrelated key untouched. Pure — the caller owns the file write.
+#[must_use]
+pub fn refreshed_settings(
+    existing: &serde_json::Map<String, serde_json::Value>,
+    tag_key: &str,
+    tag: &str,
+    pins: &[(String, String)],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut merged = existing.clone();
+    merged.insert(
+        tag_key.to_string(),
+        serde_json::Value::String(tag.to_string()),
+    );
+    let mut table = merged
+        .get("LlamaCppDownloadPins")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (asset, sha) in pins {
+        table.insert(
+            asset.clone(),
+            serde_json::Value::String(sha.to_ascii_lowercase()),
+        );
+    }
+    merged.insert(
+        "LlamaCppDownloadPins".to_string(),
+        serde_json::Value::Object(table),
+    );
+    merged
+}
+
 pub async fn plan_binary_update(
     catalog: &Catalog,
     mode: localx_llama_core::Mode,
@@ -482,35 +611,10 @@ pub async fn plan_binary_update(
     driver_major: Option<u32>,
     amd_gpu: bool,
 ) -> Result<UpdatePlan, String> {
-    use localx_llama_core::Mode;
-    let (repo, pinned_tag) = match mode {
-        Mode::Native => (
-            "ggerganov/llama.cpp".to_string(),
-            catalog.setting_str("LlamaCppPinnedTag").map(str::to_string),
-        ),
-        Mode::Turboquant => (
-            catalog
-                .setting_str("LlamaCppTurboquantRepo")
-                .unwrap_or("C0deGeek-dev/llama-cpp-turboquant")
-                .to_string(),
-            catalog
-                .setting_str("LlamaCppTurboquantPinnedTag")
-                .map(str::to_string),
-        ),
-        Mode::Mtpturbo => {
-            return Ok(UpdatePlan::MtpStatus {
-                message: mtp_status(catalog, root),
-            })
-        }
-        Mode::PrismMl => (
-            catalog
-                .setting_str("LlamaCppPrismRepo")
-                .unwrap_or("PrismML-Eng/llama.cpp")
-                .to_string(),
-            catalog
-                .setting_str("LlamaCppPrismPinnedTag")
-                .map(str::to_string),
-        ),
+    let Some((repo, pinned_tag)) = mode_release_source(catalog, mode) else {
+        return Ok(UpdatePlan::MtpStatus {
+            message: mtp_status(catalog, root),
+        });
     };
     let release = fetch_release(&repo, pinned_tag.as_deref()).await?;
 
@@ -520,6 +624,22 @@ pub async fn plan_binary_update(
         }
     }
 
+    let assets = select_release_assets(&release, mode, driver_major, amd_gpu)?;
+    Ok(UpdatePlan::Install { release, assets })
+}
+
+/// Select this host's install set from a resolved release (shared by the
+/// pinned update path and the pin-refresh path).
+///
+/// # Errors
+/// A plain message when no asset fits this host.
+pub fn select_release_assets(
+    release: &Release,
+    mode: localx_llama_core::Mode,
+    driver_major: Option<u32>,
+    amd_gpu: bool,
+) -> Result<Vec<Asset>, String> {
+    use localx_llama_core::Mode;
     let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
     let picked: Vec<&str> = match mode {
         Mode::Native => {
@@ -546,7 +666,7 @@ pub async fn plan_binary_update(
             release.tag
         ));
     }
-    let assets: Vec<Asset> = picked
+    picked
         .iter()
         .map(|name| {
             release
@@ -556,8 +676,31 @@ pub async fn plan_binary_update(
                 .cloned()
                 .ok_or_else(|| "selected asset vanished from the release listing".to_string())
         })
-        .collect::<Result<_, _>>()?;
-    Ok(UpdatePlan::Install { release, assets })
+        .collect()
+}
+
+/// Resolve the **latest** release for a mode and select this host's assets —
+/// the read-only half of a pin refresh.
+///
+/// # Errors
+/// A plain message for the mtpturbo mode (source-built, nothing to refresh),
+/// an unreachable release API, or a release with no asset for this host.
+pub async fn plan_refresh(
+    catalog: &Catalog,
+    mode: localx_llama_core::Mode,
+    driver_major: Option<u32>,
+    amd_gpu: bool,
+) -> Result<(Release, Vec<Asset>), String> {
+    let Some((repo, _pinned)) = mode_release_source(catalog, mode) else {
+        return Err(
+            "mtpturbo is source-built and has no release pins to refresh; see \
+             `localbox update --mode mtpturbo --check`"
+                .to_string(),
+        );
+    };
+    let release = fetch_release(&repo, None).await?;
+    let assets = select_release_assets(&release, mode, driver_major, amd_gpu)?;
+    Ok((release, assets))
 }
 
 fn mtp_status(catalog: &Catalog, root: &Path) -> String {
@@ -725,6 +868,71 @@ mod tests {
             select_prism_assets(&names, None).unwrap(),
             vec!["llama-prism-b9591-62061f9-bin-macos-arm64.tar.gz"]
         );
+    }
+
+    #[test]
+    fn github_digests_parse_only_wellformed_sha256() {
+        let hex = "6d109e2930c0eaf2f729c3a6fc58dd7809ce2ba7047bfb294547cc389af6de5d";
+        assert_eq!(
+            parse_github_digest(&format!("sha256:{}", hex.to_uppercase())).as_deref(),
+            Some(hex)
+        );
+        // Other algorithms and malformed hex are ignored, never mistaken for SHA-256.
+        assert_eq!(parse_github_digest("sha512:abcdef"), None);
+        assert_eq!(parse_github_digest("sha256:tooshort"), None);
+        assert_eq!(parse_github_digest(hex), None);
+    }
+
+    #[test]
+    fn pin_freshness_compares_trimmed_tags() {
+        assert_eq!(
+            pin_freshness("prism-b9596-9fcaed7", "prism-b9596-9fcaed7\n"),
+            PinFreshness::Current
+        );
+        assert_eq!(
+            pin_freshness("prism-b9591-62061f9", "prism-b9596-9fcaed7"),
+            PinFreshness::Behind {
+                pinned: "prism-b9591-62061f9".into(),
+                latest: "prism-b9596-9fcaed7".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn refreshed_settings_upserts_pins_and_preserves_unrelated_keys() {
+        let existing: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{
+                "NoThinkProxyPort": 11435,
+                "LlamaCppDownloadPins": { "old-asset.zip": "aa", "shared.zip": "bb" }
+            }"#,
+        )
+        .unwrap();
+        let merged = refreshed_settings(
+            &existing,
+            "LlamaCppPrismPinnedTag",
+            "prism-b9596-9fcaed7",
+            &[
+                ("new-asset.zip".to_string(), "CC11".to_string()),
+                ("shared.zip".to_string(), "dd22".to_string()),
+            ],
+        );
+        // Unrelated settings survive untouched.
+        assert_eq!(merged["NoThinkProxyPort"], 11435);
+        // The tag key is set and hashes land lowercase; same-name pins update.
+        assert_eq!(merged["LlamaCppPrismPinnedTag"], "prism-b9596-9fcaed7");
+        let pins = merged["LlamaCppDownloadPins"].as_object().unwrap();
+        assert_eq!(pins["old-asset.zip"], "aa");
+        assert_eq!(pins["new-asset.zip"], "cc11");
+        assert_eq!(pins["shared.zip"], "dd22");
+
+        // A settings layer with no pin table gains one.
+        let merged = refreshed_settings(
+            &serde_json::Map::new(),
+            "LlamaCppPinnedTag",
+            "b9700",
+            &[("a.zip".to_string(), "ee".to_string())],
+        );
+        assert_eq!(merged["LlamaCppDownloadPins"]["a.zip"], "ee");
     }
 
     #[test]

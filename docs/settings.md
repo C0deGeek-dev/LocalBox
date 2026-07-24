@@ -71,16 +71,28 @@ Out of the box, every binary download is pinned and verified:
 - **`LlamaCppRequireDownloadPins` defaults to `true`**: an asset with no
   recorded pin is a hard failure. To opt out of pinning (trust-on-first-use),
   set it to `false` in `settings.json`.
-**Updating the pins** (e.g. to move to a newer llama.cpp build) is a deliberate
-loop, done in `~/.local-llm/settings.json`:
+**Knowing when a pin has aged**: `localbox update --check` reports, per
+pinned mode, whether the pinned tag is still the latest upstream release
+("Pin is behind upstream: pinned b9596, latest b10103. …"). The report is
+informational — nothing auto-installs because upstream moved.
 
-1. Pick the new tag on the release page and set `LlamaCppPinnedTag`,
-   `LlamaCppTurboquantPinnedTag`, or `LlamaCppPrismPinnedTag` to it.
-2. Take each asset's SHA-256 from the GitHub release API's `digest` field
-   (`https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/<tag>`)
-   and record it under `LlamaCppDownloadPins`, keyed by the exact asset
-   filename.
-3. Run `localbox update` — the install fails loudly if a hash doesn't match.
+**Advancing the pins** is one deliberate command per mode:
+
+```
+localbox update --mode native --refresh-pins --check   # preview: tag + assets
+localbox update --mode native --refresh-pins           # install + record pins
+```
+
+The refresh resolves the *latest* release, installs this host's assets, and
+records the new tag and asset SHA-256 hashes in `~/.local-llm/settings.json`
+(only those keys are touched). A freshly recorded pin is verified against the
+GitHub release's published `sha256` digest — a mismatch refuses to install or
+record. `--refresh-pins` requires an explicit `--mode`; there is no
+refresh-everything sweep.
+
+The manual loop still works — set the tag key and the `LlamaCppDownloadPins`
+entries in `settings.json` yourself, then run `localbox update`; the install
+fails loudly if a hash doesn't match.
 
 The same keys in `settings.json` always win over `defaults.json`, so machine
 pins can lead or lag the shipped ones.

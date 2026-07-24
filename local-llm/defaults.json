@@ -4,7 +4,7 @@
   "LlamaCppTurboquantRoot": "%USERPROFILE%\\.local-llm\\llama-cpp-turboquant",
   "LlamaCppTurboquantRepo": "C0deGeek-dev/llama-cpp-turboquant",
   "LlamaCppPrismRepo": "PrismML-Eng/llama.cpp",
-  "LlamaCppPrismPinnedTag": "prism-b9591-62061f9",
+  "LlamaCppPrismPinnedTag": "prism-b9596-9fcaed7",
   "LlamaCppMtpTurboRoot": "%USERPROFILE%\\.local-llm\\llama-cpp-mtpturbo",
   "LlamaCppGgufRoot": "%USERPROFILE%\\.local-llm\\gguf",
   "LlamaCppHealthCheckTimeoutSec": 300,
@@ -21,7 +21,7 @@
     "cudart-llama-bin-win-cuda-13.3-x64.zip": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e",
     "turboquant-plus-tqp-v0.2.0-windows-x64-cuda12.4.zip": "2cd1dac233226b90bc0564495b526d2baf1a435c0ee00b4be3513b6211ead744",
     "turboquant-plus-tqp-v0.2.0-windows-x64-cuda13.3.zip": "ce536b6dfed4051806b0c2d92c112f9b58644663010f90a1308cb3e075433276",
-    "llama-prism-b1-62061f9-bin-win-cuda-12.4-x64.zip": "9aa7eddde22dcc16b7294688fddc7ab37580b4941aa7a33d2aa4a3f412bb88f3",
-    "llama-prism-b9591-62061f9-bin-macos-arm64.tar.gz": "e8dd4d8a23704afb02eda7136be3ed05f875c02bb82f413a5e897c9a50f774a8"
+    "llama-prism-b1-9fcaed7-bin-win-cuda-12.4-x64.zip": "6d109e2930c0eaf2f729c3a6fc58dd7809ce2ba7047bfb294547cc389af6de5d",
+    "llama-prism-b9596-9fcaed7-bin-macos-arm64.tar.gz": "9c14bcdba8c99378ca3fd4dbf3c28f94bb8c528186a80f8bc40b5fdd7edb9937"
   }
 }

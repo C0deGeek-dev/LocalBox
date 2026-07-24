@@ -37,8 +37,12 @@ Usage:
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
   localbox embed-stop                 stop the embedding server
-  localbox update [--mode <m>] [--check]
-                                      install or update the llama.cpp binaries
+  localbox update [--mode <m>] [--check] [--refresh-pins]
+                                      install or update the llama.cpp binaries;
+                                      --check also reports pin freshness, and
+                                      --refresh-pins (explicit --mode) advances
+                                      the pin to the latest release, verified
+                                      against the published release digest
   localbox version                    print the launcher version envelope
   localbox nothink-proxy --listen <port> --target-port <port>
                                       host the no-think proxy (plumbing)
@@ -567,7 +571,16 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let launcher = build_launcher(&home)?;
     let check_only = has_flag(args, "--check");
-    let modes: Vec<Mode> = match flag_value(args, "--mode") {
+    let refresh = has_flag(args, "--refresh-pins");
+    let explicit_mode = flag_value(args, "--mode");
+    if refresh && explicit_mode.is_none() {
+        return Err(
+            "--refresh-pins re-pins to the latest upstream release, so it needs an \
+             explicit --mode (native, turboquant, or prism)."
+                .to_string(),
+        );
+    }
+    let modes: Vec<Mode> = match explicit_mode {
         Some(m) => vec![parse_mode(Some(m))?],
         None => vec![
             Mode::Native,
@@ -585,6 +598,19 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     for mode in modes {
         let root = localx_llama_core::Launcher::install_root(&launcher, mode);
         println!("== {} ==", mode.as_str());
+        if refresh {
+            refresh_mode_pins(
+                &runtime,
+                &catalog,
+                mode,
+                &root,
+                &home,
+                driver_major,
+                amd_gpu,
+                check_only,
+            )?;
+            continue;
+        }
         match runtime.block_on(plan_binary_update(
             &catalog,
             mode,
@@ -605,6 +631,7 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
                             .collect::<Vec<_>>()
                             .join(", ")
                     );
+                    report_pin_freshness(&runtime, &catalog, mode);
                     continue;
                 }
                 let require = catalog
@@ -630,7 +657,104 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
             }
             Err(message) => println!("Skipped: {message}"),
         }
+        if check_only {
+            report_pin_freshness(&runtime, &catalog, mode);
+        }
     }
+    Ok(())
+}
+
+/// On `--check`, report whether a mode's configured pin lags the latest
+/// upstream release. Informational only — nothing auto-installs; a stale pin
+/// advances via `--refresh-pins` or the settings ceremony.
+fn report_pin_freshness(
+    runtime: &tokio::runtime::Runtime,
+    catalog: &localbox_launcher::catalog::Catalog,
+    mode: Mode,
+) {
+    use localbox::update::{fetch_release, mode_release_source, pin_freshness, PinFreshness};
+    let Some((repo, Some(pinned))) = mode_release_source(catalog, mode) else {
+        return; // unpinned modes already track latest; mtpturbo reports itself
+    };
+    match runtime.block_on(fetch_release(&repo, None)) {
+        Ok(latest) => match pin_freshness(&pinned, &latest.tag) {
+            PinFreshness::Current => println!("Pin {pinned} is the latest upstream release."),
+            PinFreshness::Behind { pinned, latest } => println!(
+                "Pin is behind upstream: pinned {pinned}, latest {latest}. Advance \
+                 deliberately with `localbox update --mode {} --refresh-pins`.",
+                cli_mode_name(mode)
+            ),
+        },
+        Err(e) => println!("Pin freshness unknown (release lookup failed: {e})."),
+    }
+}
+
+/// The `--refresh-pins` path for one mode: resolve the latest release, show
+/// the preview under `--check`, otherwise install with the upstream digest as
+/// the integrity check and record the resulting tag + hashes in
+/// `settings.json` (which outlives upgrades and wins layer precedence).
+#[allow(clippy::too_many_arguments)]
+fn refresh_mode_pins(
+    runtime: &tokio::runtime::Runtime,
+    catalog: &localbox_launcher::catalog::Catalog,
+    mode: Mode,
+    root: &std::path::Path,
+    home: &std::path::Path,
+    driver_major: Option<u32>,
+    amd_gpu: bool,
+    check_only: bool,
+) -> Result<(), String> {
+    use localbox::update::{
+        install_asset, pinned_tag_setting_key, plan_refresh, refreshed_settings, write_stamp,
+    };
+    let Some(tag_key) = pinned_tag_setting_key(mode) else {
+        println!("mtpturbo is source-built; nothing to refresh.");
+        return Ok(());
+    };
+    let (release, assets) = runtime.block_on(plan_refresh(catalog, mode, driver_major, amd_gpu))?;
+    if check_only {
+        println!(
+            "Would refresh {tag_key} to {} and record pins for: {}.",
+            release.tag,
+            assets
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        return Ok(());
+    }
+    let mut pins: Vec<(String, String)> = Vec::with_capacity(assets.len());
+    for asset in &assets {
+        // No local pin yet by definition; the upstream release digest inside
+        // install_asset is the integrity check for these bytes.
+        let sha = runtime.block_on(install_asset(asset, root, None, false))?;
+        pins.push((asset.name.clone(), sha));
+    }
+    let settings_path = catalog_dir(home).join("settings.json");
+    let existing: serde_json::Map<String, serde_json::Value> =
+        match std::fs::read_to_string(&settings_path) {
+            Ok(raw) => serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| {
+                format!("settings.json is not valid JSON ({e}); fix it before refreshing")
+            })?,
+            Err(_) => serde_json::Map::new(),
+        };
+    let merged = refreshed_settings(&existing, tag_key, &release.tag, &pins);
+    let pretty = serde_json::to_string_pretty(&serde_json::Value::Object(merged))
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&settings_path, pretty + "\n").map_err(|e| e.to_string())?;
+    let variant = match mode {
+        Mode::PrismMl if cfg!(windows) => "cuda-12.4",
+        Mode::PrismMl => "metal",
+        _ => localbox::update::native_variant(driver_major, amd_gpu).as_str(),
+    };
+    write_stamp(root, &release.tag, variant).map_err(|e| e.to_string())?;
+    println!(
+        "Refreshed {tag_key} to {} and recorded {} pin(s) in {}.",
+        release.tag,
+        pins.len(),
+        settings_path.display()
+    );
     Ok(())
 }
 

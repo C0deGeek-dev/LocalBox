@@ -4,6 +4,16 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Engine pins now age loudly and advance deliberately. `localbox update
+  --check` reports per pinned mode whether the pinned release tag is behind
+  the latest upstream release (informational — nothing auto-installs), and a
+  new `localbox update --mode <m> --refresh-pins` advances one mode's pin to
+  the latest release: it installs this host's assets, verifies each download
+  against the GitHub release's published sha256 digest (a mismatch refuses to
+  install or record), and records the new tag plus asset hashes in
+  `settings.json`, which wins layer precedence and survives upgrades. The
+  PrismML engine pin moved to the current fork release, whose Windows binary
+  and macOS Metal archive hashes are re-pinned in `defaults.json`.
 - Fixed Prism responses being misreported by LocalPilot as truncated streams.
   The vendored shared proxy now synthesizes a missing Anthropic
   `content_block_start` and flushes held-back visible text before
