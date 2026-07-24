@@ -25,9 +25,10 @@ the live catalog by design.
 Beside `VisionModule` (a multimodal projector loaded with `--vision`), an
 entry may name a `DraftModule` — a small drafter GGUF in the same repo for
 classic speculative decoding, loaded with `--draft` and downloaded on demand.
-The drafter must share the main model's tokenizer (the server refuses a
-mismatch at startup), and it cannot combine with an MTP `SpecType` — one
-speculation engine per launch.
+The drafter must share the main model's tokenizer — on a mismatch the server
+logs the incompatibility and runs without speculation, and the launcher warns
+about it — and it cannot combine with an MTP `SpecType`: one speculation
+engine per launch.
 
 A catalog entry:
 

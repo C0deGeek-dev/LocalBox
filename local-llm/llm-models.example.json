@@ -111,7 +111,7 @@
     "256k": 262144
     },
     "Strict": true,
-    "Description": "Prism ML Ternary Bonsai 27B — Qwen3.6-27B compressed to end-to-end ternary weights (GGUF Q2_0_g128, ~1.71 bits/weight true, ~7.2 GB deployed vs ~54 GB FP16; claims 95% of FP16 intelligence). Hybrid attention (~75% linear), native 262k window; ~14.7 GB peak at 100k ctx without KV compression. Vision via mmproj (HQQ 4-bit, loaded only for image input). NOTE: the ternary kernels need the PrismML llama.cpp fork (CUDA/Metal/Linux) — pinned mainline/turboquant builds may not load Q2_0_g128. Launch with --draft to add the DSpark Q4_1 drafter (vendor claims ~1.34x decode on CUDA).",
+    "Description": "Prism ML Ternary Bonsai 27B — Qwen3.6-27B compressed to end-to-end ternary weights (GGUF Q2_0_g128, ~1.71 bits/weight true, ~7.2 GB deployed vs ~54 GB FP16; claims 95% of FP16 intelligence). Hybrid attention (~75% linear), native 262k window; ~14.7 GB peak at 100k ctx without KV compression. Vision via mmproj (HQQ 4-bit, loaded only for image input). NOTE: the ternary kernels need the PrismML llama.cpp fork (CUDA/Metal/Linux) — pinned mainline/turboquant builds may not load Q2_0_g128. --draft wires the shipped DSpark Q4_1 drafter (vendor-measured 1.34x on H100), but the current Prism release rejects it for speculation (draft/target vocab-type mismatch) and runs without it — the launcher warns when that happens.",
     "DraftModule": "Ternary-Bonsai-27B-dspark-Q4_1.gguf",
     "QuantSizesGB": {
     "q2-0": 7.2,
@@ -149,7 +149,7 @@
     "256k": 262144
     },
     "Strict": true,
-    "Description": "Prism ML Bonsai 27B 1-bit — Qwen3.6-27B at ~1.125 effective bits/weight (GGUF Q1_0, ~3.8 GB deployed). Q1_0 is merged upstream, so this runs on the pinned mainline llama.cpp in native mode — no fork required — making it the fallback when the Prism engine is unavailable or misbehaves. Same hybrid attention and native 262k window as the ternary pack; expect lower quality than Q2_0 ternary. Vision via mmproj (loaded only for image input). Launch with --draft to add the DSpark Q4_1 drafter.",
+    "Description": "Prism ML Bonsai 27B 1-bit — Qwen3.6-27B at ~1.125 effective bits/weight (GGUF Q1_0, ~3.8 GB deployed). Q1_0 is merged upstream, so this runs on the pinned mainline llama.cpp in native mode — no fork required — making it the fallback when the Prism engine is unavailable or misbehaves. Same hybrid attention and native 262k window as the ternary pack; expect lower quality than Q2_0 ternary. Vision via mmproj (loaded only for image input). --draft wires the shipped DSpark Q4_1 drafter, but current llama.cpp builds reject it for speculation (draft/target vocab-type mismatch) and run without it — the launcher warns when that happens.",
     "DraftModule": "Bonsai-27B-dspark-Q4_1.gguf",
     "QuantSizesGB": {
     "q1-0": 3.8,

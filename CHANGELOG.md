@@ -10,9 +10,13 @@ Past-tense record of shipped changes.
   shown in dry-run as present or will-download, fetched on demand, a failed
   download stops the launch — and the server runs it as `draft-simple`
   speculation. A drafter cannot combine with an MTP spec-type (one
-  speculation engine per launch; refused up front), and a drafter with a
-  mismatched tokenizer is refused by the server at startup. Both Bonsai
-  entries wire their DSpark Q4_1 drafters.
+  speculation engine per launch; refused up front). A drafter the server
+  rejects for speculation (e.g. a draft/target vocab-type mismatch) does not
+  fail the server — it runs without speculation — so the launcher detects
+  that from the server log and warns that the drafter is loaded but idle.
+  Both Bonsai entries wire their DSpark Q4_1 drafters; as of the current
+  Prism release the server rejects those for exactly that mismatch, which
+  the catalog descriptions now state.
 - Added Bonsai 27B 1-bit (`bonsai27b`, GGUF Q1_0, ~3.8 GB) to the shipped
   catalog. Q1_0 is upstream llama.cpp, so it runs in plain native mode on the
   pinned mainline build — no Prism fork required — making it the working

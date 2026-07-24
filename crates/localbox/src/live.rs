@@ -375,6 +375,22 @@ pub fn execute_launch(
         }
     }
     eprintln!("Model ready on 127.0.0.1:{}.", plan.server_port);
+    // llama-server treats a failed speculative-decoding init (e.g. a drafter
+    // whose vocab type does not match the target) as a warning and continues
+    // WITHOUT speculation — a requested drafter would otherwise silently cost
+    // its VRAM while speeding up nothing. Say so out loud.
+    if plan.draft_module.is_some() {
+        if let Ok(server_log) = std::fs::read_to_string(&log) {
+            if server_log.contains("failed to initialize speculative decoding") {
+                eprintln!(
+                    "Warning: the server rejected the draft model for speculation (see the \
+                     log above for the reason, typically a vocab/tokenizer mismatch) and is \
+                     running WITHOUT it. Relaunch without --draft to reclaim the drafter's \
+                     memory."
+                );
+            }
+        }
+    }
     launcher.set_backend_session(&BackendSession {
         key: plan.key.clone(),
         mode: request.mode,
