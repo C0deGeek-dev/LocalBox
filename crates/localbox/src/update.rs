@@ -1031,7 +1031,10 @@ mod tests {
 
     #[test]
     fn prism_linux_selection_covers_cuda_vulkan_and_cpu() {
-        // The real prism-b9596-9fcaed7 Linux/ubuntu asset names.
+        // The real prism-b9596-9fcaed7 Linux/ubuntu asset names. The helper
+        // follows the *host* architecture (arch_matches), so expectations
+        // branch on it — an arm64 runner legitimately selects the arm64
+        // twins, and the release ships no arm64 Linux CUDA archive at all.
         let names = [
             "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.4-x64.tar.gz",
             "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.8-x64.tar.gz",
@@ -1041,6 +1044,19 @@ mod tests {
             "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-x64.tar.gz",
             "llama-prism-b9596-9fcaed7-bin-ubuntu-x64.tar.gz",
         ];
+        if cfg!(target_arch = "aarch64") {
+            // No arm64 Linux CUDA archive exists → a clear error, not a
+            // silent x64 pick.
+            assert!(select_prism_linux_asset(&names, Some(12), false).is_err());
+            let (asset, _) = select_prism_linux_asset(&names, None, true).unwrap();
+            assert_eq!(
+                asset,
+                "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-arm64.tar.gz"
+            );
+            let (asset, _) = select_prism_linux_asset(&names, None, false).unwrap();
+            assert_eq!(asset, "llama-prism-b9596-9fcaed7-bin-ubuntu-arm64.tar.gz");
+            return;
+        }
         // A CUDA 12 driver takes the highest matching 12.x archive, silently.
         let (asset, warning) = select_prism_linux_asset(&names, Some(12), false).unwrap();
         assert_eq!(
