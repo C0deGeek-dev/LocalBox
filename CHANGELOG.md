@@ -4,6 +4,16 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- The Prism engine now installs on Linux (x64/arm64): CUDA archives matched
+  to the driver's CUDA major (newest toolkit build within it), Vulkan on an
+  AMD GPU, the plain CPU archive otherwise; rocm and KleidiAI archives are
+  deliberately not selected. Windows/macOS selections are unchanged. The
+  installer now also warns, on every platform, when the only available Prism
+  CUDA build's major does not match the driver's — that pairing can emit
+  garbage output, which the launch smoke test catches before an agent sees
+  it. The `.build-stamp` variant is derived from the actually selected asset
+  (cuda-12.4 / cuda-12.8 / vulkan / cpu / metal) instead of a per-OS
+  hardcode, and the shipped pin table covers the Linux archives.
 - Engine pins now age loudly and advance deliberately. `localbox update
   --check` reports per pinned mode whether the pinned release tag is behind
   the latest upstream release (informational — nothing auto-installs), and a

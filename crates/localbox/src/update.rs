@@ -198,21 +198,28 @@ pub fn select_turbo_asset<'a>(
     (eligible.first().copied(), None)
 }
 
-/// Select the PrismML assets required by this host. Windows CUDA needs both
-/// the fork binaries and the separately packaged CUDA runtime DLLs; Apple
-/// Silicon uses the standard Metal archive (not the CPU-focused KleidiAI one).
+/// Select the PrismML assets required by this host, plus a plain-language
+/// warning when the only available CUDA build's major does not match the
+/// driver's (that pairing can emit garbage output rather than an error — the
+/// launch smoke test is the backstop that catches it).
+///
+/// Windows CUDA needs both the fork binaries and the separately packaged CUDA
+/// runtime DLLs; Apple Silicon uses the standard Metal archive (not the
+/// CPU-focused KleidiAI one). Linux picks CUDA by driver major, Vulkan on an
+/// AMD GPU, else the plain CPU archive.
 pub fn select_prism_assets<'a>(
     names: &[&'a str],
     driver_major: Option<u32>,
-) -> Result<Vec<&'a str>, String> {
+    amd_gpu: bool,
+) -> Result<(Vec<&'a str>, Option<String>), String> {
     if cfg!(windows) {
         if !cfg!(target_arch = "x86_64") {
             return Err("the Prism engine currently supports Windows x64 only".to_string());
         }
-        if driver_major.is_none() {
+        let Some(driver) = driver_major else {
             return Err("the Prism engine requires an NVIDIA CUDA driver on Windows".to_string());
-        }
-        if driver_major.is_some_and(|major| major < 12) {
+        };
+        if driver < 12 {
             return Err("the Prism Windows build requires a CUDA 12-compatible driver".to_string());
         }
         let binary = names
@@ -228,7 +235,14 @@ pub fn select_prism_assets<'a>(
             .copied()
             .find(|name| name.eq_ignore_ascii_case("cudart-llama-bin-win-cuda-12.4-x64.zip"))
             .ok_or("the Prism release has no Windows CUDA 12.4 runtime bundle")?;
-        return Ok(vec![binary, runtime]);
+        let warning = (driver != 12).then(|| {
+            format!(
+                "the Prism Windows build targets CUDA 12.4 but the driver reports CUDA \
+                 {driver}; a mismatched build can emit garbage output — the launch smoke \
+                 test will catch that before an agent sees it"
+            )
+        });
+        return Ok((vec![binary, runtime], warning));
     }
     if cfg!(target_os = "macos") {
         if !cfg!(target_arch = "aarch64") {
@@ -242,9 +256,141 @@ pub fn select_prism_assets<'a>(
                     .ends_with("-bin-macos-arm64.tar.gz")
             })
             .ok_or("the Prism release has no macOS Apple Silicon Metal archive")?;
-        return Ok(vec![metal]);
+        return Ok((vec![metal], None));
     }
-    Err("the Prism engine currently supports only Windows CUDA and Apple Silicon Metal".to_string())
+    if cfg!(target_os = "linux") {
+        return select_prism_linux_asset(names, driver_major, amd_gpu)
+            .map(|(asset, warning)| (vec![asset], warning));
+    }
+    Err(
+        "the Prism engine currently supports Windows CUDA, Apple Silicon Metal, and Linux"
+            .to_string(),
+    )
+}
+
+/// The Linux arm of the Prism selection: CUDA archives carry a `-linux-cuda-`
+/// token, while the CPU/Vulkan builds use `-ubuntu-`; the rocm and KleidiAI
+/// archives are deliberately not selected (AMD routes to Vulkan, matching the
+/// native-mode preference).
+fn select_prism_linux_asset<'a>(
+    names: &[&'a str],
+    driver_major: Option<u32>,
+    amd_gpu: bool,
+) -> Result<(&'a str, Option<String>), String> {
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    if let Some(driver) = driver_major {
+        let cuda: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|n| {
+                let lower = n.to_ascii_lowercase();
+                lower.contains("-bin-linux-cuda-")
+                    && lower.ends_with(&format!("-{arch}.tar.gz"))
+                    && arch_matches(n)
+            })
+            .collect();
+        let mut majors: Vec<u32> = cuda
+            .iter()
+            .filter_map(|n| {
+                let lower = n.to_ascii_lowercase();
+                let rest = &lower[lower.find("-cuda-")? + "-cuda-".len()..];
+                rest.split(['.', '-']).next()?.parse().ok()
+            })
+            .collect();
+        majors.sort_unstable();
+        majors.dedup();
+        for major in cuda_major_order(driver, &majors) {
+            let token = format!("-cuda-{major}.");
+            // Within a major, the newest toolkit build wins (12.8 over 12.4).
+            let hit = cuda
+                .iter()
+                .filter(|n| n.to_ascii_lowercase().contains(&token))
+                .max_by_key(|n| {
+                    let lower = n.to_ascii_lowercase();
+                    lower[lower.find(&token).unwrap_or(0) + token.len()..]
+                        .split('-')
+                        .next()
+                        .and_then(|minor| minor.parse::<u32>().ok())
+                        .unwrap_or(0)
+                })
+                .copied();
+            if let Some(hit) = hit {
+                let warning = (major != driver).then(|| {
+                    format!(
+                        "the chosen Prism build targets CUDA {major} but the driver reports \
+                         CUDA {driver}; a mismatched build can emit garbage output — the \
+                         launch smoke test will catch that before an agent sees it"
+                    )
+                });
+                return Ok((hit, warning));
+            }
+        }
+        return Err(format!(
+            "the Prism release has no Linux {arch} CUDA archive for this driver"
+        ));
+    }
+    if amd_gpu {
+        return names
+            .iter()
+            .copied()
+            .find(|n| {
+                n.to_ascii_lowercase()
+                    .ends_with(&format!("-bin-ubuntu-vulkan-{arch}.tar.gz"))
+            })
+            .map(|hit| (hit, None))
+            .ok_or_else(|| format!("the Prism release has no Linux {arch} Vulkan archive"));
+    }
+    names
+        .iter()
+        .copied()
+        .find(|n| {
+            n.to_ascii_lowercase()
+                .ends_with(&format!("-bin-ubuntu-{arch}.tar.gz"))
+        })
+        .map(|hit| (hit, None))
+        .ok_or_else(|| format!("the Prism release has no Linux {arch} CPU archive"))
+}
+
+/// The `.build-stamp` variant line for an installed asset set. Prism derives
+/// it from the selected asset so the stamp says what was actually installed
+/// (cuda-12.4 vs cuda-12.8 vs vulkan vs cpu vs metal) instead of a per-OS
+/// hardcode; other modes keep their host-probe variant.
+#[must_use]
+pub fn stamp_variant(
+    mode: localx_llama_core::Mode,
+    asset_names: &[&str],
+    driver_major: Option<u32>,
+    amd_gpu: bool,
+) -> String {
+    if mode != localx_llama_core::Mode::PrismMl {
+        return native_variant(driver_major, amd_gpu).as_str().to_string();
+    }
+    let binary = asset_names
+        .iter()
+        .find(|n| !n.to_ascii_lowercase().starts_with("cudart-"))
+        .copied()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if binary.contains("-macos-") {
+        return "metal".to_string();
+    }
+    if let Some(idx) = binary.find("-cuda-") {
+        let version: String = binary[idx + "-cuda-".len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if !version.is_empty() {
+            return format!("cuda-{}", version.trim_end_matches('.'));
+        }
+    }
+    if binary.contains("-vulkan-") {
+        return "vulkan".to_string();
+    }
+    "cpu".to_string()
 }
 
 /// Read a build stamp's first line (the installed release tag), when present.
@@ -657,7 +803,13 @@ pub fn select_release_assets(
             choice.into_iter().collect()
         }
         Mode::Mtpturbo => Vec::new(),
-        Mode::PrismMl => select_prism_assets(&names, driver_major)?,
+        Mode::PrismMl => {
+            let (choice, warning) = select_prism_assets(&names, driver_major, amd_gpu)?;
+            if let Some(warning) = warning {
+                eprintln!("Warning: {warning}");
+            }
+            choice
+        }
     };
     if picked.is_empty() {
         return Err(format!(
@@ -845,7 +997,7 @@ mod tests {
             "llama-prism-b1-62061f9-bin-win-cuda-12.4-x64.zip",
             "cudart-llama-bin-win-cuda-12.4-x64.zip",
         ];
-        let picked = select_prism_assets(&names, Some(13)).unwrap();
+        let (picked, warning) = select_prism_assets(&names, Some(13), false).unwrap();
         assert_eq!(
             picked,
             vec![
@@ -853,8 +1005,13 @@ mod tests {
                 "cudart-llama-bin-win-cuda-12.4-x64.zip"
             ]
         );
-        assert!(select_prism_assets(&names, None).is_err());
-        assert!(select_prism_assets(&names, Some(11)).is_err());
+        // The 12.4-only build on a CUDA 13 driver warns about garbage output.
+        assert!(warning.unwrap().contains("garbage output"));
+        // A matching CUDA 12 driver selects silently.
+        let (_, warning) = select_prism_assets(&names, Some(12), false).unwrap();
+        assert!(warning.is_none());
+        assert!(select_prism_assets(&names, None, false).is_err());
+        assert!(select_prism_assets(&names, Some(11), false).is_err());
     }
 
     #[cfg(target_os = "macos")]
@@ -864,9 +1021,108 @@ mod tests {
             "llama-prism-b9591-62061f9-bin-macos-arm64-kleidiai.tar.gz",
             "llama-prism-b9591-62061f9-bin-macos-arm64.tar.gz",
         ];
+        let (picked, warning) = select_prism_assets(&names, None, false).unwrap();
         assert_eq!(
-            select_prism_assets(&names, None).unwrap(),
+            picked,
             vec!["llama-prism-b9591-62061f9-bin-macos-arm64.tar.gz"]
+        );
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn prism_linux_selection_covers_cuda_vulkan_and_cpu() {
+        // The real prism-b9596-9fcaed7 Linux/ubuntu asset names.
+        let names = [
+            "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.4-x64.tar.gz",
+            "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.8-x64.tar.gz",
+            "llama-prism-b9596-9fcaed7-bin-ubuntu-arm64.tar.gz",
+            "llama-prism-b9596-9fcaed7-bin-ubuntu-rocm-7.2-x64.tar.gz",
+            "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-arm64.tar.gz",
+            "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-x64.tar.gz",
+            "llama-prism-b9596-9fcaed7-bin-ubuntu-x64.tar.gz",
+        ];
+        // A CUDA 12 driver takes the highest matching 12.x archive, silently.
+        let (asset, warning) = select_prism_linux_asset(&names, Some(12), false).unwrap();
+        assert_eq!(
+            asset,
+            "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.8-x64.tar.gz"
+        );
+        assert!(warning.is_none());
+        // A CUDA 13 driver still gets a 12.x build, but with the garbage warning.
+        let (asset, warning) = select_prism_linux_asset(&names, Some(13), false).unwrap();
+        assert!(asset.contains("-linux-cuda-12."));
+        assert!(warning.unwrap().contains("garbage output"));
+        // An AMD GPU routes to Vulkan (never rocm), CPU otherwise — and the
+        // plain CPU pick must not accidentally match the vulkan/rocm twins.
+        let (asset, _) = select_prism_linux_asset(&names, None, true).unwrap();
+        assert_eq!(
+            asset,
+            "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-x64.tar.gz"
+        );
+        let (asset, _) = select_prism_linux_asset(&names, None, false).unwrap();
+        assert_eq!(asset, "llama-prism-b9596-9fcaed7-bin-ubuntu-x64.tar.gz");
+    }
+
+    #[test]
+    fn stamp_variant_follows_the_selected_prism_asset() {
+        use localx_llama_core::Mode;
+        assert_eq!(
+            stamp_variant(
+                Mode::PrismMl,
+                &[
+                    "llama-prism-b1-9fcaed7-bin-win-cuda-12.4-x64.zip",
+                    "cudart-llama-bin-win-cuda-12.4-x64.zip"
+                ],
+                Some(13),
+                false
+            ),
+            "cuda-12.4"
+        );
+        assert_eq!(
+            stamp_variant(
+                Mode::PrismMl,
+                &["llama-prism-b9596-9fcaed7-bin-linux-cuda-12.8-x64.tar.gz"],
+                Some(12),
+                false
+            ),
+            "cuda-12.8"
+        );
+        assert_eq!(
+            stamp_variant(
+                Mode::PrismMl,
+                &["llama-prism-b9596-9fcaed7-bin-macos-arm64.tar.gz"],
+                None,
+                false
+            ),
+            "metal"
+        );
+        assert_eq!(
+            stamp_variant(
+                Mode::PrismMl,
+                &["llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-x64.tar.gz"],
+                None,
+                true
+            ),
+            "vulkan"
+        );
+        assert_eq!(
+            stamp_variant(
+                Mode::PrismMl,
+                &["llama-prism-b9596-9fcaed7-bin-ubuntu-x64.tar.gz"],
+                None,
+                false
+            ),
+            "cpu"
+        );
+        // Non-prism modes keep the host-probe variant.
+        assert_eq!(
+            stamp_variant(
+                Mode::Native,
+                &["llama-b9596-bin-win-cuda-13.3-x64.zip"],
+                Some(13),
+                false
+            ),
+            "cuda"
         );
     }
 

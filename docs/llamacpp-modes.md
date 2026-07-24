@@ -26,11 +26,16 @@ The launcher supports four flavors of `llama-server`:
   provide the binary yourself.
 - **`prism`** — the pinned [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp)
   with the group-128 low-bit kernels required by Bonsai. LocalBox installs the
-  Windows x64 CUDA 12.4 binary plus its CUDA runtime DLL bundle, or the regular
-  Apple Silicon Metal archive. The KleidiAI archive is deliberately not used:
-  KleidiAI accelerates the Arm CPU backend, while normal Apple launches use
-  Metal. This first integration does not install Prism builds on Linux,
-  Windows CPU/Vulkan/HIP, or Intel macOS.
+  Windows x64 CUDA 12.4 binary plus its CUDA runtime DLL bundle, the regular
+  Apple Silicon Metal archive, or a Linux archive (CUDA matched to the
+  driver's major with the newest toolkit build within it, Vulkan on an AMD
+  GPU, CPU otherwise; x64 and arm64). The KleidiAI archive is deliberately
+  not used: KleidiAI accelerates the Arm CPU backend, while normal Apple
+  launches use Metal; the rocm archive is likewise not selected — AMD routes
+  to Vulkan, matching native mode. When the only available CUDA build's major
+  does not match the driver's, the installer warns that the pairing can emit
+  garbage output; the launch smoke test is the backstop. Not installed on
+  Windows CPU/Vulkan/HIP or Intel macOS.
 
 All four modes start a native `llama-server` process on a free port (default
 search starts at `8080`), wait for readiness, then point the agent at

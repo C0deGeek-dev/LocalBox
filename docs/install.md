@@ -42,9 +42,14 @@ model catalog (`llm-models.json`). Existing files are never overwritten.
 - **macOS** — prebuilt Metal assets are downloaded when available; otherwise
   bring your own `llama-server` the same way.
 
-The optional `prism` engine for Ternary Bonsai currently installs only on
-Windows x64 with an NVIDIA CUDA 12-compatible driver, or Apple Silicon with
-Metal. Install or verify it explicitly with `localbox update --mode prism`.
+The optional `prism` engine for Ternary Bonsai installs on Windows x64 with
+an NVIDIA CUDA 12-compatible driver, Apple Silicon with Metal, and Linux
+(x64/arm64: CUDA matched to your driver's major, Vulkan on AMD, CPU
+otherwise; the Linux path is not yet live-validated). The Windows build
+targets CUDA 12.4 — on a newer driver the installer warns that a mismatched
+build can emit garbage output; the launch smoke test catches that before an
+agent sees it. Install or verify explicitly with
+`localbox update --mode prism`.
 
 An NVIDIA GPU is recommended; VRAM is auto-detected via `nvidia-smi` and
 drives the guided launcher's fit hints.

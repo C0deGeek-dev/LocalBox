@@ -22,6 +22,12 @@
     "turboquant-plus-tqp-v0.2.0-windows-x64-cuda12.4.zip": "2cd1dac233226b90bc0564495b526d2baf1a435c0ee00b4be3513b6211ead744",
     "turboquant-plus-tqp-v0.2.0-windows-x64-cuda13.3.zip": "ce536b6dfed4051806b0c2d92c112f9b58644663010f90a1308cb3e075433276",
     "llama-prism-b1-9fcaed7-bin-win-cuda-12.4-x64.zip": "6d109e2930c0eaf2f729c3a6fc58dd7809ce2ba7047bfb294547cc389af6de5d",
-    "llama-prism-b9596-9fcaed7-bin-macos-arm64.tar.gz": "9c14bcdba8c99378ca3fd4dbf3c28f94bb8c528186a80f8bc40b5fdd7edb9937"
+    "llama-prism-b9596-9fcaed7-bin-macos-arm64.tar.gz": "9c14bcdba8c99378ca3fd4dbf3c28f94bb8c528186a80f8bc40b5fdd7edb9937",
+    "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.4-x64.tar.gz": "c9c266bdcedda6f457d69ac28cf7a43166affa5ee0f87c5067d47484e4098a71",
+    "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.8-x64.tar.gz": "d2d982ace4ef50b239a427f28568215b3617a9ee3b7e7fe11aea865a2ae0061a",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-x64.tar.gz": "e361c09f128a407c659d07361b008155e1eab0cd0ed0a12ccdcf7147f7c22948",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-x64.tar.gz": "6871dc3a26c27151f9d045d0d97e781b356286591b222ccbb0d5b975410bcbfb",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-arm64.tar.gz": "4bf7ac9514f78bf25bd09c4f70ee5c5b5885c4781bfe48d093c4374d141c11b8",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-arm64.tar.gz": "521fff87553d5a65a630587218539105dbdfaf29d057a0a1e37038c3e828973f"
   }
 }

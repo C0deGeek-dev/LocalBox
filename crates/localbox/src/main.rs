@@ -647,12 +647,9 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
                         require,
                     ))?;
                 }
-                let variant = match mode {
-                    Mode::PrismMl if cfg!(windows) => "cuda-12.4",
-                    Mode::PrismMl => "metal",
-                    _ => localbox::update::native_variant(driver_major, amd_gpu).as_str(),
-                };
-                write_stamp(&root, &release.tag, variant).map_err(|e| e.to_string())?;
+                let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
+                let variant = localbox::update::stamp_variant(mode, &names, driver_major, amd_gpu);
+                write_stamp(&root, &release.tag, &variant).map_err(|e| e.to_string())?;
                 println!("Installed {} into {}.", release.tag, root.display());
             }
             Err(message) => println!("Skipped: {message}"),
@@ -743,12 +740,9 @@ fn refresh_mode_pins(
     let pretty = serde_json::to_string_pretty(&serde_json::Value::Object(merged))
         .map_err(|e| e.to_string())?;
     std::fs::write(&settings_path, pretty + "\n").map_err(|e| e.to_string())?;
-    let variant = match mode {
-        Mode::PrismMl if cfg!(windows) => "cuda-12.4",
-        Mode::PrismMl => "metal",
-        _ => localbox::update::native_variant(driver_major, amd_gpu).as_str(),
-    };
-    write_stamp(root, &release.tag, variant).map_err(|e| e.to_string())?;
+    let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
+    let variant = localbox::update::stamp_variant(mode, &names, driver_major, amd_gpu);
+    write_stamp(root, &release.tag, &variant).map_err(|e| e.to_string())?;
     println!(
         "Refreshed {tag_key} to {} and recorded {} pin(s) in {}.",
         release.tag,
