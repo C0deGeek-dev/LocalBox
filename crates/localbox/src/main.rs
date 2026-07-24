@@ -37,12 +37,15 @@ Usage:
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
   localbox embed-stop                 stop the embedding server
-  localbox update [--mode <m>] [--check] [--refresh-pins]
+  localbox update [--mode <m>] [--check] [--refresh-pins] [--merge-models]
                                       install or update the llama.cpp binaries;
                                       --check also reports pin freshness, and
                                       --refresh-pins (explicit --mode) advances
                                       the pin to the latest release, verified
-                                      against the published release digest
+                                      against the published release digest;
+                                      --merge-models adds newly shipped catalog
+                                      models to llm-models.json (additive only,
+                                      existing entries untouched)
   localbox version                    print the launcher version envelope
   localbox nothink-proxy --listen <port> --target-port <port>
                                       host the no-think proxy (plumbing)
@@ -580,6 +583,9 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
                 .to_string(),
         );
     }
+    if has_flag(args, "--merge-models") {
+        return merge_shipped_models(&home, check_only);
+    }
     let modes: Vec<Mode> = match explicit_mode {
         Some(m) => vec![parse_mode(Some(m))?],
         None => vec![
@@ -658,6 +664,83 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
             report_pin_freshness(&runtime, &catalog, mode);
         }
     }
+    report_missing_shipped_models(&home);
+    Ok(())
+}
+
+/// After an update pass, say when this binary ships models the user's catalog
+/// does not know yet — the catalog itself is never modified here.
+fn report_missing_shipped_models(home: &std::path::Path) {
+    use localbox::guided::{missing_model_keys, SHIPPED_CATALOG};
+    let user_path = catalog_dir(home).join("llm-models.json");
+    let Ok(raw) = std::fs::read_to_string(&user_path) else {
+        return;
+    };
+    let (Ok(shipped), Ok(user)) = (
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(SHIPPED_CATALOG),
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            raw.trim_start_matches('\u{feff}'),
+        ),
+    ) else {
+        return;
+    };
+    let missing = missing_model_keys(&shipped, &user);
+    if !missing.is_empty() {
+        println!(
+            "New shipped model(s) not in your catalog: {}. Add them with \
+             `localbox update --merge-models` (your existing entries stay untouched).",
+            missing.join(", ")
+        );
+    }
+}
+
+/// The `--merge-models` action: add shipped models missing from the user's
+/// `llm-models.json`, touching nothing else. `--check` previews the keys
+/// without writing.
+fn merge_shipped_models(home: &std::path::Path, check_only: bool) -> Result<(), String> {
+    use localbox::guided::{
+        merge_missing_models, missing_model_keys, seed_installed_tree, SHIPPED_CATALOG,
+    };
+    let dir = catalog_dir(home);
+    // Refresh the shipped layers first so the on-disk example matches this
+    // binary; a missing user catalog is seeded complete and needs no merge.
+    seed_installed_tree(&dir);
+    let user_path = dir.join("llm-models.json");
+    let raw = std::fs::read_to_string(&user_path)
+        .map_err(|e| format!("could not read {}: {e}", user_path.display()))?;
+    let shipped: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(SHIPPED_CATALOG).map_err(|e| e.to_string())?;
+    let user: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| {
+            format!(
+                "{} is not valid JSON ({e}); fix it before merging",
+                user_path.display()
+            )
+        })?;
+    let missing = missing_model_keys(&shipped, &user);
+    if missing.is_empty() {
+        println!("Your catalog already has every shipped model.");
+        return Ok(());
+    }
+    if check_only {
+        println!(
+            "Would add {} shipped model(s) to {}: {}. Existing entries stay untouched.",
+            missing.len(),
+            user_path.display(),
+            missing.join(", ")
+        );
+        return Ok(());
+    }
+    let merged = merge_missing_models(&user, &shipped, &missing);
+    let pretty = serde_json::to_string_pretty(&serde_json::Value::Object(merged))
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&user_path, pretty + "\n").map_err(|e| e.to_string())?;
+    println!(
+        "Added {} shipped model(s) to {}: {}.",
+        missing.len(),
+        user_path.display(),
+        missing.join(", ")
+    );
     Ok(())
 }
 

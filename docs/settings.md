@@ -95,7 +95,10 @@ entries in `settings.json` yourself, then run `localbox update`; the install
 fails loudly if a hash doesn't match.
 
 The same keys in `settings.json` always win over `defaults.json`, so machine
-pins can lead or lag the shipped ones.
+pins can lead or lag the shipped ones. `defaults.json` is a *shipped* layer:
+it refreshes to match the installed binary (so shipped pins never go stale on
+an existing install) — never edit it directly; overrides belong in
+`settings.json`.
 
 ### Per-workspace default model
 

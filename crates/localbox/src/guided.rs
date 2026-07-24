@@ -1387,31 +1387,88 @@ pub fn catalog_dir(home: &Path) -> PathBuf {
     installed
 }
 
-/// First-run seeding of `~/.local-llm`: write the shipped defaults and the
-/// example catalog as the user's editable catalog. Existing files are never
-/// touched.
+/// The shipped defaults layer embedded in this binary (pins, ports, repos).
+pub const SHIPPED_DEFAULTS: &str = include_str!("../../../local-llm/defaults.json");
+
+/// The shipped example catalog embedded in this binary — the source of truth
+/// for which models a fresh install knows about.
+pub const SHIPPED_CATALOG: &str = include_str!("../../../local-llm/llm-models.example.json");
+
+/// Seeding of `~/.local-llm`. The two **shipped** layers (`defaults.json`,
+/// `llm-models.example.json`) are refreshed to match this binary whenever
+/// they differ — they carry release pins and the shipped model set, and a
+/// once-seeded copy silently pinned old installs to release-day state
+/// (user overrides belong in `settings.json`, which wins layer precedence,
+/// so refreshing shipped defaults never loses a user choice). The **user**
+/// layer (`llm-models.json`) is seeded when absent and never touched after —
+/// new shipped models reach it only through the explicit additive merge
+/// (`localbox update --merge-models`).
 pub fn seed_installed_tree(installed: &Path) {
     let _ = std::fs::create_dir_all(installed);
-    let seeds: [(&str, &str); 3] = [
-        (
-            "defaults.json",
-            include_str!("../../../local-llm/defaults.json"),
-        ),
-        (
-            "llm-models.example.json",
-            include_str!("../../../local-llm/llm-models.example.json"),
-        ),
-        (
-            "llm-models.json",
-            include_str!("../../../local-llm/llm-models.example.json"),
-        ),
-    ];
-    for (name, content) in seeds {
+    for (name, content) in [
+        ("defaults.json", SHIPPED_DEFAULTS),
+        ("llm-models.example.json", SHIPPED_CATALOG),
+    ] {
         let path = installed.join(name);
-        if !path.exists() {
+        let current = std::fs::read_to_string(&path).ok();
+        if current.as_deref() != Some(content) {
             let _ = std::fs::write(path, content);
         }
     }
+    let user_catalog = installed.join("llm-models.json");
+    if !user_catalog.exists() {
+        let _ = std::fs::write(user_catalog, SHIPPED_CATALOG);
+    }
+}
+
+/// Model keys the shipped catalog has that the user's catalog lacks. Both
+/// arguments are full catalog documents (`{"Models": {...}, ...}`).
+#[must_use]
+pub fn missing_model_keys(
+    shipped: &serde_json::Map<String, serde_json::Value>,
+    user: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<String> {
+    let models = |doc: &serde_json::Map<String, serde_json::Value>| {
+        doc.get("Models")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let user_models = models(user);
+    models(shipped)
+        .into_iter()
+        .filter(|(key, _)| !user_models.contains_key(key))
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// Add the named shipped models to the user's catalog document, changing
+/// nothing else: existing model entries, `CommandAliases`, and every other
+/// top-level key stay exactly as they were. Pure — the caller owns the write.
+#[must_use]
+pub fn merge_missing_models(
+    user: &serde_json::Map<String, serde_json::Value>,
+    shipped: &serde_json::Map<String, serde_json::Value>,
+    keys: &[String],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut merged = user.clone();
+    let mut models = merged
+        .get("Models")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let shipped_models = shipped
+        .get("Models")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for key in keys {
+        if let Some(def) = shipped_models.get(key) {
+            models.entry(key.clone()).or_insert_with(|| def.clone());
+        }
+    }
+    merged.insert("Models".to_string(), serde_json::Value::Object(models));
+    merged
 }
 
 #[cfg(test)]
@@ -1612,5 +1669,55 @@ mod tests {
             "{\"Models\":{}}",
             "seeding never overwrites an existing catalog"
         );
+        // The shipped layers, by contrast, are refreshed when they drift —
+        // a stale defaults.json would silently pin old installs to
+        // release-day engine pins (user overrides live in settings.json).
+        std::fs::write(installed.join("defaults.json"), "{\"stale\":true}").unwrap();
+        let _ = catalog_dir(home.path());
+        assert_eq!(
+            std::fs::read_to_string(installed.join("defaults.json")).unwrap(),
+            SHIPPED_DEFAULTS,
+            "shipped defaults refresh to match the binary"
+        );
+    }
+
+    #[test]
+    fn shipped_model_merge_is_additive_only() {
+        let shipped: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(SHIPPED_CATALOG).unwrap();
+        // A user catalog that predates the Bonsai entries, with one model the
+        // user edited (a custom context) and one alias.
+        let user: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{
+                "Models": {
+                    "tbonsai27b": { "Repo": "prism-ml/Ternary-Bonsai-27B-gguf", "Contexts": { "": 12345 } }
+                },
+                "CommandAliases": { "b": "tbonsai27b" }
+            }"#,
+        )
+        .unwrap();
+        let missing = missing_model_keys(&shipped, &user);
+        // Every shipped model except the one the user already has.
+        assert!(missing.contains(&"bonsai27b".to_string()));
+        assert!(!missing.contains(&"tbonsai27b".to_string()));
+
+        let merged = merge_missing_models(&user, &shipped, &missing);
+        // The user's edited entry is byte-identical at the value level…
+        assert_eq!(
+            merged["Models"]["tbonsai27b"]["Contexts"][""], 12345,
+            "an existing user entry is never rewritten"
+        );
+        // …the missing shipped models arrived…
+        assert_eq!(
+            merged["Models"]["bonsai27b"]["Repo"],
+            "prism-ml/Bonsai-27B-gguf"
+        );
+        // …and unrelated top-level keys survive.
+        assert_eq!(merged["CommandAliases"]["b"], "tbonsai27b");
+
+        // A catalog that already has everything merges to itself.
+        let full: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(SHIPPED_CATALOG).unwrap();
+        assert!(missing_model_keys(&shipped, &full).is_empty());
     }
 }

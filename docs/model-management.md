@@ -5,7 +5,22 @@ Part of the [LocalBox documentation](README.md).
 The model catalog is `~/.local-llm/llm-models.json` — an ordinary JSON file
 that is yours to edit. The first run seeds it from the shipped example, so you
 always have a working template with real entries next to it
-(`llm-models.example.json`).
+(`llm-models.example.json`; that example copy refreshes to match the
+installed binary, your catalog never does).
+
+When a newer LocalBox ships models your catalog predates, `localbox update`
+lists them, and:
+
+```
+localbox update --merge-models --check   # preview: which keys would be added
+localbox update --merge-models           # add them (additive only)
+```
+
+The merge only *adds* missing model keys from the shipped set — an entry you
+already have is never rewritten, and everything else in the file
+(`CommandAliases`, your edits) stays as it was. Note for source checkouts: run
+from a directory outside the repo — inside it, `local-llm/` in the checkout is
+the live catalog by design.
 
 A catalog entry:
 

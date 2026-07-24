@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Added Bonsai 27B 1-bit (`bonsai27b`, GGUF Q1_0, ~3.8 GB) to the shipped
+  catalog. Q1_0 is upstream llama.cpp, so it runs in plain native mode on the
+  pinned mainline build — no Prism fork required — making it the working
+  fallback when the Prism engine is unavailable; vision via its own mmproj.
+- Shipped configuration no longer goes stale on existing installs. The two
+  shipped layers (`defaults.json`, `llm-models.example.json`) now refresh to
+  match the installed binary — previously they were seeded once and never
+  updated, so new release pins and engine settings silently never reached an
+  existing `~/.local-llm` (user overrides belong in `settings.json`, which
+  always wins). Your editable `llm-models.json` is still never overwritten:
+  `localbox update` now reports shipped models your catalog predates, and a
+  new `localbox update --merge-models` adds exactly those missing entries —
+  additive only, existing entries and aliases untouched, `--check` previews.
 - The Prism engine now installs on Linux (x64/arm64): CUDA archives matched
   to the driver's CUDA major (newest toolkit build within it), Vulkan on an
   AMD GPU, the plain CPU archive otherwise; rocm and KleidiAI archives are

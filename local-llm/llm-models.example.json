@@ -125,6 +125,39 @@
     "f16": "F16 · ~53.8 GB · full-precision reference"
     },
     "VisionModule": "Ternary-Bonsai-27B-mmproj-Q8_0.gguf"
+  },
+  "bonsai27b": {
+    "DisplayName": "Bonsai 27B 1-bit GGUF",
+    "Root": "bonsai27b",
+    "SourceType": "gguf",
+    "Repo": "prism-ml/Bonsai-27B-gguf",
+    "Quants": {
+    "q1-0": "Bonsai-27B-Q1_0.gguf",
+    "f16": "Bonsai-27B-F16.gguf"
+    },
+    "Quant": "q1-0",
+    "Parser": "qwen36",
+    "LimitTools": true,
+    "Tier": "experimental",
+    "Contexts": {
+    "": 65536,
+    "16k": 16384,
+    "32k": 32768,
+    "64k": 65536,
+    "128k": 131072,
+    "256k": 262144
+    },
+    "Strict": true,
+    "Description": "Prism ML Bonsai 27B 1-bit — Qwen3.6-27B at ~1.125 effective bits/weight (GGUF Q1_0, ~3.8 GB deployed). Q1_0 is merged upstream, so this runs on the pinned mainline llama.cpp in native mode — no fork required — making it the fallback when the Prism engine is unavailable or misbehaves. Same hybrid attention and native 262k window as the ternary pack; expect lower quality than Q2_0 ternary. Vision via mmproj (loaded only for image input).",
+    "QuantSizesGB": {
+    "q1-0": 3.8,
+    "f16": 53.8
+    },
+    "QuantNotes": {
+    "q1-0": "Q1_0 1-bit · ~3.8 GB · mainline llama.cpp (native mode)",
+    "f16": "F16 · ~53.8 GB · full-precision reference"
+    },
+    "VisionModule": "Bonsai-27B-mmproj-Q8_0.gguf"
   }
   },
   "CommandAliases": {}

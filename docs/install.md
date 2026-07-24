@@ -28,7 +28,13 @@ localbox status                  # serve health and the remedy when down
 ```
 
 The first run seeds `~/.local-llm` with the shipped defaults and an editable
-model catalog (`llm-models.json`). Existing files are never overwritten.
+model catalog (`llm-models.json`). Your catalog and `settings.json` are never
+overwritten; the two *shipped* layers (`defaults.json`,
+`llm-models.example.json`) refresh to match the installed binary so release
+pins and the shipped model list never go stale — put your own overrides in
+`settings.json`, which always wins. When a new LocalBox version ships models
+your catalog predates, `localbox update` says so, and
+`localbox update --merge-models` adds them without touching your entries.
 `llama-server` binaries download pinned and checksum-verified on first use
 (`localbox update`); GGUF weights download from Hugging Face on first launch.
 
