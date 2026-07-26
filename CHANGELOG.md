@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.4.0 - 2026-07-26
+
+Coordinated LocalX release.
+
 - Classic draft-model speculative decoding is a first-class catalog surface.
   A model entry can name a `DraftModule` (a drafter GGUF in its repo);
   `localbox launch <model> --draft` resolves it like the vision projector —
