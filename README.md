@@ -59,6 +59,23 @@ path local.
 
 ## Quick start
 
+The quickest install is the LocalX one-liner, which installs `localbox`
+alongside the rest of the stack at one version — no Rust toolchain needed:
+
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/C0deGeek-dev/LocalPilot/main/install/install.sh | sh
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/C0deGeek-dev/LocalPilot/main/install/install.ps1 | iex
+```
+
+The tools are cut as a set and only tested together, so they are installed as a
+set; `localpilot update --all` re-runs it. Each release also publishes verified
+per-platform archives if you would rather install `localbox` on its own.
+
 LocalBox is a single native binary — no PowerShell, .NET, or Python needed.
 (On Windows, AMD GPU-name detection may call the vendor's `powershell.exe`
 as a last-resort probe; the NVIDIA path and everything else are pure native.)
