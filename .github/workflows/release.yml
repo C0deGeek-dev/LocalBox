@@ -38,7 +38,7 @@ jobs:
             ext: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            ext: zip
+            ext: tar.gz
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -75,7 +75,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/localbox | Out-Null
           Copy-Item target/${{ matrix.target }}/release/localbox.exe dist/localbox/
           Copy-Item LICENSE, README.md, CHANGELOG.md dist/localbox/
-          Compress-Archive -Path dist/localbox/* -DestinationPath localbox-${{ matrix.target }}.zip
+          tar -C dist -czf localbox-${{ matrix.target }}.tar.gz localbox
       # Digest computed where the bytes are produced, so it covers exactly what
       # was archived. It proves a download was not corrupted or truncated; it
       # does not prove origin — only signing does that, and this repo does not
@@ -131,11 +131,10 @@ jobs:
           {
             printf '{\n  "manifest_version": 1,\n  "tool": "localbox",\n  "version": "%s",\n  "artifacts": [\n' "$version"
             first=1
-            for archive in localbox-*.tar.gz localbox-*.zip; do
+            for archive in localbox-*.tar.gz; do
               [ -e "$archive" ] || continue
               target="${archive#localbox-}"
               target="${target%.tar.gz}"
-              target="${target%.zip}"
               digest=$(cut -d' ' -f1 < "$archive.sha256")
               size=$(wc -c < "$archive" | tr -d ' ')
               [ $first -eq 1 ] || printf ',\n'
@@ -160,6 +159,5 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             staged/localbox-*.tar.gz
-            staged/localbox-*.zip
             staged/SHA256SUMS
             staged/manifest.json
