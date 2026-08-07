@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v2.8.0 - 2026-08-07
+
+Coordinated LocalX release.
+
 ## v2.7.0 - 2026-08-02
 
 Coordinated LocalX release.
