@@ -97,6 +97,12 @@ impl LlamaLauncher {
         self.catalog.required_mode(key)
     }
 
+    /// Resolve a catalog key, advertised command alias, or model folder name.
+    #[must_use]
+    pub fn resolve_model_key(&self, name: &str) -> Option<String> {
+        self.catalog.resolve_model_key(name)
+    }
+
     fn timeout_setting(&self, key: &str) -> u32 {
         self.catalog
             .setting(key)

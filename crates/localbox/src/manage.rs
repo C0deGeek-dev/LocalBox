@@ -10,7 +10,9 @@ use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
 use localbox_launcher::catalog::Catalog;
+use localbox_launcher::profile::{resolve_run_profile, RunProfileQuery};
 use localx_llama_core::ModelDef;
+use serde::Serialize;
 
 use crate::guided::model_tier;
 
@@ -18,28 +20,7 @@ use crate::guided::model_tier;
 /// `CommandAliases` entry, or the model's on-disk folder name.
 #[must_use]
 pub fn resolve_model_key(catalog: &Catalog, name: &str) -> Option<String> {
-    if catalog.model(name).is_some() {
-        return Some(name.to_string());
-    }
-    if let Some(aliases) = catalog
-        .setting("CommandAliases")
-        .and_then(serde_json::Value::as_object)
-    {
-        if let Some(key) = aliases.get(name).and_then(serde_json::Value::as_str) {
-            if catalog.model(key).is_some() {
-                return Some(key.to_string());
-            }
-        }
-    }
-    catalog
-        .model_keys()
-        .iter()
-        .find(|key| {
-            catalog
-                .model(key)
-                .is_some_and(|def| def.root.as_deref() == Some(name))
-        })
-        .map(|key| (*key).to_string())
+    catalog.resolve_model_key(name)
 }
 
 /// Tier display order: the known tiers first, anything else after, sorted.
@@ -133,6 +114,162 @@ pub fn render_model_overview(catalog: &Catalog) -> String {
         }
     }
     out.push_str("\nDetails: localbox info <model>\n");
+    out
+}
+
+/// Version of the `localbox models --json` cross-process contract.
+pub const MODELS_CATALOG_SCHEMA: u32 = 1;
+
+/// Effective saved-profile state advertised for one catalog model.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunProfileSummary {
+    /// `tuned` when a saved entry resolves, otherwise `defaults`.
+    pub source: String,
+    /// Exact inspected profile path, for diagnostics.
+    pub source_path: String,
+    /// Machine-readable reason when defaults would be used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Visible warning a parent process must show before fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    /// Resolved tuned quant, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quant: Option<String>,
+    /// Resolved tuned context key, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// Resolved tuned engine, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+/// One launchable catalog entry. The canonical accepted name is intentionally
+/// the first field so both human and chat renderers put it first.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelCatalogEntry {
+    /// Canonical key accepted by `localbox serve`.
+    pub name: String,
+    /// Additional accepted spellings owned by the LocalBox catalog.
+    pub aliases: Vec<String>,
+    /// Human label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Hugging Face model identity.
+    pub repository: String,
+    /// Catalog default quant identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_quant: Option<String>,
+    /// Catalog-required engine, when any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_mode: Option<String>,
+    /// Effective saved-profile state for a default launch.
+    pub run_profile: RunProfileSummary,
+    /// Whether this model is serving now, when LocalBox can establish it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+}
+
+/// Stable JSON envelope for LocalPilot and other local callers.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelsCatalog {
+    /// Contract schema version.
+    pub schema: u32,
+    /// Sorted launchable catalog entries.
+    pub models: Vec<ModelCatalogEntry>,
+}
+
+fn mode_name(mode: localx_llama_core::Mode) -> String {
+    if mode == localx_llama_core::Mode::PrismMl {
+        "prism".to_string()
+    } else {
+        mode.as_str().to_string()
+    }
+}
+
+/// Build the LocalBox-owned launch catalog and tuned/default diagnostics.
+#[must_use]
+pub fn models_catalog(catalog: &Catalog, home: &Path) -> ModelsCatalog {
+    let models = catalog
+        .model_keys()
+        .into_iter()
+        .filter_map(|key| {
+            let def = catalog.model(key)?;
+            let profile = resolve_run_profile(home, key, RunProfileQuery::default());
+            let warning = profile.warning(key);
+            let entry = profile.entry.as_ref();
+            Some(ModelCatalogEntry {
+                name: key.to_string(),
+                aliases: catalog
+                    .aliases_for(key)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                display_name: def.display_name.clone(),
+                repository: def.repo.clone(),
+                default_quant: def.quant.clone(),
+                required_mode: catalog.required_mode(key).map(mode_name),
+                run_profile: RunProfileSummary {
+                    source: if entry.is_some() { "tuned" } else { "defaults" }.to_string(),
+                    source_path: profile.path.display().to_string(),
+                    reason: profile
+                        .unavailable
+                        .map(|reason| reason.as_str().to_string()),
+                    warning,
+                    quant: entry.map(|entry| entry.quant.clone()),
+                    context: entry.map(|entry| entry.context_key.clone()),
+                    mode: entry.map(|entry| mode_name(entry.mode)),
+                },
+                active: None,
+            })
+        })
+        .collect();
+    ModelsCatalog {
+        schema: MODELS_CATALOG_SCHEMA,
+        models,
+    }
+}
+
+/// Concise human rendering of the same contract used by `--json`.
+#[must_use]
+pub fn render_models_catalog(catalog: &ModelsCatalog) -> String {
+    let mut out = String::from("Launchable LocalBox models\n");
+    for model in &catalog.models {
+        let aliases = if model.aliases.is_empty() {
+            String::new()
+        } else {
+            format!(" (aliases: {})", model.aliases.join(", "))
+        };
+        let display = model.display_name.as_deref().unwrap_or(&model.repository);
+        let catalog_quant = model.default_quant.as_deref().unwrap_or("catalog default");
+        let run = if model.run_profile.source == "tuned" {
+            format!(
+                "tuned {} / {} / {}",
+                model
+                    .run_profile
+                    .quant
+                    .as_deref()
+                    .unwrap_or("default quant"),
+                model
+                    .run_profile
+                    .context
+                    .as_deref()
+                    .unwrap_or("default context"),
+                model.run_profile.mode.as_deref().unwrap_or("default mode")
+            )
+        } else {
+            format!(
+                "defaults ({})",
+                model.run_profile.reason.as_deref().unwrap_or("not tuned")
+            )
+        };
+        let _ = writeln!(
+            out,
+            "{}{} — {} · {} · quant {} · {}",
+            model.name, aliases, display, model.repository, catalog_quant, run
+        );
+    }
+    out.push_str("\nStart one: localbox serve <name>\n");
     out
 }
 
@@ -302,6 +439,33 @@ mod tests {
         assert!(detail.contains("Tier     : recommended"));
         let err = render_model_detail(&catalog, "nope").unwrap_err();
         assert!(err.contains("newbie, oldie, q36apex"));
+    }
+
+    #[test]
+    fn models_contract_is_versioned_key_first_and_reports_profile_state() {
+        let home = tempfile::tempdir().unwrap();
+        let contract = models_catalog(&catalog(), home.path());
+        assert_eq!(contract.schema, MODELS_CATALOG_SCHEMA);
+        let apex = contract
+            .models
+            .iter()
+            .find(|model| model.name == "q36apex")
+            .unwrap();
+        assert_eq!(apex.aliases, vec!["apex"]);
+        assert_eq!(apex.default_quant.as_deref(), Some("apex-i-quality"));
+        assert_eq!(apex.run_profile.source, "defaults");
+        assert_eq!(apex.run_profile.reason.as_deref(), Some("missing"));
+        assert!(apex
+            .run_profile
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("localbench"));
+        let json = serde_json::to_string(&contract).unwrap();
+        assert!(json.contains(r#""schema":1"#));
+        let rendered = render_models_catalog(&contract);
+        assert!(rendered.contains("q36apex (aliases: apex)"));
+        assert!(rendered.contains("quant apex-i-quality"));
     }
 
     #[test]

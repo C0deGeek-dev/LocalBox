@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- `localbox launch` and `localbox serve` now apply a compatible saved
+  LocalBench profile automatically on every launch path, including launches
+  requested by LocalPilot. `--no-auto-best` deliberately uses catalog/settings
+  defaults. If a profile is missing, invalid, unsupported, or does not match
+  pinned fields, interactive launches warn and ask before falling back;
+  non-interactive launches refuse unless the caller has reviewed the warning
+  and passes `--allow-untuned`. The older `--auto-best` spelling remains as a
+  strict compatibility request that refuses fallback.
+- Added `localbox models` and versioned `localbox models --json` catalog output.
+  Canonical launch names appear first alongside accepted aliases, model/quant
+  identity, required engine, and the resolved tuned/default run-profile state.
+  Launch and catalog output share the same alias resolver.
+
 ## v2.8.1 - 2026-08-07
 
 Coordinated LocalX release.

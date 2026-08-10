@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use localbox_launcher::catalog::Catalog;
 use localbox_launcher::orchestrate::{plan_launch, LaunchRequest};
 use localbox_launcher::permissions::JsonSettingsStore;
+use localbox_launcher::profile::{resolve_run_profile, select_run_profile, RunProfileQuery};
 use localbox_tui::customize::{
     customize_menu_with_required_mode, locked_explanation, save_gate, set_auto_tune_off,
     set_auto_tune_on, CustomizeAction,
@@ -26,6 +27,7 @@ use localbox_tui::ui::{
     CONFIRM_ROWS,
 };
 use localbox_tui::vocab::{glossary, gpu_banner, plan_summary, target_label};
+use localx_llama_core::tuner::Profile;
 use localx_llama_core::{Mode, ModelDef, TunerBestConfig, TunerEntry};
 use ratatui::style::Color;
 
@@ -81,41 +83,20 @@ pub fn pick_auto_best<'a>(
     plan: &GuidedPlan,
     vram_gb: i64,
 ) -> Option<&'a TunerEntry> {
-    if !store.schema_supported() {
-        return None;
-    }
-    let mut candidates: Vec<&TunerEntry> = store
-        .entries
-        .iter()
-        .filter(|e| {
-            e.quant == plan.quant && e.context_key == plan.context_key && e.mode == plan.mode
-        })
-        .collect();
-    if candidates.is_empty() {
-        return None;
-    }
-    let wanted_profile = plan.auto_best_profile.to_ascii_lowercase();
-    candidates.sort_by(|a, b| {
-        let a_profile = profile_rank(a, &wanted_profile);
-        let b_profile = profile_rank(b, &wanted_profile);
-        a_profile
-            .cmp(&b_profile)
-            .then_with(|| {
-                (a.vram_gb - vram_gb)
-                    .abs()
-                    .cmp(&(b.vram_gb - vram_gb).abs())
-            })
-            .then_with(|| b.score.total_cmp(&a.score))
-    });
-    candidates.first().copied()
-}
-
-fn profile_rank(entry: &TunerEntry, wanted: &str) -> u8 {
-    let name = match entry.profile {
-        localx_llama_core::tuner::Profile::Pure => "pure",
-        localx_llama_core::tuner::Profile::Balanced => "balanced",
-    };
-    u8::from(name != wanted)
+    select_run_profile(
+        store,
+        RunProfileQuery {
+            quant: Some(&plan.quant),
+            context_key: Some(&plan.context_key),
+            mode: Some(plan.mode),
+            preferred_profile: Some(if plan.auto_best_profile.eq_ignore_ascii_case("pure") {
+                Profile::Pure
+            } else {
+                Profile::Balanced
+            }),
+            vram_gb: Some(vram_gb),
+        },
+    )
 }
 
 /// Map the guided plan to the launch request and agent, folding in AutoBest
@@ -621,8 +602,9 @@ fn confirm_flow(
         };
         match CONFIRM_ROWS[choice].1 {
             ConfirmAction::LaunchNow => {
-                launch_guided(chooser, home, &plan);
-                return;
+                if launch_guided(chooser, home, &plan) {
+                    return;
+                }
             }
             ConfirmAction::Customize => {
                 customize_flow(
@@ -1304,22 +1286,7 @@ fn auto_tune_flow(
     }
 }
 
-fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
-    // Hand the screen back to normal printing: downloads, server spawn,
-    // and the agent all write plain lines from here on.
-    chooser.release();
-    chooser.notice(&format!("Launching {} …", plan.model_key));
-    let auto_store = if plan.use_auto_best {
-        let path = home
-            .join(".local-llm")
-            .join("tuner")
-            .join(format!("best-{}.json", plan.model_key));
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<TunerBestConfig>(&raw).ok())
-    } else {
-        None
-    };
+fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) -> bool {
     // The same launcher construction as the CLI path (shared VRAM ladder:
     // config > probe > fallback) — a raw probe here once ignored the VRAMGB
     // setting and painted every quant `over` on a no-probe host.
@@ -1327,18 +1294,46 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
         Ok(l) => l,
         Err(e) => {
             chooser.announce_error(&plain_warning("launch", &e));
-            return;
+            return true;
         }
     };
     let vram = i64::from(localx_llama_core::Launcher::vram_gb(&launcher));
-    let entry = auto_store
-        .as_ref()
-        .and_then(|store| pick_auto_best(store, plan, vram));
-    if plan.use_auto_best && entry.is_none() {
-        chooser.notice(
-            "No auto-tuned profile matches these settings; using the recommended defaults.",
-        );
+    let profile = plan.use_auto_best.then(|| {
+        resolve_run_profile(
+            home,
+            &plan.model_key,
+            RunProfileQuery {
+                quant: Some(&plan.quant),
+                context_key: Some(&plan.context_key),
+                mode: Some(plan.mode),
+                preferred_profile: Some(if plan.auto_best_profile.eq_ignore_ascii_case("pure") {
+                    Profile::Pure
+                } else {
+                    Profile::Balanced
+                }),
+                vram_gb: Some(vram),
+            },
+        )
+    });
+    if let Some(unavailable) = profile.as_ref().filter(|profile| !profile.is_tuned()) {
+        let warning = unavailable
+            .warning(&plan.model_key)
+            .unwrap_or_else(|| "No tuned profile is available.".to_string());
+        chooser.set_panel(Some(("Tuned settings unavailable".to_string(), warning)));
+        let rows = [
+            MenuRow::plain("Configure first (return to Auto-tune)"),
+            MenuRow::plain("Continue once with LocalBox defaults"),
+        ];
+        if chooser.choose("Choose how to continue", &rows, 0) != Some(1) {
+            return false;
+        }
     }
+
+    // Hand the screen back to normal printing only after the fallback choice:
+    // downloads, server spawn, and the agent all write plain lines from here.
+    chooser.release();
+    chooser.notice(&format!("Launching {} …", plan.model_key));
+    let entry = profile.as_ref().and_then(|profile| profile.entry.as_ref());
     let (mut request, agent) = request_from_guided(plan, entry);
     // The same finalization as the CLI path: settings-file params under any
     // AutoBest values, then the single-session one-slot default — without it a
@@ -1349,7 +1344,7 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
         Ok(p) => p,
         Err(e) => {
             chooser.announce_error(&plain_warning("launch", &e.to_string()));
-            return;
+            return true;
         }
     };
     for note in &resolved.notes {
@@ -1366,6 +1361,7 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) {
         }
         Err(e) => chooser.announce_error(&plain_warning("launch", &e.to_string())),
     }
+    true
 }
 
 /// The catalog directory: the installed `~/.local-llm` tree, or a repo

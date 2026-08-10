@@ -160,6 +160,49 @@ impl Catalog {
         self.models.keys().map(String::as_str).collect()
     }
 
+    /// Resolve a copy-pasteable model name to its canonical catalog key.
+    ///
+    /// Exact keys win, followed by `CommandAliases`, then the model's on-disk
+    /// folder name. Launching and catalog inspection deliberately share this
+    /// resolver so an alias advertised by `localbox models` always works with
+    /// `localbox serve`.
+    #[must_use]
+    pub fn resolve_model_key(&self, name: &str) -> Option<String> {
+        if self.model(name).is_some() {
+            return Some(name.to_string());
+        }
+        if let Some(key) = self
+            .setting("CommandAliases")
+            .and_then(Value::as_object)
+            .and_then(|aliases| aliases.get(name))
+            .and_then(Value::as_str)
+            .filter(|key| self.model(key).is_some())
+        {
+            return Some(key.to_string());
+        }
+        self.model_keys()
+            .into_iter()
+            .find(|key| {
+                self.model(key)
+                    .is_some_and(|def| def.root.as_deref() == Some(name))
+            })
+            .map(str::to_string)
+    }
+
+    /// Every configured command alias for a canonical key, sorted.
+    #[must_use]
+    pub fn aliases_for(&self, key: &str) -> Vec<&str> {
+        let mut aliases = self
+            .setting("CommandAliases")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|entries| entries.iter())
+            .filter_map(|(alias, target)| (target.as_str() == Some(key)).then_some(alias.as_str()))
+            .collect::<Vec<_>>();
+        aliases.sort_unstable();
+        aliases
+    }
+
     /// A merged scalar setting, when present.
     #[must_use]
     pub fn setting(&self, key: &str) -> Option<&Value> {
@@ -235,6 +278,21 @@ mod tests {
         let def = catalog.model("q36apex").unwrap();
         assert_eq!(def.root.as_deref(), Some("q36apex"));
         assert_eq!(def.quants["apex-i-quality"].file, "APEX-I-Quality.gguf");
+    }
+
+    #[test]
+    fn advertised_aliases_and_folders_use_the_same_resolver_as_launches() {
+        let catalog = Catalog::from_layers(&Map::new(), &obj(CATALOG), &Map::new()).unwrap();
+        assert_eq!(
+            catalog.resolve_model_key("apex").as_deref(),
+            Some("q36apex")
+        );
+        assert_eq!(
+            catalog.resolve_model_key("q36apex").as_deref(),
+            Some("q36apex")
+        );
+        assert_eq!(catalog.aliases_for("q36apex"), vec!["apex"]);
+        assert!(catalog.resolve_model_key("missing").is_none());
     }
 
     #[test]

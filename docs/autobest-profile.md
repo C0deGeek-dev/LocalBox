@@ -6,10 +6,21 @@ The guided launcher's auto-tune replay loads saved profiles from:
 ~/.local-llm/tuner/best-<key>.json
 ```
 
-A headless launch applies the same profile only when asked:
-`localbox serve <model> --auto-best` (or `launch --auto-best`) folds in the
-saved entry's quant/context/mode and tuned launch params; explicit
-`--quant`/`--context`/`--mode` still filter and override.
+Every launch path—including headless `localbox serve <model>`, `launch`, the
+guided launcher, and a LocalPilot-triggered serve—consults the same resolver
+and applies a compatible saved entry automatically. The entry supplies its
+quant/context/mode and tuned launch params; explicit
+`--quant`/`--context`/`--mode` remain filters and override those fields.
+
+If no compatible profile is usable, LocalBox shows the exact reason and source
+path before it can use catalog/settings defaults. Interactive CLI and guided
+launches ask with a default-no choice. A non-interactive caller must pass
+`--allow-untuned` after presenting that warning to its user. Use
+`--no-auto-best` when defaults are the deliberate policy; the older
+`--auto-best` option remains accepted as a strict compatibility spelling and
+refuses fallback. Run `localbox models` for the concise human catalog or
+`localbox models --json` for the versioned schema-1 contract consumed by
+LocalPilot.
 
 The current compatibility schema is `localbox-autobest-v1`. The top
 level object keeps launcher-owned routing fields and an `entries` array. Each

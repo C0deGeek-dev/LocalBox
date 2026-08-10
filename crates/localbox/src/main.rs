@@ -5,6 +5,7 @@
 //! thread with an explicit stack size — Windows main threads are smaller
 //! than the Linux/macOS default and deep CLI/TUI stacks overflow there.
 
+use std::io::{IsTerminal, Write as _};
 use std::process::ExitCode;
 
 use localbox::exec::{build_launcher, home_dir};
@@ -16,7 +17,8 @@ use localbox_launcher::launcher::LlamaLauncher;
 use localbox_launcher::orchestrate::{
     plan_launch, smoke_fallback, LaunchPlan, LaunchRequest, SmokeFallback,
 };
-use localx_llama_core::{Launcher, Mode, TunerBestConfig, TunerEntry};
+use localbox_launcher::profile::{resolve_run_profile, RunProfileQuery, RunProfileResolution};
+use localx_llama_core::{Launcher, Mode};
 use localx_llama_runtime::proxy::{serve_proxy_on, ProxyConfig};
 
 const DEFAULT_PROXY_PORT: u16 = 11_435;
@@ -33,6 +35,7 @@ Usage:
   localbox stop                       stop every model server and the proxy
   localbox status                     report serve health and the remedy
   localbox info [model]               list the configured models, or one in detail
+  localbox models [--json]            list launchable models and tuned-profile state
   localbox purge                      stop servers and delete downloaded model files
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
@@ -54,9 +57,9 @@ Options for launch/serve:
   --context <key>       context window key from the model catalog (e.g. 64k)
   --mode <m>            native | turboquant | mtpturbo | prism   (default native)
   --quant <key>         quant variant from the catalog (default per model)
-  --auto-best           apply the saved localbench profile (best-<model>.json):
-                        tuned quant/context/mode/KV-cache/n-cpu-moe. Explicit
-                        --quant/--context/--mode still filter and override.
+  --auto-best           compatibility spelling: require the saved tuned profile
+  --no-auto-best        explicitly use catalog/settings defaults instead
+  --allow-untuned       allow non-interactive fallback when no tuned profile exists
   --vision              load the vision projector when the model has one
   --draft               load the catalog's draft model for speculative
                         decoding (faster generation; needs a DraftModule)
@@ -95,6 +98,7 @@ fn run() -> ExitCode {
         "stop" => cmd_stop(),
         "status" => cmd_status(&args[1..]),
         "info" => cmd_info(&args[1..]),
+        "models" => cmd_models(&args[1..]),
         "purge" => cmd_purge(),
         "log" => cmd_log(&args[1..]),
         "embed-serve" => cmd_embed_serve(&args[1..]),
@@ -172,72 +176,8 @@ fn parse_agent(value: Option<&str>, default: AgentKind) -> Result<AgentKind, Str
     }
 }
 
-/// Fold the saved localbench profile (`best-<model>.json`) into the request:
-/// adopt its quant/context/mode for the fields the user did not pin, and its
-/// tuned launch params (KV types, `n-cpu-moe`, flash-attn, …). Fails loudly when
-/// no profile exists so `--auto-best` never silently launches raw defaults.
-fn apply_saved_auto_best(
-    request: &mut LaunchRequest,
-    home: &std::path::Path,
-    explicit_mode: bool,
-    explicit_quant: bool,
-    explicit_context: bool,
-) -> Result<(), String> {
-    let path = home
-        .join(".local-llm")
-        .join("tuner")
-        .join(format!("best-{}.json", request.key));
-    let store = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<TunerBestConfig>(&raw).ok())
-        .ok_or_else(|| {
-            format!(
-                "no saved AutoBest profile at {} — run `localbench findbest {}` first, \
-                 or launch through the guided launcher",
-                path.display(),
-                request.key
-            )
-        })?;
-    if !store.schema_supported() {
-        return Err("the saved AutoBest profile uses an unsupported schema version".to_string());
-    }
-    // Honor any pinned quant/context/mode as filters; among the rest, the
-    // highest-scoring entry wins.
-    let mut candidates: Vec<&TunerEntry> = store
-        .entries
-        .iter()
-        .filter(|e| !explicit_quant || request.quant.as_deref() == Some(e.quant.as_str()))
-        .filter(|e| !explicit_context || e.context_key == request.context_key)
-        .filter(|e| !explicit_mode || e.mode == request.mode)
-        .collect();
-    if candidates.is_empty() {
-        return Err("no saved AutoBest entry matches the requested quant/context/mode".to_string());
-    }
-    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
-    let entry = candidates[0];
-    if !explicit_mode {
-        request.mode = entry.mode;
-    }
-    if !explicit_quant {
-        request.quant = Some(entry.quant.clone());
-    }
-    if !explicit_context {
-        request.context_key = entry.context_key.clone();
-    }
-    request.params = entry.overrides.to_launch_params();
-    eprintln!(
-        "AutoBest: {} · {} · {} (score {:.0} {})",
-        entry.quant,
-        entry.context_key,
-        entry.mode.as_str(),
-        entry.score,
-        entry.score_unit,
-    );
-    Ok(())
-}
-
 /// Build the launch request a `launch`/`serve` invocation asks for. Called for
-/// the primary plan and — with `auto_best` forced off — for the native retry
+/// the primary plan and — with profiles disabled — for the native retry
 /// after a failed smoke, so the retry re-derives clean defaults instead of
 /// carrying fork-tuned AutoBest params/quant/context into the native build.
 fn build_request(
@@ -245,16 +185,19 @@ fn build_request(
     model: &str,
     home: &std::path::Path,
     launcher: &LlamaLauncher,
-    auto_best: bool,
-) -> Result<LaunchRequest, String> {
-    launcher.model_def(model).map_err(|e| e.to_string())?;
-    let required_mode = launcher.required_mode(model);
+    disable_profile: bool,
+) -> Result<(LaunchRequest, Option<RunProfileResolution>), String> {
+    let key = launcher.resolve_model_key(model).ok_or_else(|| {
+        format!("unknown model '{model}' (run `localbox models` for accepted names)")
+    })?;
+    launcher.model_def(&key).map_err(|e| e.to_string())?;
+    let required_mode = launcher.required_mode(&key);
     let explicit_mode = flag_value(args, "--mode").is_some();
     let mut mode = parse_mode(flag_value(args, "--mode"))?;
     if let Some(required) = required_mode {
         if explicit_mode && mode != required {
             return Err(format!(
-                "{model} requires --mode {}; '{}' is incompatible",
+                "{key} requires --mode {}; '{}' is incompatible",
                 cli_mode_name(required),
                 cli_mode_name(mode)
             ));
@@ -262,7 +205,7 @@ fn build_request(
         mode = required;
     }
     let mut request = LaunchRequest::new(
-        model.to_string(),
+        key,
         flag_value(args, "--context").unwrap_or("").to_string(),
         mode,
     );
@@ -271,18 +214,27 @@ fn build_request(
     request.use_draft = has_flag(args, "--draft");
     request.keep_thinking = has_flag(args, "--keep-thinking");
 
-    // Opt-in: fold in the saved localbench profile so a headless serve/launch uses
-    // the tuned quant/context/mode + launch params (KV types, n-cpu-moe, …) that
-    // the interactive guided launcher applies — instead of raw defaults that OOM a
-    // large model. Explicit --quant/--context/--mode filter and override.
-    if auto_best {
-        apply_saved_auto_best(
-            &mut request,
+    let explicit_quant = flag_value(args, "--quant").is_some();
+    let explicit_context = flag_value(args, "--context").is_some();
+    let profile = (!disable_profile && !has_flag(args, "--no-auto-best")).then(|| {
+        resolve_run_profile(
             home,
+            &request.key,
+            RunProfileQuery {
+                quant: explicit_quant.then_some(request.quant.as_deref()).flatten(),
+                context_key: explicit_context.then_some(request.context_key.as_str()),
+                mode: (explicit_mode || required_mode.is_some()).then_some(request.mode),
+                ..RunProfileQuery::default()
+            },
+        )
+    });
+    if let Some(profile) = &profile {
+        profile.apply_to_request(
+            &mut request,
             explicit_mode || required_mode.is_some(),
-            flag_value(args, "--quant").is_some(),
-            flag_value(args, "--context").is_some(),
-        )?;
+            explicit_quant,
+            explicit_context,
+        );
     }
 
     // Settings are the lowest precedence (an AutoBest profile or a flag already
@@ -291,7 +243,47 @@ fn build_request(
     // default is now multi-slot auto, which allocates the full context per slot
     // and OOMs a model sized for one slot. See `apply_session_defaults`.
     request.apply_session_defaults(&launcher.settings_launch_params());
-    Ok(request)
+    Ok((request, profile))
+}
+
+fn confirm_profile_fallback(
+    args: &[String],
+    key: &str,
+    profile: Option<&RunProfileResolution>,
+) -> Result<(), String> {
+    let Some(profile) = profile.filter(|profile| !profile.is_tuned()) else {
+        return Ok(());
+    };
+    let warning = profile
+        .warning(key)
+        .unwrap_or_else(|| "Warning: tuned settings are unavailable.".to_string());
+    eprintln!("{warning}");
+    if has_flag(args, "--auto-best") {
+        return Err("--auto-best requires a usable tuned profile; launch cancelled".to_string());
+    }
+    if has_flag(args, "--allow-untuned") || has_flag(args, "--dry-run") {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(
+            "refusing an untuned non-interactive launch; configure LocalBench or retry with --allow-untuned after reviewing the warning"
+                .to_string(),
+        );
+    }
+    eprint!("Continue with LocalBox defaults? [y/N]: ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| format!("could not read the fallback choice: {e}"))?;
+    if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        Ok(())
+    } else {
+        Err(
+            "launch cancelled; run `localbench findbest <model>` to configure tuned settings"
+                .to_string(),
+        )
+    }
 }
 
 fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
@@ -303,7 +295,25 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
 
     let agent = parse_agent(flag_value(args, "--agent"), default_agent)?;
     let launcher = build_launcher(&home)?;
-    let request = build_request(args, model, &home, &launcher, has_flag(args, "--auto-best"))?;
+    let (request, profile) = build_request(args, model, &home, &launcher, false)?;
+    confirm_profile_fallback(args, &request.key, profile.as_ref())?;
+    if let Some(entry) = profile.as_ref().and_then(|profile| profile.entry.as_ref()) {
+        eprintln!(
+            "Run profile: tuned · {} · {} · {} (score {:.0} {}) · {}",
+            entry.quant,
+            entry.context_key,
+            entry.mode.as_str(),
+            entry.score,
+            entry.score_unit,
+            profile
+                .as_ref()
+                .map_or_else(String::new, |p| p.path.display().to_string())
+        );
+    } else if has_flag(args, "--no-auto-best") {
+        eprintln!("Run profile: LocalBox catalog/settings defaults (--no-auto-best).");
+    } else {
+        eprintln!("Run profile: LocalBox catalog/settings defaults (approved fallback).");
+    }
 
     let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
     apply_launch_posture(&mut plan, args, agent)?;
@@ -328,7 +338,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
                  Retrying on native llama.cpp …",
                 request.mode.as_str()
             );
-            let mut native = build_request(args, model, &home, &launcher, false)?;
+            let (mut native, _) = build_request(args, model, &home, &launcher, true)?;
             native.mode = Mode::Native;
             let mut native_plan = plan_launch(&launcher, &native).map_err(|e| e.to_string())?;
             apply_launch_posture(&mut native_plan, args, agent)?;
@@ -435,6 +445,23 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
     match args.first().filter(|a| !a.starts_with("--")) {
         Some(name) => print!("{}", render_model_detail(&catalog, name)?),
         None => print!("{}", render_model_overview(&catalog)),
+    }
+    Ok(())
+}
+
+fn cmd_models(args: &[String]) -> Result<(), String> {
+    use localbox::manage::{models_catalog, render_models_catalog};
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
+    let contract = models_catalog(&catalog, &home);
+    if has_flag(args, "--json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&contract)
+                .map_err(|e| format!("model catalog render: {e}"))?
+        );
+    } else {
+        print!("{}", render_models_catalog(&contract));
     }
     Ok(())
 }
@@ -1036,7 +1063,8 @@ mod tests {
         let launcher = LlamaLauncher::new(catalog, "0.0.0", home.path().to_path_buf(), 24);
         let args = args(&["--auto-best"]);
 
-        let tuned = build_request(&args, "m", home.path(), &launcher, true).unwrap();
+        let (tuned, profile) = build_request(&args, "m", home.path(), &launcher, false).unwrap();
+        assert!(profile.unwrap().is_tuned());
         assert_eq!(tuned.quant.as_deref(), Some("tuned-quant"));
         assert_eq!(tuned.params.n_cpu_moe, Some(12));
         // Every request — `launch` and `serve` alike — carries the
@@ -1044,7 +1072,8 @@ mod tests {
         assert_eq!(tuned.params.parallel, Some(1));
         assert_eq!(tuned.params.cache_reuse, Some(256));
 
-        let mut retry = build_request(&args, "m", home.path(), &launcher, false).unwrap();
+        let (mut retry, profile) = build_request(&args, "m", home.path(), &launcher, true).unwrap();
+        assert!(profile.is_none());
         retry.mode = Mode::Native;
         assert_eq!(retry.quant, None, "AutoBest quant must not carry over");
         assert_eq!(
@@ -1072,7 +1101,7 @@ mod tests {
         .unwrap();
         let launcher = LlamaLauncher::new(catalog, "0.0.0", home.path().to_path_buf(), 24);
 
-        let request = build_request(&[], "bonsai", home.path(), &launcher, false).unwrap();
+        let (request, _) = build_request(&[], "bonsai", home.path(), &launcher, true).unwrap();
         assert_eq!(request.mode, Mode::PrismMl);
 
         let err = build_request(
@@ -1080,10 +1109,57 @@ mod tests {
             "bonsai",
             home.path(),
             &launcher,
-            false,
+            true,
         )
         .unwrap_err();
         assert!(err.contains("requires --mode prism"));
+    }
+
+    #[test]
+    fn direct_launch_uses_tuned_profile_by_default_and_aliases_resolve() {
+        let home = tempfile::tempdir().unwrap();
+        let tuner = home.path().join(".local-llm").join("tuner");
+        std::fs::create_dir_all(&tuner).unwrap();
+        std::fs::write(
+            tuner.join("best-model.json"),
+            r#"{
+                "schema":1,"key":"model","entries":[{
+                    "quant":"q4","contextKey":"64k","mode":"native","vramGB":24,
+                    "prompt_length":"short","profile":"balanced","score":42.0,
+                    "scoreUnit":"tok/s","args":[],"overrides":{"NCpuMoe":7},
+                    "measured_at":"2026-08-10T00:00:00Z","tuner_version":4
+                }]
+            }"#,
+        )
+        .unwrap();
+        let catalog = localbox_launcher::catalog::Catalog::from_layers(
+            &serde_json::Map::new(),
+            &serde_json::from_str(
+                r#"{"Models":{"model":{"Repo":"o/m"}},"CommandAliases":{"m":"model"}}"#,
+            )
+            .unwrap(),
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        let launcher = LlamaLauncher::new(catalog, "0.0.0", home.path(), 24);
+
+        let (request, profile) = build_request(&[], "m", home.path(), &launcher, false).unwrap();
+        assert_eq!(request.key, "model");
+        assert_eq!(request.quant.as_deref(), Some("q4"));
+        assert_eq!(request.context_key, "64k");
+        assert_eq!(request.params.n_cpu_moe, Some(7));
+        assert!(profile.unwrap().is_tuned());
+
+        let (defaults, profile) = build_request(
+            &args(&["--no-auto-best"]),
+            "m",
+            home.path(),
+            &launcher,
+            false,
+        )
+        .unwrap();
+        assert_eq!(defaults.quant, None);
+        assert!(profile.is_none());
     }
 
     #[test]
