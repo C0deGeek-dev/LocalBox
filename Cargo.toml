@@ -1,7 +1,7 @@
 # LocalBox — native Rust workspace.
 #
-# The launcher is being rebuilt as Rust crates alongside the shipping
-# PowerShell module (which stays authoritative until each piece is retired):
+# The launcher is native Rust. The legacy PowerShell module was fully ported
+# and retired; the Rust binary is now the sole authoritative entry point:
 #   - localbox            the application binary: live wiring (model download,
 #                         server spawn, no-think proxy hosting, agent exec)
 #                         and the command-line surface
