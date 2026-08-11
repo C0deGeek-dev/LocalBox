@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v3.0.0 - 2026-08-11
+
+Coordinated LocalX release.
+
 - `localbox launch` and `localbox serve` now apply a compatible saved
   LocalBench profile automatically on every launch path, including launches
   requested by LocalPilot. `--no-auto-best` deliberately uses catalog/settings
