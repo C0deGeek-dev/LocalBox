@@ -22,7 +22,7 @@ use localx_llama_runtime::health::{classify_health, health_description, remediat
 use localx_llama_runtime::net::is_port_listening;
 
 use crate::exec::{run_interactive, spawn_server, EnvGuard, LiveProxyOps};
-use crate::fetch::{print_progress, DownloadKind, ModelFetchError};
+use crate::fetch::{DownloadKind, ModelFetchError, ProgressPrinter};
 
 /// What runs after the model is up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,11 +272,12 @@ pub fn execute_launch(
     // consumer of the launcher contract uses.
     let needed = launch_download_kinds(plan);
     if !needed.is_empty() {
+        let mut printer = ProgressPrinter::default();
         block_on(launcher.fetch_model_files(
             &plan.key,
             request.quant.as_deref(),
             &needed,
-            &mut print_progress,
+            &mut |progress| printer.report(progress),
         ))??;
     }
 

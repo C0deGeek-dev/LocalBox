@@ -219,23 +219,32 @@ pub async fn download_with_resume(
         .ok_or_else(|| FetchError::Http(format!("{url}: unexpected HTTP status {status}")))?;
     let total = total_size(outcome, existing, response.content_length());
 
+    // One report before the first chunk, so a consumer sees the artifact start
+    // (and, on a resume, how much was already there) even when the body is
+    // slow to arrive.
     let mut received = match outcome {
         RangeOutcome::AlreadyComplete => {
             on_progress(existing, total);
             return fs::rename(&partial, dest).map_err(|e| FetchError::Io(e.to_string()));
         }
-        RangeOutcome::Restart => {
-            let _ = fs::remove_file(&partial);
-            0
-        }
+        RangeOutcome::Restart => 0,
         RangeOutcome::Append => existing,
     };
+    on_progress(received, total);
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&partial)
-        .map_err(|e| FetchError::Io(e.to_string()))?;
+    // A restart must never keep a stale prefix: truncate rather than rely on
+    // a delete that could fail and leave the old bytes ahead of the new body.
+    let mut file = match outcome {
+        RangeOutcome::Restart => OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&partial),
+        RangeOutcome::Append | RangeOutcome::AlreadyComplete => {
+            OpenOptions::new().create(true).append(true).open(&partial)
+        }
+    }
+    .map_err(|e| FetchError::Io(e.to_string()))?;
     while let Some(chunk) = response
         .chunk()
         .await
@@ -340,6 +349,141 @@ mod tests {
         assert_eq!(human_bytes(15_247_099_617), "14.2 GB");
         assert_eq!(human_bytes(536_870_912), "512.0 MB");
         assert_eq!(human_bytes(42), "42 B");
+    }
+
+    /// A one-shot HTTP/1.1 responder on a loopback port: answers the first
+    /// request with `status_line` (e.g. `206 Partial Content`), `Content-Length`,
+    /// and `body`, records the request head, then exits.
+    fn serve_once(
+        status_line: &'static str,
+        body: &'static [u8],
+    ) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let head = String::from_utf8_lossy(&buf[..n]).to_string();
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.write_all(body).unwrap();
+            let _ = stream.flush();
+            head
+        });
+        (format!("http://{addr}/m.gguf"), handle)
+    }
+
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    #[test]
+    fn a_restart_never_keeps_a_stale_partial_prefix() {
+        // A resume was requested (partial on disk) but the server answered 200:
+        // the body is the whole file and the old bytes must not survive ahead
+        // of it — even if the partial could not be deleted.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        std::fs::write(partial_path(&dest), b"STALEPREFIX").unwrap();
+        let (url, server) = serve_once("200 OK", b"fresh-body");
+        let client = reqwest::Client::new();
+        let mut events = Vec::new();
+
+        block_on(download_with_resume(&client, &url, &dest, &mut |r, t| {
+            events.push((r, t));
+        }))
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fresh-body");
+        assert!(!partial_path(&dest).exists());
+        let head = server.join().unwrap().to_ascii_lowercase();
+        assert!(
+            head.contains("range: bytes=11-"),
+            "the resume was requested: {head}"
+        );
+        assert_eq!(
+            events.first(),
+            Some(&(0, Some(10))),
+            "restart reports zero first"
+        );
+        assert_eq!(events.last(), Some(&(10, Some(10))));
+    }
+
+    #[test]
+    fn a_resume_appends_and_reports_the_existing_bytes_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        std::fs::write(partial_path(&dest), b"first-").unwrap();
+        let (url, server) = serve_once("206 Partial Content", b"second");
+        let client = reqwest::Client::new();
+        let mut events = Vec::new();
+
+        block_on(download_with_resume(&client, &url, &dest, &mut |r, t| {
+            events.push((r, t));
+        }))
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"first-second");
+        assert!(server
+            .join()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("range: bytes=6-"));
+        // The initial report carries what was already on disk and the total the
+        // remainder implies; the last one is the complete file.
+        assert_eq!(events.first(), Some(&(6, Some(12))));
+        assert_eq!(events.last(), Some(&(12, Some(12))));
+    }
+
+    #[test]
+    fn a_416_on_resume_completes_the_partial_and_reports_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        std::fs::write(partial_path(&dest), b"whole").unwrap();
+        let (url, server) = serve_once("416 Range Not Satisfiable", b"");
+        let client = reqwest::Client::new();
+        let mut events = Vec::new();
+
+        block_on(download_with_resume(&client, &url, &dest, &mut |r, t| {
+            events.push((r, t));
+        }))
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"whole");
+        server.join().unwrap();
+        assert_eq!(events, vec![(5, Some(5))]);
+    }
+
+    #[test]
+    fn a_fresh_download_reports_start_then_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        let (url, server) = serve_once("200 OK", b"0123456789");
+        let client = reqwest::Client::new();
+        let mut events = Vec::new();
+
+        block_on(download_with_resume(&client, &url, &dest, &mut |r, t| {
+            events.push((r, t));
+        }))
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"0123456789");
+        assert!(!server
+            .join()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("range:"));
+        assert_eq!(events.first(), Some(&(0, Some(10))));
+        assert_eq!(events.last(), Some(&(10, Some(10))));
     }
 
     #[test]

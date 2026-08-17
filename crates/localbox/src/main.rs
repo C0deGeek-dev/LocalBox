@@ -475,7 +475,7 @@ fn cmd_models(args: &[String]) -> Result<(), String> {
 /// requested (or default) quant, plus the catalog's projector / draft model on
 /// request. Already-present files are skipped; an interrupted pull resumes.
 fn cmd_download(args: &[String]) -> Result<(), String> {
-    use localbox::fetch::print_progress;
+    use localbox::fetch::ProgressPrinter;
     let model = args
         .first()
         .filter(|a| !a.starts_with("--"))
@@ -502,8 +502,13 @@ fn cmd_download(args: &[String]) -> Result<(), String> {
         return Err(format!("{key} names no files to download"));
     }
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let mut printer = ProgressPrinter::default();
     let fetched = runtime
-        .block_on(launcher.fetch_model_files(&key, quant, &kinds, &mut print_progress))
+        .block_on(
+            launcher.fetch_model_files(&key, quant, &kinds, &mut |progress| {
+                printer.report(progress);
+            }),
+        )
         .map_err(|e| e.to_string())?;
     for path in &fetched {
         println!("ready: {}", path.display());
