@@ -4,6 +4,18 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Moved the resumable model-file downloader into the `localbox-launcher`
+  library (`localbox_launcher::fetch`) and gave the launcher
+  `model_download_targets` / `fetch_model_files`, so any consumer of the
+  launcher contract — not only the LocalBox binary — can put a model on disk
+  the way a launch does (same `.partial` sidecar resume, same Hugging Face URL
+  resolution), with per-artifact progress. Live launches fetch through the same
+  path and now show byte progress. Added `localbox download <model> [--quant
+  <key>] [--vision] [--draft]`, a download-only entry point (fetches the GGUF;
+  the flags add the catalog's projector / draft model). Resolves the
+  LocalBench-side gap where `findbest` refused a model that had never been
+  launched (LocalHub#75).
+
 ## v3.1.0 - 2026-08-11
 
 Coordinated LocalX release.

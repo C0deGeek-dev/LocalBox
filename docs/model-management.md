@@ -54,7 +54,12 @@ Models whose weight format needs a specific engine can add
 The GGUF itself downloads from Hugging Face on first launch (resumable,
 verified against the expected destination). When `--vision` is requested and
 `VisionModule` names a missing file in the same repo, that projector downloads
-the same way before the server starts. `localbox info <model>` shows the entry
+the same way before the server starts; `--draft` does the same for
+`DraftModule`. `localbox download <model> [--quant <key>] [--vision] [--draft]`
+performs exactly those fetches without starting anything — a way to pre-fetch a
+model, and the same downloader every consumer of the launcher library uses (the
+LocalBench tuner fetches a missing GGUF through it before its first trial, so
+tuning no longer needs a prior launch). `localbox info <model>` shows the entry
 as LocalBox resolved it; unknown names list the known keys.
 
 Removing a model is editing it out of the catalog; `localbox purge` stops

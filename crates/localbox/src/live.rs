@@ -22,7 +22,7 @@ use localx_llama_runtime::health::{classify_health, health_description, remediat
 use localx_llama_runtime::net::is_port_listening;
 
 use crate::exec::{run_interactive, spawn_server, EnvGuard, LiveProxyOps};
-use crate::fetch::{download_with_resume, hf_download_url, FetchError};
+use crate::fetch::{print_progress, DownloadKind, ModelFetchError};
 
 /// What runs after the model is up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,9 +56,9 @@ pub enum LiveError {
     /// Resolution failed (model, binary, port, ...).
     #[error("{0}")]
     Launcher(#[from] LauncherError),
-    /// The model file could not be downloaded.
+    /// A model file could not be downloaded.
     #[error("{0}")]
-    Fetch(#[from] FetchError),
+    Fetch(#[from] ModelFetchError),
     /// The no-think proxy could not be brought up.
     #[error("{0}")]
     Proxy(#[from] ProxyLifecycleError),
@@ -187,69 +187,22 @@ pub fn server_log_path(home: &Path, server_port: u16) -> PathBuf {
         .join(format!("llama-server-{server_port}.log"))
 }
 
-/// The GGUF download URL for the launched quant, from the catalog definition.
-///
-/// # Errors
-/// [`LauncherError::Unavailable`] when the catalog names no file to fetch.
-pub fn gguf_url(
-    launcher: &LlamaLauncher,
-    plan: &LaunchPlan,
-    request: &LaunchRequest,
-) -> Result<String, LauncherError> {
-    let def = launcher.model_def(&plan.key)?;
-    let quant_key = match request.quant.as_deref().or(def.quant.as_deref()) {
-        Some(q) => Some(
-            localx_llama_core::model::resolve_quant_key(&def, q)
-                .map_err(|e| LauncherError::Unavailable(format!("quant for {}: {e}", plan.key)))?,
-        ),
-        None => None,
-    };
-    let file = quant_key
-        .and_then(|k| def.quants.get(&k).map(|entry| entry.file.clone()))
-        .or_else(|| def.file.clone())
-        .filter(|f| !f.trim().is_empty())
-        .ok_or_else(|| {
-            LauncherError::Unavailable(format!("model {} names no GGUF file", plan.key))
-        })?;
-    Ok(hf_download_url(&def.repo, &file))
-}
-
-/// The configured vision projector's Hugging Face URL.
-pub fn vision_module_url(
-    launcher: &LlamaLauncher,
-    plan: &LaunchPlan,
-) -> Result<String, LauncherError> {
-    let def = launcher.model_def(&plan.key)?;
-    let file = def
-        .vision_module
-        .as_deref()
-        .filter(|name| !name.trim().is_empty())
-        .ok_or_else(|| {
-            LauncherError::Unavailable(format!(
-                "model {} has no configured VisionModule to download",
-                plan.key
-            ))
-        })?;
-    Ok(hf_download_url(&def.repo, file))
-}
-
-/// The configured draft model's Hugging Face URL.
-pub fn draft_module_url(
-    launcher: &LlamaLauncher,
-    plan: &LaunchPlan,
-) -> Result<String, LauncherError> {
-    let def = launcher.model_def(&plan.key)?;
-    let file = def
-        .draft_module
-        .as_deref()
-        .filter(|name| !name.trim().is_empty())
-        .ok_or_else(|| {
-            LauncherError::Unavailable(format!(
-                "model {} has no configured DraftModule to download",
-                plan.key
-            ))
-        })?;
-    Ok(hf_download_url(&def.repo, file))
+/// The artifacts a resolved plan still has to fetch before its server can
+/// start: the GGUF when missing, and the projector/drafter only when the plan
+/// loads one and it is not on disk yet.
+#[must_use]
+pub fn launch_download_kinds(plan: &LaunchPlan) -> Vec<DownloadKind> {
+    let mut kinds = Vec::new();
+    if !plan.gguf_downloaded {
+        kinds.push(DownloadKind::Gguf);
+    }
+    if plan.vision_module.is_some() && !plan.vision_module_downloaded {
+        kinds.push(DownloadKind::VisionModule);
+    }
+    if plan.draft_module.is_some() && !plan.draft_module_downloaded {
+        kinds.push(DownloadKind::DraftModule);
+    }
+    kinds
 }
 
 fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, LiveError> {
@@ -313,33 +266,18 @@ pub fn execute_launch(
 ) -> Result<LaunchOutcome, LiveError> {
     let mut outcome = LaunchOutcome::default();
 
-    if !plan.gguf_downloaded {
-        let url = gguf_url(launcher, plan, request)?;
-        eprintln!("Downloading model ({url}) ...");
-        let client = reqwest::Client::new();
-        block_on(download_with_resume(&client, &url, &plan.gguf_path))??;
-    }
-
-    if let Some(projector) = plan
-        .vision_module
-        .as_ref()
-        .filter(|_| !plan.vision_module_downloaded)
-    {
-        let url = vision_module_url(launcher, plan)?;
-        eprintln!("Downloading vision projector ({url}) ...");
-        let client = reqwest::Client::new();
-        block_on(download_with_resume(&client, &url, projector))??;
-    }
-
-    if let Some(drafter) = plan
-        .draft_module
-        .as_ref()
-        .filter(|_| !plan.draft_module_downloaded)
-    {
-        let url = draft_module_url(launcher, plan)?;
-        eprintln!("Downloading draft model ({url}) ...");
-        let client = reqwest::Client::new();
-        block_on(download_with_resume(&client, &url, drafter))??;
+    // Fetch exactly what this launch needs — the GGUF, plus the projector or
+    // drafter only when the plan loads one — through the launcher's own
+    // downloader (resumable, `.partial` sidecar), the same path every other
+    // consumer of the launcher contract uses.
+    let needed = launch_download_kinds(plan);
+    if !needed.is_empty() {
+        block_on(launcher.fetch_model_files(
+            &plan.key,
+            request.quant.as_deref(),
+            &needed,
+            &mut print_progress,
+        ))??;
     }
 
     let binary = launcher.server_binary(request.mode, true)?;
@@ -540,6 +478,29 @@ pub fn status_report(proxy_port: u16, server_port: u16) -> String {
 mod tests {
     use super::*;
     use localbox_launcher::proxy::EnsureProxyConfig;
+
+    #[test]
+    fn a_launch_fetches_only_what_the_plan_loads_and_lacks() {
+        let mut plan = plan_with("http://127.0.0.1:11435", 11_435);
+        assert!(
+            launch_download_kinds(&plan).is_empty(),
+            "everything present"
+        );
+
+        plan.gguf_downloaded = false;
+        assert_eq!(launch_download_kinds(&plan), vec![DownloadKind::Gguf]);
+
+        // A configured-but-unrequested projector/drafter is not in the plan at
+        // all, so it is never fetched; a planned one is fetched only when absent.
+        plan.vision_module = Some(PathBuf::from("mmproj.gguf"));
+        plan.vision_module_downloaded = true;
+        plan.draft_module = Some(PathBuf::from("draft.gguf"));
+        plan.draft_module_downloaded = false;
+        assert_eq!(
+            launch_download_kinds(&plan),
+            vec![DownloadKind::Gguf, DownloadKind::DraftModule]
+        );
+    }
 
     fn plan_with(base_url: &str, listen_port: u16) -> LaunchPlan {
         LaunchPlan {

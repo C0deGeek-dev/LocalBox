@@ -19,7 +19,11 @@ sysinfo = { workspace = true }
 toml_edit = { workspace = true }
 localx-llama-core = { workspace = true }
 localx-llama-runtime = { workspace = true }
+# The resumable model-file downloader lives in the library so every consumer
+# of the launcher contract (LocalBox, LocalBench) fetches models the same way.
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true }
 toml = { workspace = true }

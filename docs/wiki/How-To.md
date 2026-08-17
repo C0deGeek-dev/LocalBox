@@ -25,6 +25,7 @@ on first run and yours to edit (add a model by copying an entry and pointing
 ```text
 localbox info                    # list the configured models by tier
 localbox info <model>            # one model in detail (any of its names works)
+localbox download <model>        # put its files on disk without starting anything
 localbox purge                   # stop servers, delete downloaded model files
 ```
 

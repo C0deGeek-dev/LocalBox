@@ -899,11 +899,13 @@ version = "3.1.0"
 dependencies = [
  "localx-llama-core",
  "localx-llama-runtime",
+ "reqwest",
  "serde",
  "serde_json",
  "sysinfo",
  "tempfile",
  "thiserror",
+ "tokio",
  "toml",
  "toml_edit",
 ]

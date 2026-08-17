@@ -14,6 +14,8 @@ localbox serve <model> [options]    start the model (and proxy) headless
 localbox stop                       stop every model server and the proxy
 localbox status                     report serve health and the remedy
 localbox info [model]               list the configured models, or one in detail
+localbox download <model> [--quant <key>] [--vision] [--draft]
+                                    fetch a model's files without starting it
 localbox purge                      stop servers and delete downloaded model files
 localbox log [--lines <n>]          tail the most recent server log
 localbox embed-serve [--port <p>]   start the CPU-only embedding server

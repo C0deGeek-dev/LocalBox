@@ -15,6 +15,10 @@ use localx_llama_runtime::is_port_free;
 use localx_llama_runtime::server::server_exe_name;
 
 use crate::catalog::Catalog;
+use crate::fetch::{
+    download_with_resume, hf_download_url, DownloadKind, DownloadProgress, ModelDownload,
+    ModelFetchError,
+};
 
 /// The KV cache types every llama.cpp build accepts.
 const STANDARD_KV_TYPES: &[&str] = &[
@@ -196,6 +200,102 @@ impl LlamaLauncher {
             .collect();
         candidates.sort();
         candidates.into_iter().next()
+    }
+
+    /// Every file a catalog model needs on disk — the GGUF for `quant` (or the
+    /// default quant), plus the configured vision projector and draft model when
+    /// the catalog names them — with its Hugging Face URL, on-disk path, and
+    /// whether it is already present. Pure path/URL math: nothing is fetched.
+    ///
+    /// # Errors
+    /// [`LauncherError`] when the model, quant, or GGUF file cannot be resolved.
+    pub fn model_download_targets(
+        &self,
+        key: &str,
+        quant: Option<&str>,
+    ) -> Result<Vec<ModelDownload>, LauncherError> {
+        let def = self.model_def(key)?;
+        let gguf_path = self.expected_gguf_path(&def, quant)?;
+        let gguf_file = Self::model_file_name(&def, quant)?;
+        let mut targets = vec![ModelDownload {
+            kind: DownloadKind::Gguf,
+            url: hf_download_url(&def.repo, &gguf_file),
+            present: gguf_path.is_file(),
+            path: gguf_path,
+        }];
+        let folder = self.model_folder(&def, key)?;
+        let configured = |name: &Option<String>| {
+            name.as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        };
+        if let Some(name) = configured(&def.vision_module) {
+            let path = folder.join(&name);
+            targets.push(ModelDownload {
+                kind: DownloadKind::VisionModule,
+                url: hf_download_url(&def.repo, &name),
+                present: path.is_file(),
+                path,
+            });
+        }
+        if let Some(name) = configured(&def.draft_module) {
+            let path = folder.join(&name);
+            targets.push(ModelDownload {
+                kind: DownloadKind::DraftModule,
+                url: hf_download_url(&def.repo, &name),
+                present: path.is_file(),
+                path,
+            });
+        }
+        Ok(targets)
+    }
+
+    /// Download the model files of the requested `kinds` that are not on disk
+    /// yet — resumable via the `.partial` sidecar, the same way a launch does —
+    /// reporting progress per artifact, and return the paths of every requested
+    /// artifact that is now present. Kinds the catalog does not configure are
+    /// skipped silently (a model without a `VisionModule` has nothing to fetch
+    /// for it), so a caller can ask for the launch-required set and get exactly
+    /// what exists.
+    ///
+    /// # Errors
+    /// [`ModelFetchError`] when the catalog cannot name what to fetch, or when
+    /// one download fails (files fetched before it stay complete on disk).
+    pub async fn fetch_model_files(
+        &self,
+        key: &str,
+        quant: Option<&str>,
+        kinds: &[DownloadKind],
+        on_progress: &mut dyn FnMut(&DownloadProgress<'_>),
+    ) -> Result<Vec<PathBuf>, ModelFetchError> {
+        let targets = self.model_download_targets(key, quant)?;
+        let client = reqwest::Client::new();
+        let mut fetched = Vec::new();
+        for target in targets
+            .into_iter()
+            .filter(|target| kinds.contains(&target.kind))
+        {
+            if !target.present {
+                let mut report = |received: u64, total: Option<u64>| {
+                    on_progress(&DownloadProgress {
+                        kind: target.kind,
+                        path: &target.path,
+                        received,
+                        total,
+                    });
+                };
+                download_with_resume(&client, &target.url, &target.path, &mut report)
+                    .await
+                    .map_err(|source| ModelFetchError::Download {
+                        kind: target.kind,
+                        path: target.path.clone(),
+                        source,
+                    })?;
+            }
+            fetched.push(target.path);
+        }
+        Ok(fetched)
     }
 
     /// The GGUF filename for a definition and optional quant override.
@@ -531,6 +631,106 @@ mod tests {
             launcher.resolve_quant_key(&def, "APEX-I-QUALITY").unwrap(),
             "apex-i-quality"
         );
+    }
+
+    fn launcher_with_modules(dir: &Path) -> LlamaLauncher {
+        let catalog: Map<String, Value> = serde_json::from_str(
+            r#"{
+            "Models": {
+                "vis": {
+                    "Root": "vis",
+                    "Repo": "owner/vis-GGUF",
+                    "Quants": { "q4": "vis Q4_K_M.gguf", "q8": "vis-Q8_0.gguf" },
+                    "Quant": "q4",
+                    "VisionModule": "mmproj-Q8_0.gguf",
+                    "DraftModule": "vis-draft.gguf",
+                    "Contexts": { "": 8192 }
+                }
+            }
+        }"#,
+        )
+        .unwrap();
+        let settings: Map<String, Value> = serde_json::from_str(&format!(
+            r#"{{ "LlamaCppGgufRoot": {} }}"#,
+            Value::from(dir.to_str().unwrap())
+        ))
+        .unwrap();
+        let catalog = Catalog::from_layers(&Map::new(), &catalog, &settings).unwrap();
+        LlamaLauncher::new(catalog, "1.2.1", dir.join("home"), 24)
+    }
+
+    #[test]
+    fn download_targets_name_every_configured_artifact_with_its_url_and_presence() {
+        let dir = tempfile::tempdir().unwrap();
+        let with_modules = launcher_with_modules(dir.path());
+        // Only the projector is on disk.
+        let folder = dir.path().join("vis");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("mmproj-Q8_0.gguf"), b"proj").unwrap();
+
+        let targets = with_modules.model_download_targets("vis", None).unwrap();
+        let kinds: Vec<DownloadKind> = targets.iter().map(|t| t.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DownloadKind::Gguf,
+                DownloadKind::VisionModule,
+                DownloadKind::DraftModule
+            ]
+        );
+        assert_eq!(
+            targets[0].url,
+            "https://huggingface.co/owner/vis-GGUF/resolve/main/vis%20Q4_K_M.gguf"
+        );
+        assert_eq!(targets[0].path, folder.join("vis Q4_K_M.gguf"));
+        assert!(!targets[0].present);
+        assert!(targets[1].present, "the projector is already on disk");
+        assert_eq!(
+            targets[2].url,
+            "https://huggingface.co/owner/vis-GGUF/resolve/main/vis-draft.gguf"
+        );
+        assert!(!targets[2].present);
+
+        // A quant override selects that quant's file, nothing else changes.
+        let q8 = with_modules
+            .model_download_targets("vis", Some("q8"))
+            .unwrap();
+        assert!(q8[0].url.ends_with("/vis-Q8_0.gguf"));
+
+        // A model without configured modules lists only its GGUF.
+        let plain = launcher(dir.path());
+        let single = plain.model_download_targets("single", None).unwrap();
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].kind, DownloadKind::Gguf);
+    }
+
+    #[test]
+    fn a_gguf_only_fetch_of_a_present_model_touches_nothing_and_skips_the_modules() {
+        // The tuner asks for `[Gguf]` only: with the GGUF present, no request is
+        // ever made — even though the catalog configures a projector and a
+        // drafter that are absent — and the returned path is the GGUF.
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher_with_modules(dir.path());
+        let folder = dir.path().join("vis");
+        std::fs::create_dir_all(&folder).unwrap();
+        let gguf = folder.join("vis Q4_K_M.gguf");
+        std::fs::write(&gguf, b"weights").unwrap();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut reports = 0;
+        let fetched = runtime
+            .block_on(
+                launcher
+                    .fetch_model_files("vis", None, &[DownloadKind::Gguf], &mut |_| reports += 1),
+            )
+            .unwrap();
+        assert_eq!(fetched, vec![gguf]);
+        assert_eq!(reports, 0, "nothing to download, nothing reported");
+        assert!(!folder.join("mmproj-Q8_0.gguf").exists());
+        assert!(!folder.join("vis-draft.gguf").exists());
     }
 
     #[test]

@@ -144,7 +144,7 @@ pub async fn ensure_embed_model(
         let url = hf_download_url(&config.repo, &config.file);
         eprintln!("Downloading embedding model ({url}) ...");
         let client = reqwest::Client::new();
-        download_with_resume(&client, &url, &path)
+        download_with_resume(&client, &url, &path, &mut |_, _| {})
             .await
             .map_err(|e| e.to_string())?;
     }

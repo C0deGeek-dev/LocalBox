@@ -19,6 +19,11 @@
 //! - [`env`] — the agent env envelope: one plan is both the DryRun snapshot
 //!   and the live setter; save → mutate → finally-restore over a testable
 //!   store seam.
+//!
+//! - [`fetch`] — the resumable model-file downloader and the download targets
+//!   a catalog model implies (GGUF, vision projector, draft model), so a
+//!   consumer that only holds the launcher contract can still put a model on
+//!   disk instead of sending the user to another tool.
 
 pub mod catalog;
 
@@ -30,6 +35,7 @@ pub fn product_version() -> &'static str {
 }
 
 pub mod env;
+pub mod fetch;
 pub mod launcher;
 pub mod localpilot_config;
 pub mod orchestrate;

@@ -36,6 +36,10 @@ Usage:
   localbox status                     report serve health and the remedy
   localbox info [model]               list the configured models, or one in detail
   localbox models [--json]            list launchable models and tuned-profile state
+  localbox download <model> [--quant <key>] [--vision] [--draft]
+                                      fetch a model's files without starting it
+                                      (the GGUF; --vision/--draft add the
+                                      catalog's projector/draft model); resumable
   localbox purge                      stop servers and delete downloaded model files
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
@@ -99,6 +103,7 @@ fn run() -> ExitCode {
         "status" => cmd_status(&args[1..]),
         "info" => cmd_info(&args[1..]),
         "models" => cmd_models(&args[1..]),
+        "download" => cmd_download(&args[1..]),
         "purge" => cmd_purge(),
         "log" => cmd_log(&args[1..]),
         "embed-serve" => cmd_embed_serve(&args[1..]),
@@ -464,6 +469,63 @@ fn cmd_models(args: &[String]) -> Result<(), String> {
         print!("{}", render_models_catalog(&contract));
     }
     Ok(())
+}
+
+/// Put a model's files on disk without starting anything: the GGUF for the
+/// requested (or default) quant, plus the catalog's projector / draft model on
+/// request. Already-present files are skipped; an interrupted pull resumes.
+fn cmd_download(args: &[String]) -> Result<(), String> {
+    use localbox::fetch::print_progress;
+    let model = args
+        .first()
+        .filter(|a| !a.starts_with("--"))
+        .ok_or("a model key is required (run `localbox download <model>`)")?;
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let launcher = build_launcher(&home)?;
+    let key = launcher
+        .resolve_model_key(model)
+        .ok_or_else(|| format!("unknown model '{model}' (see `localbox info`)"))?;
+    let quant = flag_value(args, "--quant");
+    let kinds = download_kinds_for_flags(has_flag(args, "--vision"), has_flag(args, "--draft"));
+
+    let targets = launcher
+        .model_download_targets(&key, quant)
+        .map_err(|e| e.to_string())?;
+    let mut anything = false;
+    for target in targets.iter().filter(|t| kinds.contains(&t.kind)) {
+        anything = true;
+        if target.present {
+            println!("{} already on disk: {}", target.kind, target.path.display());
+        }
+    }
+    if !anything {
+        return Err(format!("{key} names no files to download"));
+    }
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let fetched = runtime
+        .block_on(launcher.fetch_model_files(&key, quant, &kinds, &mut print_progress))
+        .map_err(|e| e.to_string())?;
+    for path in &fetched {
+        println!("ready: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Which artifacts `localbox download` fetches: always the GGUF, plus the
+/// projector and/or draft model when their flags ask for them.
+fn download_kinds_for_flags(
+    vision: bool,
+    draft: bool,
+) -> Vec<localbox_launcher::fetch::DownloadKind> {
+    use localbox_launcher::fetch::DownloadKind;
+    let mut kinds = vec![DownloadKind::Gguf];
+    if vision {
+        kinds.push(DownloadKind::VisionModule);
+    }
+    if draft {
+        kinds.push(DownloadKind::DraftModule);
+    }
+    kinds
 }
 
 fn cmd_purge() -> Result<(), String> {
