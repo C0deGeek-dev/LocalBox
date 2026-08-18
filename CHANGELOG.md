@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v3.2.0 - 2026-08-18
+
+Coordinated LocalX release.
+
 - Moved the resumable model-file downloader into the `localbox-launcher`
   library (`localbox_launcher::fetch`) and gave the launcher
   `model_download_targets` / `fetch_model_files`, so any consumer of the
