@@ -36,10 +36,14 @@ Usage:
   localbox status                     report serve health and the remedy
   localbox info [model]               list the configured models, or one in detail
   localbox models [--json]            list launchable models and tuned-profile state
-  localbox download <model> [--quant <key>] [--vision] [--draft]
+  localbox download <model|hf-repo> [--quant <key>] [--vision] [--draft]
                                       fetch a model's files without starting it
                                       (the GGUF; --vision/--draft add the
-                                      catalog's projector/draft model); resumable
+                                      catalog's projector/draft model); resumable.
+                                      <model> is a catalog name, or a Hugging Face
+                                      repo id (owner/repo) or URL — a repo not yet
+                                      in the catalog is listed, added, and fetched
+                                      (--quant picks the variant)
   localbox purge                      stop servers and delete downloaded model files
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server

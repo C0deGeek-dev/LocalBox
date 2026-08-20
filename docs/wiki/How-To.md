@@ -26,8 +26,14 @@ on first run and yours to edit (add a model by copying an entry and pointing
 localbox info                    # list the configured models by tier
 localbox info <model>            # one model in detail (any of its names works)
 localbox download <model>        # put its files on disk without starting anything
+localbox download owner/repo      # install straight from a Hugging Face repo id
 localbox purge                   # stop servers, delete downloaded model files
 ```
+
+`localbox download` also takes a Hugging Face repo id or URL in place of a
+catalog name: it lists the repo's GGUF quants, writes a catalog entry, and
+downloads the chosen one. See
+[Model management](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/model-management.md).
 
 VRAM-aware: the guided launcher tags each quant fits / tight / over against
 your card. Full detail:

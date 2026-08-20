@@ -62,6 +62,49 @@ LocalBench tuner fetches a missing GGUF through it before its first trial, so
 tuning no longer needs a prior launch). `localbox info <model>` shows the entry
 as LocalBox resolved it; unknown names list the known keys.
 
+## Installing straight from a Hugging Face repo
+
+You do not have to hand-write a catalog entry for a GGUF repo. Give `localbox
+download` a Hugging Face repo id (or a repo URL) instead of a catalog name and
+it will do the wiring for you:
+
+```
+localbox download mradermacher/Some-Model-i1-GGUF
+localbox download https://huggingface.co/bartowski/Some-Model-GGUF --quant q4km
+```
+
+LocalBox reads the repo's file list from the Hugging Face API, groups the GGUF
+files into quant variants (multi-part files are grouped and all their shards are
+fetched), picks the variant — your `--quant` if given, otherwise a sensible
+default (`q4km`, else the middle by size) — and:
+
+1. writes a catalog entry into your `~/.local-llm/llm-models.json` (additively —
+   nothing you already have is touched), with a key derived from the repo name,
+   and
+2. downloads the chosen file(s) into that model's folder under the GGUF root,
+   resumably, the same way a launch does.
+
+List the quant keys a repo offers by running the command with a `--quant` that
+does not exist — the error names the available keys. After the install the model
+is an ordinary catalog entry: launch it by its new key (shown in the output), and
+it appears in `localbox info` / `localbox models` like any other. Re-running the
+same repo is a no-op: an already-catalogued repo is reported and its files
+resume rather than re-download.
+
+Two limits today: a **gated or private** repo (one that needs a Hugging Face
+access token) is detected and reported, not downloaded — add such a model by
+other means; and only `.gguf` files are installed (no `safetensors`/GPTQ). A
+repo id is only tried as a Hugging Face repo when it is *not* already a catalog
+name, so a catalog key always wins.
+
+> Design note: `localbox download` accepts a repo id because LocalBox has no
+> separate "add model" command — the catalog is a plain JSON file you can also
+> edit by hand (above). The synthesised entry is written additively and never
+> overwrites an existing model; a repo already present is reused, and a name
+> collision with an unrelated model gets a suffixed key rather than clobbering
+> it. LocalBox records decisions in this doc and the `CHANGELOG`, not a separate
+> ADR file.
+
 Removing a model is editing it out of the catalog; `localbox purge` stops
 servers and deletes every downloaded model folder under the GGUF root (models
 download again on the next launch).
