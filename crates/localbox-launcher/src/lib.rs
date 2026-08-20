@@ -28,6 +28,10 @@
 //! - [`hf_meta`] — Hugging Face repo references and GGUF file listing over the
 //!   Hub API: the read step that lets the download command install a model
 //!   straight from an `owner/repo` reference not yet in the catalog.
+//!
+//! - [`quant`] — quant discovery from a repo's GGUF file list: group the
+//!   filenames (imatrix and static, multi-part shards) into selectable
+//!   candidates and resolve a `--quant` request or a default.
 
 pub mod catalog;
 
@@ -48,4 +52,5 @@ pub mod permissions;
 pub mod posture;
 pub mod profile;
 pub mod proxy;
+pub mod quant;
 pub mod smoke;
