@@ -62,11 +62,34 @@ LocalBench tuner fetches a missing GGUF through it before its first trial, so
 tuning no longer needs a prior launch). `localbox info <model>` shows the entry
 as LocalBox resolved it; unknown names list the known keys.
 
-## Installing straight from a Hugging Face repo
+## Adding a Hugging Face model interactively
 
-You do not have to hand-write a catalog entry for a GGUF repo. Give `localbox
-download` a Hugging Face repo id (or a repo URL) instead of a catalog name and
-it will do the wiring for you:
+Run `localbox` and choose **[Add a Hugging Face model]**. Paste an
+`owner/repo` id or Hugging Face model URL. LocalBox reads the repository's GGUF
+listing and shows every discovered quant with its combined size and a
+**fits / tight / over** estimate for your graphics memory. No model file is
+downloaded during discovery.
+
+The preselected recommendation is a conservative weight/headroom estimate, not
+a benchmark result. LocalBox prefers Q4_K_M when it leaves the normal 7 GB
+headroom; otherwise it recommends the largest variant that still fits, then the
+smallest tight or over-budget option when necessary. You remain in control:
+
+- choosing a quant registers every variant, makes that quant the default for a
+  new entry, and downloads only the chosen variant;
+- choosing **[Register only — download later]** registers every variant with
+  the recommendation as a new entry's default, but downloads no model files;
+- cancelling or going back writes nothing and downloads nothing.
+
+For a repository already in the catalog, registration adds only missing quant
+keys and preserves its existing fields and default. After a successful add,
+LocalBox returns to the all-tiers model list so the new experimental entry is
+visible.
+
+## Downloading straight from a Hugging Face repo
+
+For scripts or an already-decided download, give `localbox download` a Hugging
+Face repo id (or a repo URL) instead of a catalog name:
 
 ```
 localbox download mradermacher/Some-Model-i1-GGUF
@@ -83,6 +106,10 @@ sensible default (`q4km`, else the middle by size). It then:
    GGUF root, resumably, through the same path a later catalog-key download or
    launch uses. A selected multi-part quant downloads every one of its shards.
 
+This command is explicitly download intent, so it starts the selected transfer
+without a second prompt. Use the guided Add Model action when you want to inspect
+the choices or register the catalog entry without downloading weights.
+
 List the quant keys a repo offers by running the command with a `--quant` that
 does not exist — the error names the available keys. After the install the model
 is an ordinary catalog entry: launch it by its new key (shown in the output), and
@@ -98,13 +125,15 @@ other means; and only `.gguf` files are installed (no `safetensors`/GPTQ). A
 repo id is only tried as a Hugging Face repo when it is *not* already a catalog
 name, so a catalog key always wins.
 
-> Design note: `localbox download` accepts a repo id because LocalBox has no
-> separate "add model" command — the catalog is a plain JSON file you can also
-> edit by hand (above). The synthesised entry is written additively and never
+> Design note: LocalBox keeps the scripting surface small: there is no separate
+> CLI `add` command. Registration without transfer lives in the guided launcher,
+> while `download owner/repo` expresses immediate download intent; the catalog is
+> also a plain JSON file you can edit by hand (above). A synthesised entry is
+> written additively and never
 > overwrites an existing model; a repo already present receives only missing
 > quant keys, and a name collision with an unrelated model gets a suffixed key
-> rather than clobbering it. LocalBox records decisions in this doc and the `CHANGELOG`, not a separate
-> ADR file.
+> rather than clobbering it. LocalBox records decisions in this doc and the
+> `CHANGELOG`, not a separate ADR file.
 
 Removing a model is editing it out of the catalog; `localbox purge` stops
 servers and deletes every downloaded model folder under the GGUF root (models

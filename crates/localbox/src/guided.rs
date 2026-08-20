@@ -6,10 +6,11 @@
 //! vocabulary/plan/customize layers; the interactive frontends (a ratatui
 //! inline list and a numbered plain-text fallback) only pick indexes.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write as _};
 use std::path::{Path, PathBuf};
 
 use localbox_launcher::catalog::Catalog;
+use localbox_launcher::fetch::DownloadKind;
 use localbox_launcher::orchestrate::{plan_launch, LaunchRequest};
 use localbox_launcher::permissions::JsonSettingsStore;
 use localbox_launcher::profile::{resolve_run_profile, select_run_profile, RunProfileQuery};
@@ -28,10 +29,12 @@ use localbox_tui::ui::{
 };
 use localbox_tui::vocab::{glossary, gpu_banner, plan_summary, target_label};
 use localx_llama_core::tuner::Profile;
-use localx_llama_core::{Mode, ModelDef, TunerBestConfig, TunerEntry};
+use localx_llama_core::{FitClass, Mode, ModelDef, TunerBestConfig, TunerEntry};
 use ratatui::style::Color;
 
 use crate::exec::{home_dir, probe_gpu};
+use crate::fetch::ProgressPrinter;
+use crate::hf_install::{candidate_size_gb, discover_hf_repo, recommend_quant, HfDiscovery};
 use crate::live::{execute_launch, AgentKind};
 
 /// Model rows visible by default: the `recommended` tier only (a definition
@@ -221,6 +224,20 @@ trait Chooser {
     fn set_banner(&mut self, banner: String);
     fn set_panel(&mut self, panel: Option<(String, String)>);
     fn choose(&mut self, title: &str, rows: &[MenuRow], start: usize) -> Option<usize>;
+    /// Temporarily leave menu rendering and read one trimmed line. Empty input
+    /// cancels. The rich chooser re-acquires its inline band on the next menu.
+    fn input(&mut self, prompt: &str) -> Option<String> {
+        self.release();
+        println!("{prompt}");
+        print!("> ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return None;
+        }
+        let value = line.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    }
     fn notice(&mut self, text: &str);
     /// Show a terminal outcome (a launch result or an error) and hold it on
     /// screen until the user acknowledges it. The rich path re-acquires the
@@ -500,7 +517,12 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         Box::new(TuiChooser::default())
     };
     let gpu = probe_gpu();
-    let vram = i64::from(gpu.as_ref().map_or(0, |info| info.vram_gb));
+    let probed_vram = i64::from(gpu.as_ref().map_or(0, |info| info.vram_gb));
+    // Recommendations and all fit rows use the same shared ladder as launch:
+    // explicit VRAMGB setting > hardware probe > conservative fallback.
+    let vram = crate::exec::build_launcher(&home)
+        .map(|launcher| i64::from(localx_llama_core::Launcher::vram_gb(&launcher)))
+        .unwrap_or(probed_vram);
     chooser.set_banner(gpu_banner(gpu.as_ref()));
     let mut show_all = false;
 
@@ -533,6 +555,9 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         if show_all_offered {
             rows.push(MenuRow::plain("[Show all tiers]"));
         }
+        let add_model_index = rows.len();
+        rows.push(MenuRow::plain("[Add a Hugging Face model]"));
+        let cancel_index = rows.len();
         rows.push(MenuRow::plain("[Cancel]"));
 
         // Preselect the workspace's `.llm-default` model when the cwd (or an
@@ -549,11 +574,24 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
             chooser.release();
             return Ok(());
         };
-        if show_all_offered && index == rows.len() - 2 {
+        if show_all_offered && index == add_model_index - 1 {
             show_all = true;
             continue;
         }
-        if index == rows.len() - 1 {
+        if index == add_model_index {
+            chooser.set_panel(None);
+            if add_hf_model_flow(chooser.as_mut(), &home, vram) {
+                // Synthesized entries default to the experimental tier. Show
+                // all on return so the model the user just added is visible.
+                show_all = true;
+            }
+            if chooser.quit_requested() {
+                chooser.release();
+                return Ok(());
+            }
+            continue;
+        }
+        if index == cancel_index {
             chooser.release();
             return Ok(());
         }
@@ -569,6 +607,212 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         }
         show_all = false;
     }
+}
+
+/// One discovered quant row: friendly quality hint, key, combined size, and an
+/// explicit fit label that remains meaningful in the plain/screen-reader path.
+fn discovered_quant_row(
+    candidate: &localbox_launcher::quant::QuantCandidate,
+    vram: i64,
+    recommended: bool,
+) -> MenuRow {
+    let mut row = MenuRow::plain(format!(
+        "{} · {}",
+        localbox_tui::vocab::quality_hint(&candidate.key),
+        candidate.key
+    ));
+    if let Some(gb) = candidate_size_gb(candidate) {
+        let fit = localx_llama_core::vram::quant_fit_class(Some(gb), vram);
+        row = row
+            .with_fit(format!(" · {gb:.1} GB"), fit)
+            .with(format!(" · {}", fit.as_str()));
+    } else {
+        row = row.with(" · size unknown");
+    }
+    if recommended {
+        row = row.with("  [recommended]");
+    }
+    row
+}
+
+fn recommendation_panel(
+    discovery: &HfDiscovery,
+    recommended: &localbox_launcher::quant::QuantCandidate,
+    vram: i64,
+) -> String {
+    let estimate = match candidate_size_gb(recommended) {
+        Some(gb) => {
+            let fit = localx_llama_core::vram::quant_fit_class(Some(gb), vram);
+            let reason = match fit {
+                FitClass::Fits => "leaves at least 7 GB for context and overhead",
+                FitClass::Tight => "leaves at least 2 GB; shorter contexts are safer",
+                FitClass::Over => "exceeds the detected graphics-memory budget",
+                FitClass::Unknown => "has no reliable size estimate",
+            };
+            format!(
+                "{} ({gb:.1} GB, {} — {reason})",
+                recommended.key,
+                fit.as_str()
+            )
+        }
+        None => format!("{} (repository default; size unavailable)", recommended.key),
+    };
+    format!(
+        "Found {} quant variants in {}.\n\
+         Suggested: {estimate}. This is a weight-size/headroom estimate, not a benchmark.\n\
+         Nothing downloads until you explicitly choose a quant below.",
+        discovery.candidates.len(),
+        discovery.hf.repo_id()
+    )
+}
+
+/// Register a Hugging Face repository from inside the guided launcher. Returns
+/// `true` only when the catalog was intentionally registered/enriched.
+fn add_hf_model_flow(chooser: &mut dyn Chooser, home: &Path, vram: i64) -> bool {
+    let Some(reference) = chooser.input(
+        "Enter a Hugging Face GGUF repo id or URL (for example owner/model-GGUF).\n\
+         Leave blank to go back.",
+    ) else {
+        return false;
+    };
+    let hf = match localbox_launcher::hf_meta::parse_hf_ref(&reference) {
+        Ok(hf) => hf,
+        Err(_) => {
+            chooser.announce_error(
+                "That is not a Hugging Face repo id or URL. Expected owner/repo or \
+                 https://huggingface.co/owner/repo.",
+            );
+            return false;
+        }
+    };
+    chooser.notice("Reading the repository's GGUF variants — nothing is downloading …");
+    let discovery = match discover_hf_repo(hf) {
+        Ok(discovery) => discovery,
+        Err(error) => {
+            chooser.announce_error(&plain_warning("add model", &error));
+            return false;
+        }
+    };
+    let Some(recommended) = recommend_quant(&discovery.candidates, vram) else {
+        chooser.announce_error("No selectable GGUF quant variants were found.");
+        return false;
+    };
+    let recommended_key = recommended.key.clone();
+    let recommended_index = discovery
+        .candidates
+        .iter()
+        .position(|candidate| candidate.key == recommended_key)
+        .unwrap_or(0);
+    let mut rows: Vec<MenuRow> = discovery
+        .candidates
+        .iter()
+        .map(|candidate| discovered_quant_row(candidate, vram, candidate.key == recommended_key))
+        .collect();
+    let register_only_index = rows.len();
+    rows.push(MenuRow::plain("[Register only — download later]"));
+    let cancel_index = rows.len();
+    rows.push(MenuRow::plain("[Cancel — make no changes]"));
+    chooser.set_panel(Some((
+        "Quant recommendation".to_string(),
+        recommendation_panel(&discovery, recommended, vram),
+    )));
+    let Some(choice) = chooser.choose(
+        "Choose a quant to download, or register without downloading",
+        &rows,
+        recommended_index,
+    ) else {
+        return false;
+    };
+    if choice == cancel_index {
+        return false;
+    }
+
+    let selected_key =
+        (choice < discovery.candidates.len()).then(|| discovery.candidates[choice].key.clone());
+    let default_key = selected_key.as_deref().unwrap_or(&recommended_key);
+    let outcome = match discovery.register(&catalog_dir(home), default_key) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            chooser.announce_error(&plain_warning("add model", &error));
+            return false;
+        }
+    };
+    let key = outcome.key().to_string();
+    let catalog_message = match &outcome {
+        CatalogInsert::Inserted(_) => format!(
+            "Registered '{key}' with all {} quant variants.",
+            discovery.candidates.len()
+        ),
+        CatalogInsert::Updated { added_quants, .. } => format!(
+            "Updated '{key}' with {} missing quant variants.",
+            added_quants.len()
+        ),
+        CatalogInsert::AlreadyPresent(_) => {
+            format!("'{key}' was already complete in your catalog.")
+        }
+    };
+    if choice == register_only_index {
+        let default_message = if matches!(outcome, CatalogInsert::Inserted(_)) {
+            format!("Suggested default: {recommended_key}.")
+        } else {
+            "Your existing default quant was preserved.".to_string()
+        };
+        chooser.announce(&format!(
+            "{catalog_message}\nNo model files were downloaded. {default_message}"
+        ));
+        return true;
+    }
+
+    let Some(selected_key) = selected_key else {
+        return true;
+    };
+    match download_guided_quant(chooser, home, &key, &selected_key) {
+        Ok(paths) => chooser.announce(&format!(
+            "{catalog_message}\nDownloaded '{}' ({} file(s)).",
+            selected_key,
+            paths.len()
+        )),
+        Err(error) => chooser.announce_error(&format!(
+            "{catalog_message}\nThe catalog registration succeeded, but the download failed:\n{}",
+            plain_warning("download", &error)
+        )),
+    }
+    true
+}
+
+fn download_guided_quant(
+    chooser: &mut dyn Chooser,
+    home: &Path,
+    key: &str,
+    quant: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let launcher = crate::exec::build_launcher(home)?;
+    let targets = launcher
+        .model_download_targets(key, Some(quant))
+        .map_err(|e| e.to_string())?;
+    let count = targets
+        .iter()
+        .filter(|target| target.kind == DownloadKind::Gguf)
+        .count();
+    if count == 0 {
+        return Err(format!("'{key}' resolves to no GGUF files"));
+    }
+    chooser.release();
+    chooser.notice(&format!("Downloading quant '{quant}' ({count} file(s)) …"));
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let mut printer = ProgressPrinter::default();
+    let paths = runtime
+        .block_on(launcher.fetch_model_files(
+            key,
+            Some(quant),
+            &[DownloadKind::Gguf],
+            &mut |progress| printer.report(progress),
+        ))
+        .map_err(|e| e.to_string())?;
+    for path in &paths {
+        chooser.notice(&format!("ready: {}", path.display()));
+    }
+    Ok(paths)
 }
 
 fn confirm_flow(

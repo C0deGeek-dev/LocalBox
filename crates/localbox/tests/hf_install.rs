@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
 
 /// A loopback stand-in for the Hub: answers every `/api/models/...` with the
@@ -70,17 +70,49 @@ fn run_localbox(home: &Path, endpoint: &str, args: &[&str]) -> std::process::Out
         .expect("run localbox")
 }
 
+fn run_guided(home: &Path, endpoint: &str, input: &str) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_localbox"))
+        .arg("--plain")
+        .env("USERPROFILE", home)
+        .env("HOME", home)
+        .env("LOCALBOX_HF_ENDPOINT", endpoint)
+        .current_dir(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start guided localbox");
+    child
+        .stdin
+        .take()
+        .expect("guided stdin")
+        .write_all(input.as_bytes())
+        .expect("write guided choices");
+    child.wait_with_output().expect("finish guided localbox")
+}
+
 fn configure_home(home: &Path) -> PathBuf {
     let local_llm = home.join(".local-llm");
     std::fs::create_dir_all(&local_llm).unwrap();
     let gguf_root = home.join("gguf");
-    let settings = serde_json::json!({ "LlamaCppGgufRoot": gguf_root });
+    // Pin recommendation input so this behavior test is independent of the
+    // developer or CI host's actual GPU.
+    let settings = serde_json::json!({
+        "LlamaCppGgufRoot": gguf_root,
+        "VRAMGB": 24
+    });
     std::fs::write(
         local_llm.join("settings.json"),
         serde_json::to_string(&settings).unwrap(),
     )
     .unwrap();
     local_llm
+}
+
+fn seed_empty_catalog(local_llm: &Path) -> String {
+    let original = "{\"Models\":{}}\n".to_string();
+    std::fs::write(local_llm.join("llm-models.json"), &original).unwrap();
+    original
 }
 
 /// Recursively search `dir` for a file named `name`.
@@ -265,6 +297,103 @@ fn a_same_repo_run_backfills_a_legacy_one_quant_entry_without_clobbering_it() {
     assert_eq!(model["Quants"].as_object().unwrap().len(), 3);
     assert!(find_file(&home.join("gguf"), "tiny.i1-Q4_K_M.gguf").is_some());
     assert!(find_file(&home.join("gguf"), "tiny.i1-IQ4_XS.gguf").is_none());
+}
+
+#[test]
+fn guided_add_can_register_only_cancel_cleanly_or_download_one_explicit_quant() {
+    const SIBLINGS: &str = r#"{"siblings":[
+        {"rfilename":"tiny.i1-IQ4_XS.gguf","size":7},
+        {"rfilename":"tiny.i1-Q4_K_M.gguf","size":8},
+        {"rfilename":"tiny.i1-Q6_K.gguf","size":12}
+    ]}"#;
+    let files = || {
+        vec![
+            ("tiny.i1-IQ4_XS.gguf".to_string(), b"iq4tiny".to_vec()),
+            ("tiny.i1-Q4_K_M.gguf".to_string(), b"q4-tiny!".to_vec()),
+            ("tiny.i1-Q6_K.gguf".to_string(), b"q6-is-bigger".to_vec()),
+        ]
+    };
+
+    // Empty catalog root menu: 1 = Add. Quant menu: 4 = Register only.
+    let register_temp = tempfile::tempdir().expect("register home");
+    let register_home = register_temp.path();
+    let register_catalog = configure_home(register_home);
+    seed_empty_catalog(&register_catalog);
+    let register_hub = spawn_hub(SIBLINGS, files());
+    let registered = run_guided(register_home, &register_hub, "1\nowner/tiny\n4\n\n");
+    assert!(
+        registered.status.success(),
+        "register-only failed: {}",
+        String::from_utf8_lossy(&registered.stderr)
+    );
+    let registered_out = String::from_utf8_lossy(&registered.stdout);
+    assert!(registered_out.contains("[recommended]"), "{registered_out}");
+    assert!(
+        registered_out.contains("No model files were downloaded"),
+        "{registered_out}"
+    );
+    let catalog: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(register_catalog.join("llm-models.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(catalog["Models"]["tiny"]["Quant"], "i1-q4km");
+    assert_eq!(
+        catalog["Models"]["tiny"]["Quants"]
+            .as_object()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(find_file(&register_home.join("gguf"), "tiny.i1-IQ4_XS.gguf").is_none());
+    assert!(find_file(&register_home.join("gguf"), "tiny.i1-Q4_K_M.gguf").is_none());
+    assert!(find_file(&register_home.join("gguf"), "tiny.i1-Q6_K.gguf").is_none());
+
+    // Blank/back at the quant menu cancels. Neither catalog bytes nor model
+    // files change (the rich path's Esc reaches the same None outcome).
+    let cancel_temp = tempfile::tempdir().expect("cancel home");
+    let cancel_home = cancel_temp.path();
+    let cancel_catalog = configure_home(cancel_home);
+    let original = seed_empty_catalog(&cancel_catalog);
+    let cancel_hub = spawn_hub(SIBLINGS, files());
+    let cancelled = run_guided(cancel_home, &cancel_hub, "1\nowner/tiny\n\n");
+    assert!(cancelled.status.success());
+    assert_eq!(
+        std::fs::read_to_string(cancel_catalog.join("llm-models.json")).unwrap(),
+        original
+    );
+    assert!(!cancel_home.join("gguf").exists());
+
+    // 2 = explicit i1-q4km selection. All variants register, only Q4 downloads.
+    let download_temp = tempfile::tempdir().expect("download home");
+    let download_home = download_temp.path();
+    let download_catalog = configure_home(download_home);
+    seed_empty_catalog(&download_catalog);
+    let download_hub = spawn_hub(SIBLINGS, files());
+    let downloaded = run_guided(download_home, &download_hub, "1\nowner/tiny\n2\n\n");
+    assert!(
+        downloaded.status.success(),
+        "guided download failed: {}",
+        String::from_utf8_lossy(&downloaded.stderr)
+    );
+    let catalog: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(download_catalog.join("llm-models.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(catalog["Models"]["tiny"]["Quant"], "i1-q4km");
+    assert_eq!(
+        catalog["Models"]["tiny"]["Quants"]
+            .as_object()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(find_file(&download_home.join("gguf"), "tiny.i1-IQ4_XS.gguf").is_none());
+    assert_eq!(
+        std::fs::read(find_file(&download_home.join("gguf"), "tiny.i1-Q4_K_M.gguf").unwrap())
+            .unwrap(),
+        b"q4-tiny!"
+    );
+    assert!(find_file(&download_home.join("gguf"), "tiny.i1-Q6_K.gguf").is_none());
 }
 
 #[test]

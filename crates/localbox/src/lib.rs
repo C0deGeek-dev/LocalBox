@@ -15,6 +15,7 @@ pub mod embed;
 pub mod exec;
 pub mod fetch;
 pub mod guided;
+pub mod hf_install;
 pub mod live;
 pub mod manage;
 pub mod migrate;

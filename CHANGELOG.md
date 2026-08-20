@@ -16,6 +16,14 @@ Past-tense record of shipped changes.
   token) or non-GGUF repo is reported rather than downloaded. A catalog name still
   resolves first; an argument that is neither now says so and points at the
   repo-id form. See `docs/model-management.md`.
+- **Register and inspect a model before downloading it.** The guided launcher
+  now has `[Add a Hugging Face model]`: it discovers every GGUF quant, shows the
+  friendly quality hint, combined size, and fits/tight/over estimate, then
+  preselects a conservative VRAM-aware recommendation. Choosing a quant registers
+  all variants and downloads only that explicit choice. The Register-only action
+  writes the complete catalog entry with no weight transfer; Cancel writes and
+  downloads nothing. Existing same-repository entries retain their current
+  defaults and other values.
 
 ## v3.3.1 - 2026-08-20
 

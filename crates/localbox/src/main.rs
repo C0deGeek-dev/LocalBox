@@ -28,7 +28,7 @@ const USAGE: &str = "\
 localbox — run a local model and the coding agent of your choice
 
 Usage:
-  localbox                            open the guided launcher (pick a model)
+  localbox                            guided launcher: pick or add a model
   localbox --plain                    guided launcher with plain-text menus
   localbox launch <model> [options]   resolve, start, and hand off to an agent
   localbox serve <model> [options]    start the model (and proxy) headless
@@ -43,7 +43,9 @@ Usage:
                                       <model> is a catalog name, or a Hugging Face
                                       repo id (owner/repo) or URL — a repo not yet
                                       in the catalog has all quants added; only the
-                                      selected variant is fetched (--quant picks it)
+                                      selected variant is fetched (--quant picks it).
+                                      To register without downloading, use the
+                                      guided launcher's Add Model action.
   localbox purge                      stop servers and delete downloaded model files
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
@@ -532,40 +534,32 @@ fn download_from_hf(
     home: &std::path::Path,
 ) -> Result<(), String> {
     use localbox::fetch::ProgressPrinter;
-    use localbox::guided::{install_catalog_model, CatalogInsert};
+    use localbox::guided::CatalogInsert;
+    use localbox::hf_install::discover_hf_repo;
     use localbox_launcher::fetch::DownloadKind;
-    use localbox_launcher::{catalog_entry, hf_meta, quant as quant_mod};
 
-    let hf = hf_meta::parse_hf_ref(model).map_err(|_| {
+    let hf = localbox_launcher::hf_meta::parse_hf_ref(model).map_err(|_| {
         format!(
             "unknown model '{model}' — not a catalog name, and not a Hugging Face repo id \
              (expected owner/repo or a https://huggingface.co/owner/repo URL). \
              Run `localbox info` for the catalog names."
         )
     })?;
-
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let client = reqwest::Client::new();
-    let files = runtime
-        .block_on(hf_meta::list_gguf_files(&client, &hf))
-        .map_err(|e| e.to_string())?;
-    let candidates = quant_mod::quant_candidates(&files);
-    let chosen = quant_mod::select_quant(candidates.clone(), quant).map_err(|e| e.to_string())?;
-
-    let (key_hint, entry) = catalog_entry::synthesize_entry(&hf, &candidates, &chosen);
-    let outcome = install_catalog_model(&catalog_dir(home), &key_hint, &entry)?;
+    let discovery = discover_hf_repo(hf)?;
+    let chosen = discovery.select(quant)?;
+    let outcome = discovery.register(&catalog_dir(home), &chosen.key)?;
     match &outcome {
         CatalogInsert::Inserted(key) => {
             println!(
                 "Added '{key}' to your catalog for {} ({} quant(s)).",
-                hf.repo_id(),
-                candidates.len()
+                discovery.hf.repo_id(),
+                discovery.candidates.len()
             );
         }
         CatalogInsert::Updated { key, added_quants } => {
             println!(
                 "Updated '{key}' for {} with {} missing quant(s): {}.",
-                hf.repo_id(),
+                discovery.hf.repo_id(),
                 added_quants.len(),
                 added_quants.join(", ")
             );
@@ -573,7 +567,7 @@ fn download_from_hf(
         CatalogInsert::AlreadyPresent(key) => {
             println!(
                 "{} is already complete in your catalog as '{key}'.",
-                hf.repo_id()
+                discovery.hf.repo_id()
             );
         }
     }
@@ -598,6 +592,7 @@ fn download_from_hf(
     );
 
     let mut printer = ProgressPrinter::default();
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let fetched = runtime
         .block_on(launcher.fetch_model_files(
             key,

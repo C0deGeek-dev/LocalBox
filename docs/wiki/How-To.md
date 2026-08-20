@@ -36,6 +36,12 @@ the chosen one. Re-run the repo to merge newly published variants, or use the
 catalog key with `--quant` to fetch another registered variant. See
 [Model management](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/model-management.md).
 
+For an interactive, no-surprises path, run `localbox` and choose
+`[Add a Hugging Face model]`. LocalBox analyzes every quant and recommends one
+for your graphics memory, but downloads nothing until you explicitly choose a
+quant. `[Register only — download later]` writes only the catalog metadata;
+Cancel writes nothing.
+
 VRAM-aware: the guided launcher tags each quant fits / tight / over against
 your card. Full detail:
 [model-management.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/model-management.md).

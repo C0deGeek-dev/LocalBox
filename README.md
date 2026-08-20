@@ -85,7 +85,7 @@ Build it from this repository (or use a release binary):
 cargo install --path crates/localbox --locked
 ```
 
-Then launch the guided model picker:
+Then launch the guided model picker (it can also add a Hugging Face model):
 
 ```text
 localbox
@@ -99,7 +99,7 @@ already have. See the [installation guide](docs/install.md) for details.
 
 | Goal | Command |
 |---|---|
-| Pick a model interactively | `localbox` |
+| Pick or add a model interactively | `localbox` |
 | Guided launcher with plain-text menus | `localbox --plain` |
 | Launch a model into Claude Code | `localbox launch <model>` |
 | Run through LocalPilot | `localbox launch <model> --agent localpilot` |
