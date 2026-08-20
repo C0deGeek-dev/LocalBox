@@ -136,11 +136,22 @@ pub fn quant_candidates(files: &[HfGgufFile]) -> Vec<QuantCandidate> {
         .collect()
 }
 
-/// The index of the default candidate: `q4km` when present, otherwise the
-/// median-by-size when every size is known, otherwise the middle of the
-/// key-sorted list. `candidates` must be non-empty.
+/// A compact quant key with any imatrix marker dropped, so `q4km` and its
+/// imatrix twin `i1-q4km` compare equal (`i1q4km` → `q4km`).
+fn without_imatrix(compact_key: &str) -> &str {
+    compact_key.strip_prefix("i1").unwrap_or(compact_key)
+}
+
+/// The index of the default candidate: `Q4_K_M` (static or imatrix) when
+/// present, otherwise the median-by-size when every size is known, otherwise the
+/// middle of the key-sorted list. `candidates` must be non-empty. An
+/// imatrix-only repo (every quant `i1-…`, as mradermacher publishes) has no
+/// plain `q4km`, so the imatrix twin is accepted as the default too.
 fn default_index(candidates: &[QuantCandidate]) -> usize {
-    if let Some(i) = candidates.iter().position(|c| c.key == "q4km") {
+    if let Some(i) = candidates
+        .iter()
+        .position(|c| without_imatrix(&compact(&c.key)) == "q4km")
+    {
         return i;
     }
     if candidates.iter().all(|c| c.total_size.is_some()) {
@@ -153,8 +164,9 @@ fn default_index(candidates: &[QuantCandidate]) -> usize {
 }
 
 /// Resolve a caller's `--quant` request (or, when `None`, a default) to one
-/// candidate. A request matches a key case-insensitively or by compact form
-/// (`Q4_K_M` matches `q4km`).
+/// candidate. A request matches a key case-insensitively, by compact form
+/// (`Q4_K_M` matches `q4km`), or — when the match is unambiguous — ignoring an
+/// imatrix marker, so `--quant q4km` selects `i1-q4km` in an imatrix-only repo.
 ///
 /// # Errors
 /// [`QuantSelectError::NoneAvailable`] when the list is empty;
@@ -168,18 +180,14 @@ pub fn select_quant(
     }
     match requested {
         Some(req) => {
-            let want = compact(req);
-            let pos = candidates
-                .iter()
-                .position(|c| c.key.eq_ignore_ascii_case(req) || compact(&c.key) == want)
-                .ok_or_else(|| QuantSelectError::Unknown {
-                    requested: req.to_string(),
-                    available: candidates
-                        .iter()
-                        .map(|c| c.key.clone())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                })?;
+            let pos = match_quant(&candidates, req).ok_or_else(|| QuantSelectError::Unknown {
+                requested: req.to_string(),
+                available: candidates
+                    .iter()
+                    .map(|c| c.key.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            })?;
             Ok(candidates.swap_remove(pos))
         }
         None => {
@@ -187,6 +195,27 @@ pub fn select_quant(
             Ok(candidates.swap_remove(index))
         }
     }
+}
+
+/// The candidate index a `--quant` request selects: an exact key / compact match
+/// first, then — only when it picks out exactly one candidate — an
+/// imatrix-insensitive match.
+fn match_quant(candidates: &[QuantCandidate], req: &str) -> Option<usize> {
+    let want = compact(req);
+    if let Some(i) = candidates
+        .iter()
+        .position(|c| c.key.eq_ignore_ascii_case(req) || compact(&c.key) == want)
+    {
+        return Some(i);
+    }
+    let want_bare = without_imatrix(&want);
+    let fuzzy: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| without_imatrix(&compact(&c.key)) == want_bare)
+        .map(|(i, _)| i)
+        .collect();
+    (fuzzy.len() == 1).then(|| fuzzy[0])
 }
 
 #[cfg(test)]
@@ -319,5 +348,36 @@ mod tests {
             select_quant(Vec::new(), None).unwrap_err(),
             QuantSelectError::NoneAvailable
         );
+    }
+
+    #[test]
+    fn an_imatrix_only_repo_resolves_like_a_real_mradermacher_listing() {
+        // A slice of the real Qwen3.8-27B i1-GGUF repo: every quant is imatrix,
+        // and the repo also ships a non-model `imatrix.gguf` data file.
+        let base = "Qwen3.8-27B-Uncensored-Heretic-Abliterated";
+        let files = vec![
+            file(&format!("{base}.i1-IQ4_XS.gguf"), Some(15_082_507_808)),
+            file(&format!("{base}.i1-Q4_K_M.gguf"), Some(16_547_401_248)),
+            file(&format!("{base}.i1-Q6_K.gguf"), Some(22_082_530_848)),
+            file(&format!("{base}.i1-IQ1_S.gguf"), Some(7_149_825_568)),
+            file(&format!("{base}.imatrix.gguf"), Some(13_642_624)),
+        ];
+        let candidates = quant_candidates(&files);
+        let keys: Vec<&str> = candidates.iter().map(|c| c.key.as_str()).collect();
+        // The imatrix data file carries no quant token → excluded; the rest keep
+        // their imatrix marker.
+        assert_eq!(keys, vec!["i1-iq1s", "i1-iq4xs", "i1-q4km", "i1-q6k"]);
+
+        // The user can ask for the quant as it appears on Hugging Face, without
+        // knowing the imatrix prefix.
+        for req in ["q4km", "Q4_K_M", "i1-q4km", "i1-Q4_K_M"] {
+            assert_eq!(
+                select_quant(candidates.clone(), Some(req)).unwrap().key,
+                "i1-q4km",
+                "request {req:?}"
+            );
+        }
+        // Default prefers the Q4_K_M imatrix twin even though no plain q4km exists.
+        assert_eq!(select_quant(candidates, None).unwrap().key, "i1-q4km");
     }
 }
