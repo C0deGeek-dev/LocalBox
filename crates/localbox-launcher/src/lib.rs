@@ -24,6 +24,10 @@
 //!   a catalog model implies (GGUF, vision projector, draft model), so a
 //!   consumer that only holds the launcher contract can still put a model on
 //!   disk instead of sending the user to another tool.
+//!
+//! - [`hf_meta`] — Hugging Face repo references and GGUF file listing over the
+//!   Hub API: the read step that lets the download command install a model
+//!   straight from an `owner/repo` reference not yet in the catalog.
 
 pub mod catalog;
 
@@ -36,6 +40,7 @@ pub fn product_version() -> &'static str {
 
 pub mod env;
 pub mod fetch;
+pub mod hf_meta;
 pub mod launcher;
 pub mod localpilot_config;
 pub mod orchestrate;
