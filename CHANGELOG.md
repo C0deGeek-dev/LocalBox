@@ -4,6 +4,8 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v3.3.2 - 2026-08-20
+
 - **Install a model straight from a Hugging Face repo.** `localbox download`
   now accepts a Hugging Face repo id (`owner/repo`) or repo URL in place of a
   catalog name: it reads the repo's GGUF listing from the Hub API, registers every
