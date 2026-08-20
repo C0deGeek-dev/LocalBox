@@ -189,16 +189,12 @@ pub fn model_info_url(repo_id: &str) -> String {
 }
 
 /// The direct download URL for a file in a repo, honouring the configured
-/// [`endpoint`]. Mirrors [`crate::fetch::hf_download_url`] but overridable for
-/// the from-HF install path so its downloads reach the same host as its listing.
+/// [`endpoint`]. Delegates to the shared launcher URL builder so direct-HF,
+/// catalog-key, launch-on-miss, and tuner downloads use the same endpoint and
+/// escaping contract.
 #[must_use]
 pub fn resolve_url(repo_id: &str, file_name: &str) -> String {
-    format!(
-        "{}/{}/resolve/main/{}",
-        endpoint(),
-        encode_path(repo_id),
-        encode_path(file_name)
-    )
+    crate::fetch::hf_download_url(repo_id, file_name)
 }
 
 /// The shape LocalBox reads from the Hub model-info response. Extra fields are

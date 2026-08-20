@@ -122,13 +122,19 @@ pub fn escape_segment(segment: &str) -> String {
 /// spellings normalize to `/`; each segment is percent-encoded.
 #[must_use]
 pub fn hf_download_url(repo: &str, file_name: &str) -> String {
+    let repo = repo
+        .replace('\\', "/")
+        .split('/')
+        .map(escape_segment)
+        .collect::<Vec<_>>()
+        .join("/");
     let path = file_name
         .replace('\\', "/")
         .split('/')
         .map(escape_segment)
         .collect::<Vec<_>>()
         .join("/");
-    format!("https://huggingface.co/{repo}/resolve/main/{path}")
+    format!("{}/{repo}/resolve/main/{path}", crate::hf_meta::endpoint())
 }
 
 /// The sidecar path bytes accumulate in until the download completes.

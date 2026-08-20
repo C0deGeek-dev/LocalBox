@@ -215,14 +215,20 @@ impl LlamaLauncher {
         quant: Option<&str>,
     ) -> Result<Vec<ModelDownload>, LauncherError> {
         let def = self.model_def(key)?;
-        let gguf_path = self.expected_gguf_path(&def, quant)?;
         let gguf_file = Self::model_file_name(&def, quant)?;
-        let mut targets = vec![ModelDownload {
-            kind: DownloadKind::Gguf,
-            url: hf_download_url(&def.repo, &gguf_file),
-            present: gguf_path.is_file(),
-            path: gguf_path,
-        }];
+        let gguf_folder = self.model_folder(&def, "")?;
+        let mut targets: Vec<ModelDownload> = crate::quant::shard_files_from_primary(&gguf_file)
+            .into_iter()
+            .map(|file| {
+                let path = gguf_folder.join(&file);
+                ModelDownload {
+                    kind: DownloadKind::Gguf,
+                    url: hf_download_url(&def.repo, &file),
+                    present: path.is_file(),
+                    path,
+                }
+            })
+            .collect();
         let folder = self.model_folder(&def, key)?;
         let configured = |name: &Option<String>| {
             name.as_deref()
@@ -563,6 +569,15 @@ mod tests {
                     "Repo": "x/y",
                     "File": "single.gguf",
                     "Contexts": { "": 8192 }
+                },
+                "split": {
+                    "Root": "split",
+                    "Repo": "owner/split-GGUF",
+                    "Quants": {
+                        "q6k": "nested/Split-Q6_K-00001-of-00003.gguf"
+                    },
+                    "Quant": "q6k",
+                    "Contexts": { "": 8192 }
                 }
             }
         }"#,
@@ -702,6 +717,26 @@ mod tests {
         let single = plain.model_download_targets("single", None).unwrap();
         assert_eq!(single.len(), 1);
         assert_eq!(single[0].kind, DownloadKind::Gguf);
+
+        // A split quant expands from the configured primary name. The ordinary
+        // catalog path therefore downloads every shard while llama.cpp still
+        // resolves the first one as the model path.
+        let split_folder = dir.path().join("split").join("nested");
+        std::fs::create_dir_all(&split_folder).unwrap();
+        std::fs::write(split_folder.join("Split-Q6_K-00002-of-00003.gguf"), b"two").unwrap();
+        let split = plain.model_download_targets("split", None).unwrap();
+        assert_eq!(split.len(), 3);
+        assert!(split.iter().all(|target| target.kind == DownloadKind::Gguf));
+        assert!(split[0]
+            .url
+            .ends_with("/nested/Split-Q6_K-00001-of-00003.gguf"));
+        assert!(split[1].present, "the existing second shard is detected");
+        assert!(split[2].path.ends_with("Split-Q6_K-00003-of-00003.gguf"));
+        let split_def = plain.model_def("split").unwrap();
+        assert!(plain
+            .expected_gguf_path(&split_def, None)
+            .unwrap()
+            .ends_with("Split-Q6_K-00001-of-00003.gguf"));
     }
 
     #[test]

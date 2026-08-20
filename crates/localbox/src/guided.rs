@@ -1473,6 +1473,12 @@ pub fn merge_missing_models(
 pub enum CatalogInsert {
     /// A new entry was written under this key.
     Inserted(String),
+    /// An existing same-repository entry gained these previously missing
+    /// quant keys; every pre-existing value was preserved.
+    Updated {
+        key: String,
+        added_quants: Vec<String>,
+    },
     /// The repo was already in the catalog under this key; nothing was written.
     AlreadyPresent(String),
 }
@@ -1482,7 +1488,9 @@ impl CatalogInsert {
     #[must_use]
     pub fn key(&self) -> &str {
         match self {
-            CatalogInsert::Inserted(key) | CatalogInsert::AlreadyPresent(key) => key,
+            CatalogInsert::Inserted(key)
+            | CatalogInsert::Updated { key, .. }
+            | CatalogInsert::AlreadyPresent(key) => key,
         }
     }
 }
@@ -1501,11 +1509,15 @@ fn unique_model_key(models: &serde_json::Map<String, serde_json::Value>, hint: &
 
 /// Install a synthesised catalog entry into the user's `llm-models.json` under
 /// `catalog_dir`, additively. An entry whose `Repo` is already present is left
-/// untouched (idempotent re-install); otherwise the entry is written under a
-/// collision-free key, with its `Root` rewritten to match. Every other part of
-/// the catalog — existing models, `CommandAliases`, scalar settings — is
-/// preserved. The caller passes [`catalog_dir`]`(home)` (which seeds the tree);
-/// taking the directory keeps this write unit-testable against a temp path.
+/// enriched with quant keys it does not yet contain; otherwise the entry is
+/// written under a collision-free key, with its `Root` rewritten to match.
+/// Same-repository enrichment preserves every existing field and quant value
+/// verbatim and writes only when a key is missing. A valid legacy `File`-only
+/// entry remains untouched rather than silently changing its resolution
+/// semantics. Every other part of the catalog — existing models,
+/// `CommandAliases`, scalar settings — is preserved. The caller passes
+/// [`catalog_dir`]`(home)` (which seeds the tree); taking the directory keeps
+/// this write unit-testable against a temp path.
 ///
 /// # Errors
 /// A string message when the catalog file cannot be read, is not valid JSON, or
@@ -1531,14 +1543,56 @@ pub fn install_catalog_model(
         .cloned()
         .unwrap_or_default();
 
-    // Idempotency: the same repo already in the catalog is reused, not duplicated.
+    // Idempotency plus safe backfill: the same repo is reused, and only missing
+    // quant keys are copied into a real Quants object. Existing values and all
+    // non-quant fields remain the user's. A valid File-only entry is left alone
+    // because adding Quants would change which field model resolution prefers.
     let repo = entry.get("Repo").and_then(serde_json::Value::as_str);
     if let Some(repo) = repo {
-        if let Some((existing, _)) = models
+        if let Some(existing_key) = models
             .iter()
             .find(|(_, def)| def.get("Repo").and_then(serde_json::Value::as_str) == Some(repo))
+            .map(|(key, _)| key.clone())
         {
-            return Ok(CatalogInsert::AlreadyPresent(existing.clone()));
+            let incoming_quants = entry
+                .get("Quants")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let existing_entry = models.get_mut(&existing_key).ok_or_else(|| {
+                format!("catalog entry '{existing_key}' disappeared during merge")
+            })?;
+            let existing_object = existing_entry.as_object_mut().ok_or_else(|| {
+                format!("catalog entry '{existing_key}' for repo '{repo}' is not an object")
+            })?;
+            let Some(existing_quants_value) = existing_object.get_mut("Quants") else {
+                return Ok(CatalogInsert::AlreadyPresent(existing_key));
+            };
+            let existing_quants = existing_quants_value.as_object_mut().ok_or_else(|| {
+                format!(
+                    "catalog entry '{existing_key}' for repo '{repo}' has a malformed Quants value"
+                )
+            })?;
+            let mut added_quants = Vec::new();
+            for (quant, value) in incoming_quants {
+                if !existing_quants.contains_key(&quant) {
+                    existing_quants.insert(quant.clone(), value);
+                    added_quants.push(quant);
+                }
+            }
+            if added_quants.is_empty() {
+                return Ok(CatalogInsert::AlreadyPresent(existing_key));
+            }
+
+            user.insert("Models".to_string(), serde_json::Value::Object(models));
+            let pretty = serde_json::to_string_pretty(&serde_json::Value::Object(user))
+                .map_err(|e| e.to_string())?;
+            std::fs::write(&user_path, pretty + "\n")
+                .map_err(|e| format!("could not write {}: {e}", user_path.display()))?;
+            return Ok(CatalogInsert::Updated {
+                key: existing_key,
+                added_quants,
+            });
         }
     }
 
@@ -1616,6 +1670,100 @@ mod tests {
         )
         .unwrap();
         assert!(written["Models"].get("new-gguf").is_none());
+    }
+
+    #[test]
+    fn reinstalling_the_same_repo_adds_only_missing_quants() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_catalog(
+            dir.path(),
+            r#"{
+                "Models": {
+                    "mine": {
+                        "Repo": "owner/new-GGUF",
+                        "Root": "custom-root",
+                        "Quants": {
+                            "q4km": {"File":"custom-q4.gguf","Note":"keep me"}
+                        },
+                        "Quant": "q4km",
+                        "Contexts": {"":65536},
+                        "CustomField": {"owned":true}
+                    }
+                },
+                "CommandAliases": {"m":"mine"}
+            }"#,
+        );
+        let entry = serde_json::json!({
+            "Repo": "owner/new-GGUF",
+            "Root": "new-gguf",
+            "Quants": {
+                "q4km": {"File":"upstream-q4.gguf","SizeGB":4.0},
+                "q6k": {"File":"upstream-q6.gguf","SizeGB":6.0}
+            },
+            "Quant": "q6k",
+            "Contexts": {"":32768}
+        });
+
+        let outcome = install_catalog_model(dir.path(), "new-gguf", &entry).unwrap();
+        assert_eq!(
+            outcome,
+            CatalogInsert::Updated {
+                key: "mine".to_string(),
+                added_quants: vec!["q6k".to_string()]
+            }
+        );
+
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("llm-models.json")).unwrap(),
+        )
+        .unwrap();
+        let mine = &written["Models"]["mine"];
+        assert_eq!(mine["Root"], "custom-root");
+        assert_eq!(mine["Quant"], "q4km", "the user's default stays selected");
+        assert_eq!(mine["Contexts"][""], 65536);
+        assert_eq!(mine["CustomField"]["owned"], true);
+        assert_eq!(mine["Quants"]["q4km"]["File"], "custom-q4.gguf");
+        assert_eq!(mine["Quants"]["q4km"]["Note"], "keep me");
+        assert_eq!(mine["Quants"]["q6k"]["File"], "upstream-q6.gguf");
+        assert_eq!(written["CommandAliases"]["m"], "mine");
+    }
+
+    #[test]
+    fn a_file_only_same_repo_entry_is_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = r#"{"Models":{"mine":{"Repo":"owner/new-GGUF","File":"custom.gguf"}}}"#;
+        seed_catalog(dir.path(), original);
+        let entry = serde_json::json!({
+            "Repo": "owner/new-GGUF",
+            "Quants": {"q4km": {"File":"upstream-q4.gguf"}},
+            "Quant": "q4km"
+        });
+
+        let outcome = install_catalog_model(dir.path(), "new-gguf", &entry).unwrap();
+        assert_eq!(outcome, CatalogInsert::AlreadyPresent("mine".to_string()));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("llm-models.json")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn malformed_quants_on_a_same_repo_entry_fail_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = r#"{"Models":{"mine":{"Repo":"owner/new-GGUF","Quants":"bad"}}}"#;
+        seed_catalog(dir.path(), original);
+        let entry = serde_json::json!({
+            "Repo": "owner/new-GGUF",
+            "Quants": {"q4km": {"File":"upstream-q4.gguf"}},
+            "Quant": "q4km"
+        });
+
+        let err = install_catalog_model(dir.path(), "new-gguf", &entry).unwrap_err();
+        assert!(err.contains("malformed Quants"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("llm-models.json")).unwrap(),
+            original
+        );
     }
 
     #[test]

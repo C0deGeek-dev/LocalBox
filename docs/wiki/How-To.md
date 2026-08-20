@@ -31,8 +31,9 @@ localbox purge                   # stop servers, delete downloaded model files
 ```
 
 `localbox download` also takes a Hugging Face repo id or URL in place of a
-catalog name: it lists the repo's GGUF quants, writes a catalog entry, and
-downloads the chosen one. See
+catalog name: it registers every GGUF quant in the catalog but downloads only
+the chosen one. Re-run the repo to merge newly published variants, or use the
+catalog key with `--quant` to fetch another registered variant. See
 [Model management](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/model-management.md).
 
 VRAM-aware: the guided launcher tags each quant fits / tight / over against

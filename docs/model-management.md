@@ -74,22 +74,23 @@ localbox download https://huggingface.co/bartowski/Some-Model-GGUF --quant q4km
 ```
 
 LocalBox reads the repo's file list from the Hugging Face API, groups the GGUF
-files into quant variants (multi-part files are grouped and all their shards are
-fetched), picks the variant — your `--quant` if given, otherwise a sensible
-default (`q4km`, else the middle by size) — and:
+files into quant variants, and picks one — your `--quant` if given, otherwise a
+sensible default (`q4km`, else the middle by size). It then:
 
-1. writes a catalog entry into your `~/.local-llm/llm-models.json` (additively —
-   nothing you already have is touched), with a key derived from the repo name,
-   and
-2. downloads the chosen file(s) into that model's folder under the GGUF root,
-   resumably, the same way a launch does.
+1. registers **every discovered quant** in
+   `~/.local-llm/llm-models.json`, with a key derived from the repo name, and
+2. downloads **only the selected quant** into that model's folder under the
+   GGUF root, resumably, through the same path a later catalog-key download or
+   launch uses. A selected multi-part quant downloads every one of its shards.
 
 List the quant keys a repo offers by running the command with a `--quant` that
 does not exist — the error names the available keys. After the install the model
 is an ordinary catalog entry: launch it by its new key (shown in the output), and
-it appears in `localbox info` / `localbox models` like any other. Re-running the
-same repo is a no-op: an already-catalogued repo is reported and its files
-resume rather than re-download.
+it appears in `localbox info` / `localbox models` like any other. To fetch another
+registered variant later, use `localbox download <catalog-key> --quant <key>`.
+Re-running the repo refreshes its listing and adds any newly discovered quant
+keys. Existing fields, quant mappings, and the default quant remain untouched;
+already-present files are skipped and partial downloads resume.
 
 Two limits today: a **gated or private** repo (one that needs a Hugging Face
 access token) is detected and reported, not downloaded — add such a model by
@@ -100,9 +101,9 @@ name, so a catalog key always wins.
 > Design note: `localbox download` accepts a repo id because LocalBox has no
 > separate "add model" command — the catalog is a plain JSON file you can also
 > edit by hand (above). The synthesised entry is written additively and never
-> overwrites an existing model; a repo already present is reused, and a name
-> collision with an unrelated model gets a suffixed key rather than clobbering
-> it. LocalBox records decisions in this doc and the `CHANGELOG`, not a separate
+> overwrites an existing model; a repo already present receives only missing
+> quant keys, and a name collision with an unrelated model gets a suffixed key
+> rather than clobbering it. LocalBox records decisions in this doc and the `CHANGELOG`, not a separate
 > ADR file.
 
 Removing a model is editing it out of the catalog; `localbox purge` stops

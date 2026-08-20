@@ -6,16 +6,16 @@ Past-tense record of shipped changes.
 
 - **Install a model straight from a Hugging Face repo.** `localbox download`
   now accepts a Hugging Face repo id (`owner/repo`) or repo URL in place of a
-  catalog name: it reads the repo's GGUF listing from the Hub API, groups the
-  quant variants (multi-part files included), picks one (`--quant`, or a default),
-  writes an additive catalog entry into `~/.local-llm/llm-models.json`, and
-  downloads the file(s) resumably into the model's folder — after which the model
-  launches and lists like any hand-added entry. A repo already in the catalog is
-  reused (idempotent), a slug collision with an unrelated model is suffixed rather
-  than clobbering it, and a gated/private repo (needs an access token) or a
-  non-GGUF repo is reported rather than downloaded. A catalog name still resolves
-  first; an argument that is neither now says so and points at the repo-id form.
-  See `docs/model-management.md`.
+  catalog name: it reads the repo's GGUF listing from the Hub API, registers every
+  discovered quant in `~/.local-llm/llm-models.json`, then downloads only the
+  selected variant (`--quant`, or a default). Multi-part variants fetch every
+  shard. Re-running the repo merges only missing quant keys while preserving all
+  existing catalog values; later `download <catalog-key> --quant <key>` calls use
+  the same resumable downloader. A slug collision with an unrelated model is
+  suffixed rather than clobbering it, and a gated/private repo (needs an access
+  token) or non-GGUF repo is reported rather than downloaded. A catalog name still
+  resolves first; an argument that is neither now says so and points at the
+  repo-id form. See `docs/model-management.md`.
 
 ## v3.3.1 - 2026-08-20
 

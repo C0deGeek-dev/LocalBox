@@ -108,6 +108,57 @@ fn shard_index(name: &str) -> u32 {
     split_shard(stem).1.map_or(1, |(index, _)| index)
 }
 
+/// Maximum shard count accepted from a catalog filename. Real GGUF splits are
+/// far smaller; the cap prevents a malformed or hostile `-of-NNNNN` suffix
+/// from allocating an unbounded target list.
+const MAX_SHARD_COUNT: u32 = 1024;
+
+/// Expand a standard primary split-GGUF filename into every shard filename.
+///
+/// Only a first shard (`-00001-of-000NN.gguf`) with a sensible total expands.
+/// The index field is replaced inside the original string so its exact padding,
+/// path, casing, total spelling, and extension casing are preserved. Anything
+/// else remains a single file, which is the fail-safe behavior for hand-written
+/// catalog entries and nonstandard naming schemes.
+#[must_use]
+pub fn shard_files_from_primary(primary: &str) -> Vec<String> {
+    let lower = primary.to_ascii_lowercase();
+    let Some(stem) = lower.strip_suffix(".gguf") else {
+        return vec![primary.to_string()];
+    };
+    let Some(of_pos) = stem.rfind("-of-") else {
+        return vec![primary.to_string()];
+    };
+    let before = &stem[..of_pos];
+    let Some(index_dash) = before.rfind('-') else {
+        return vec![primary.to_string()];
+    };
+    let index_text = &stem[index_dash + 1..of_pos];
+    let total_text = &stem[of_pos + "-of-".len()..];
+    let is_digits =
+        |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    if !is_digits(index_text) || !is_digits(total_text) {
+        return vec![primary.to_string()];
+    }
+    let Ok(index) = index_text.parse::<u32>() else {
+        return vec![primary.to_string()];
+    };
+    let Ok(total) = total_text.parse::<u32>() else {
+        return vec![primary.to_string()];
+    };
+    if index != 1 || !(2..=MAX_SHARD_COUNT).contains(&total) {
+        return vec![primary.to_string()];
+    }
+
+    let index_start = index_dash + 1;
+    let index_width = of_pos - index_start;
+    let prefix = &primary[..index_start];
+    let suffix = &primary[of_pos..];
+    (1..=total)
+        .map(|part| format!("{prefix}{part:0index_width$}{suffix}"))
+        .collect()
+}
+
 /// Group a repo's GGUF files into selectable quant candidates: one per quant
 /// key, shards ordered, sizes summed when every part's size is known. Sorted by
 /// key for stable display.
@@ -292,6 +343,36 @@ mod tests {
     }
 
     #[test]
+    fn a_primary_shard_expands_without_changing_its_filename_format() {
+        assert_eq!(
+            shard_files_from_primary("sub/Model-Q6_K-00001-of-00003.GGUF"),
+            vec![
+                "sub/Model-Q6_K-00001-of-00003.GGUF",
+                "sub/Model-Q6_K-00002-of-00003.GGUF",
+                "sub/Model-Q6_K-00003-of-00003.GGUF",
+            ]
+        );
+        assert_eq!(
+            shard_files_from_primary("Model-Q6_K-1-of-12.gguf")[11],
+            "Model-Q6_K-12-of-12.gguf"
+        );
+    }
+
+    #[test]
+    fn non_primary_malformed_and_unreasonable_shards_stay_single_file() {
+        for name in [
+            "Model-Q4_K_M.gguf",
+            "Model-Q6_K-00002-of-00003.gguf",
+            "Model-Q6_K-00001-of-00001.gguf",
+            "Model-Q6_K-00001-of-01025.gguf",
+            "Model-Q6_K-first-of-three.gguf",
+            "Model-Q6_K-00001-of-00003.bin",
+        ] {
+            assert_eq!(shard_files_from_primary(name), vec![name.to_string()]);
+        }
+    }
+
+    #[test]
     fn a_missing_shard_size_makes_the_total_unknown() {
         let files = vec![
             file("M-Q6_K-00001-of-00002.gguf", Some(10)),
@@ -352,7 +433,7 @@ mod tests {
 
     #[test]
     fn an_imatrix_only_repo_resolves_like_a_real_mradermacher_listing() {
-        // A slice of the real Qwen3.8-27B i1-GGUF repo: every quant is imatrix,
+        // Representative entries from the real Qwen3.8-27B i1-GGUF repo: every quant is imatrix,
         // and the repo also ships a non-model `imatrix.gguf` data file.
         let base = "Qwen3.8-27B-Uncensored-Heretic-Abliterated";
         let files = vec![
