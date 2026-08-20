@@ -482,10 +482,12 @@ fn cmd_download(args: &[String]) -> Result<(), String> {
         .ok_or("a model key is required (run `localbox download <model>`)")?;
     let home = home_dir().ok_or("could not determine the user home directory")?;
     let launcher = build_launcher(&home)?;
-    let key = launcher
-        .resolve_model_key(model)
-        .ok_or_else(|| format!("unknown model '{model}' (see `localbox info`)"))?;
     let quant = flag_value(args, "--quant");
+    // A name the catalog does not know may still be a Hugging Face repo id: fetch
+    // its listing, write a catalog entry, and download — the from-HF install path.
+    let Some(key) = launcher.resolve_model_key(model) else {
+        return download_from_hf(model, quant, &home);
+    };
     let kinds = download_kinds_for_flags(has_flag(args, "--vision"), has_flag(args, "--draft"));
 
     let targets = launcher
@@ -512,6 +514,90 @@ fn cmd_download(args: &[String]) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     for path in &fetched {
         println!("ready: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Install a model straight from a Hugging Face repo reference: resolve its GGUF
+/// listing, pick the quant (`--quant` or a default), write an additive catalog
+/// entry, and download the chosen file(s). Multi-part quants fetch every shard
+/// into the model's folder; llama.cpp loads the split from the first one.
+fn download_from_hf(
+    model: &str,
+    quant: Option<&str>,
+    home: &std::path::Path,
+) -> Result<(), String> {
+    use localbox::fetch::ProgressPrinter;
+    use localbox::guided::{install_catalog_model, CatalogInsert};
+    use localbox_launcher::fetch::{download_with_resume, DownloadKind, DownloadProgress};
+    use localbox_launcher::{catalog_entry, hf_meta, quant as quant_mod};
+
+    let hf = hf_meta::parse_hf_ref(model).map_err(|_| {
+        format!(
+            "unknown model '{model}' — not a catalog name, and not a Hugging Face repo id \
+             (expected owner/repo or a https://huggingface.co/owner/repo URL). \
+             Run `localbox info` for the catalog names."
+        )
+    })?;
+
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+    let files = runtime
+        .block_on(hf_meta::list_gguf_files(&client, &hf))
+        .map_err(|e| e.to_string())?;
+    let chosen = quant_mod::select_quant(quant_mod::quant_candidates(&files), quant)
+        .map_err(|e| e.to_string())?;
+
+    let (key_hint, entry) = catalog_entry::synthesize_entry(&hf, &chosen);
+    let outcome = install_catalog_model(&catalog_dir(home), &key_hint, &entry)?;
+    match &outcome {
+        CatalogInsert::Inserted(key) => {
+            println!("Added '{key}' to your catalog for {}.", hf.repo_id());
+        }
+        CatalogInsert::AlreadyPresent(key) => {
+            println!("{} is already in your catalog as '{key}'.", hf.repo_id());
+        }
+    }
+    let key = outcome.key();
+    println!(
+        "Downloading quant '{}' ({} file(s)) …",
+        chosen.key,
+        chosen.files.len()
+    );
+
+    // Resolve where the files land through the now-updated catalog, so a later
+    // `launch`/`serve` finds them exactly where it expects.
+    let launcher = build_launcher(home)?;
+    let targets = launcher
+        .model_download_targets(key, None)
+        .map_err(|e| e.to_string())?;
+    let dest_dir = targets
+        .iter()
+        .find(|t| t.kind == DownloadKind::Gguf)
+        .and_then(|t| t.path.parent())
+        .ok_or_else(|| format!("'{key}' resolves to no download location"))?
+        .to_path_buf();
+
+    let mut printer = ProgressPrinter::default();
+    for file in &chosen.files {
+        let dest = dest_dir.join(file);
+        let url = hf_meta::resolve_url(&hf.repo_id(), file);
+        runtime
+            .block_on(download_with_resume(
+                &client,
+                &url,
+                &dest,
+                &mut |received, total| {
+                    printer.report(&DownloadProgress {
+                        kind: DownloadKind::Gguf,
+                        path: &dest,
+                        received,
+                        total,
+                    });
+                },
+            ))
+            .map_err(|e| e.to_string())?;
+        println!("ready: {}", dest.display());
     }
     Ok(())
 }

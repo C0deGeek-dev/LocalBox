@@ -157,15 +157,48 @@ fn is_safe_segment(segment: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-/// The Hub model-info URL for a repo id, requesting per-file blob sizes.
+/// The Hugging Face base URL. Defaults to the real Hub; `LOCALBOX_HF_ENDPOINT`
+/// overrides it (with no trailing slash) so an end-to-end test can point the
+/// listing and the download at a loopback server.
 #[must_use]
-pub fn model_info_url(repo_id: &str) -> String {
-    let path = repo_id
+pub fn endpoint() -> String {
+    std::env::var("LOCALBOX_HF_ENDPOINT")
+        .ok()
+        .map(|base| base.trim_end_matches('/').to_string())
+        .filter(|base| !base.is_empty())
+        .unwrap_or_else(|| "https://huggingface.co".to_string())
+}
+
+/// Percent-encode a repo-relative path (each segment), normalising backslashes.
+fn encode_path(path: &str) -> String {
+    path.replace('\\', "/")
         .split('/')
         .map(crate::fetch::escape_segment)
         .collect::<Vec<_>>()
-        .join("/");
-    format!("https://huggingface.co/api/models/{path}?blobs=true")
+        .join("/")
+}
+
+/// The Hub model-info URL for a repo id, requesting per-file blob sizes.
+#[must_use]
+pub fn model_info_url(repo_id: &str) -> String {
+    format!(
+        "{}/api/models/{}?blobs=true",
+        endpoint(),
+        encode_path(repo_id)
+    )
+}
+
+/// The direct download URL for a file in a repo, honouring the configured
+/// [`endpoint`]. Mirrors [`crate::fetch::hf_download_url`] but overridable for
+/// the from-HF install path so its downloads reach the same host as its listing.
+#[must_use]
+pub fn resolve_url(repo_id: &str, file_name: &str) -> String {
+    format!(
+        "{}/{}/resolve/main/{}",
+        endpoint(),
+        encode_path(repo_id),
+        encode_path(file_name)
+    )
 }
 
 /// The shape LocalBox reads from the Hub model-info response. Extra fields are
