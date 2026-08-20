@@ -34,6 +34,7 @@
 //!   candidates and resolve a `--quant` request or a default.
 
 pub mod catalog;
+pub mod catalog_entry;
 
 /// The product version shipped with this build (the repo `VERSION` file) —
 /// the version the launcher contract's envelope reports.

@@ -1467,6 +1467,96 @@ pub fn merge_missing_models(
     merged
 }
 
+/// Whether installing a synthesised model entry added it or found it already
+/// present, plus the catalog key it lives under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogInsert {
+    /// A new entry was written under this key.
+    Inserted(String),
+    /// The repo was already in the catalog under this key; nothing was written.
+    AlreadyPresent(String),
+}
+
+impl CatalogInsert {
+    /// The catalog key the model lives under, whichever outcome occurred.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        match self {
+            CatalogInsert::Inserted(key) | CatalogInsert::AlreadyPresent(key) => key,
+        }
+    }
+}
+
+/// The first `hint`, `hint-2`, `hint-3`, … that no model in `models` already
+/// uses — so a slug collision with an unrelated model never clobbers it.
+fn unique_model_key(models: &serde_json::Map<String, serde_json::Value>, hint: &str) -> String {
+    if !models.contains_key(hint) {
+        return hint.to_string();
+    }
+    (2..)
+        .map(|n| format!("{hint}-{n}"))
+        .find(|candidate| !models.contains_key(candidate))
+        .unwrap_or_else(|| hint.to_string())
+}
+
+/// Install a synthesised catalog entry into the user's `llm-models.json` under
+/// `catalog_dir`, additively. An entry whose `Repo` is already present is left
+/// untouched (idempotent re-install); otherwise the entry is written under a
+/// collision-free key, with its `Root` rewritten to match. Every other part of
+/// the catalog — existing models, `CommandAliases`, scalar settings — is
+/// preserved. The caller passes [`catalog_dir`]`(home)` (which seeds the tree);
+/// taking the directory keeps this write unit-testable against a temp path.
+///
+/// # Errors
+/// A string message when the catalog file cannot be read, is not valid JSON, or
+/// cannot be written.
+pub fn install_catalog_model(
+    catalog_dir: &Path,
+    key_hint: &str,
+    entry: &serde_json::Value,
+) -> Result<CatalogInsert, String> {
+    let user_path = catalog_dir.join("llm-models.json");
+    let raw = std::fs::read_to_string(&user_path)
+        .map_err(|e| format!("could not read {}: {e}", user_path.display()))?;
+    let mut user: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| {
+            format!(
+                "{} is not valid JSON ({e}); fix it before installing",
+                user_path.display()
+            )
+        })?;
+    let mut models = user
+        .get("Models")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    // Idempotency: the same repo already in the catalog is reused, not duplicated.
+    let repo = entry.get("Repo").and_then(serde_json::Value::as_str);
+    if let Some(repo) = repo {
+        if let Some((existing, _)) = models
+            .iter()
+            .find(|(_, def)| def.get("Repo").and_then(serde_json::Value::as_str) == Some(repo))
+        {
+            return Ok(CatalogInsert::AlreadyPresent(existing.clone()));
+        }
+    }
+
+    let key = unique_model_key(&models, key_hint);
+    let mut entry = entry.clone();
+    if let Some(obj) = entry.as_object_mut() {
+        obj.insert("Root".to_string(), serde_json::Value::String(key.clone()));
+    }
+    models.insert(key.clone(), entry);
+    user.insert("Models".to_string(), serde_json::Value::Object(models));
+
+    let pretty = serde_json::to_string_pretty(&serde_json::Value::Object(user))
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&user_path, pretty + "\n")
+        .map_err(|e| format!("could not write {}: {e}", user_path.display()))?;
+    Ok(CatalogInsert::Inserted(key))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1477,6 +1567,82 @@ mod tests {
         let mut def: ModelDef = serde_json::from_str(r#"{"Repo":"o/m"}"#).unwrap();
         def.tier = tier.map(str::to_string);
         def
+    }
+
+    fn seed_catalog(dir: &Path, json: &str) {
+        std::fs::write(dir.join("llm-models.json"), json).unwrap();
+    }
+
+    #[test]
+    fn installing_a_new_entry_adds_it_and_preserves_existing_models() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_catalog(
+            dir.path(),
+            r#"{"Models":{"existing":{"Repo":"other/model"}},"CommandAliases":{"x":"existing"}}"#,
+        );
+        let entry = serde_json::json!({
+            "Repo": "owner/new-GGUF", "Root": "new-gguf", "SourceType": "gguf",
+            "Quants": {"q4km": {"File": "m.Q4_K_M.gguf"}}, "Quant": "q4km",
+            "Contexts": {"": 32768}
+        });
+
+        let outcome = install_catalog_model(dir.path(), "new-gguf", &entry).unwrap();
+        assert_eq!(outcome, CatalogInsert::Inserted("new-gguf".to_string()));
+
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("llm-models.json")).unwrap(),
+        )
+        .unwrap();
+        // The new model is present; the existing model and aliases are untouched.
+        assert_eq!(written["Models"]["new-gguf"]["Repo"], "owner/new-GGUF");
+        assert_eq!(written["Models"]["existing"]["Repo"], "other/model");
+        assert_eq!(written["CommandAliases"]["x"], "existing");
+    }
+
+    #[test]
+    fn reinstalling_the_same_repo_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_catalog(
+            dir.path(),
+            r#"{"Models":{"mine":{"Repo":"owner/new-GGUF"}}}"#,
+        );
+        let entry = serde_json::json!({"Repo": "owner/new-GGUF", "Root": "new-gguf"});
+
+        let outcome = install_catalog_model(dir.path(), "new-gguf", &entry).unwrap();
+        // Same repo already present under a different key → reused, not duplicated.
+        assert_eq!(outcome, CatalogInsert::AlreadyPresent("mine".to_string()));
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("llm-models.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(written["Models"].get("new-gguf").is_none());
+    }
+
+    #[test]
+    fn a_key_collision_with_another_repo_never_clobbers() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_catalog(dir.path(), r#"{"Models":{"slug":{"Repo":"someone/else"}}}"#);
+        let entry = serde_json::json!({"Repo": "owner/thing", "Root": "slug"});
+
+        let outcome = install_catalog_model(dir.path(), "slug", &entry).unwrap();
+        assert_eq!(outcome, CatalogInsert::Inserted("slug-2".to_string()));
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("llm-models.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(written["Models"]["slug"]["Repo"], "someone/else");
+        assert_eq!(written["Models"]["slug-2"]["Repo"], "owner/thing");
+        // Root is rewritten to the collision-free key.
+        assert_eq!(written["Models"]["slug-2"]["Root"], "slug-2");
+    }
+
+    #[test]
+    fn an_invalid_catalog_is_a_clear_error_not_a_clobber() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_catalog(dir.path(), "{ not json");
+        let entry = serde_json::json!({"Repo": "owner/thing"});
+        let err = install_catalog_model(dir.path(), "thing", &entry).unwrap_err();
+        assert!(err.contains("is not valid JSON"), "{err}");
     }
 
     #[test]
