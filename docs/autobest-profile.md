@@ -32,7 +32,7 @@ entry is matched at launch time using:
 - `prompt_length` (`short` when omitted)
 - `quant`
 - `vramGB` within +/- 1 GB
-- `tuner_version` when present
+- `tuner_version` (must match the shared current measurement version)
 - `vision` (text-only when omitted)
 
 Entries also record `contextTokens` as provenance for the resolved `num_ctx`;
@@ -63,9 +63,14 @@ server-argument builder's parameters. The currently accepted tuning override key
 - `FlashAttn`
 - `SplitMode`
 
-Tuner version 4 is the current launch-time profile generation. It invalidates
-older saved profiles and uses `coding_agent_e2e_tps` by default, so AutoBest
-prefers long-prefill, end-to-end latency over decode-only generation TPS.
+Tuner version 5 is the current launch-time profile generation. Version-5
+measurements use templated chat and the same single-session defaults LocalBox
+serves. Older and newer entries remain readable and stay on disk, but LocalBox
+will not replay them; it reports `unsupported_tuner_version` and asks the user
+to run `localbench findbest <model>` again. The store schema remains version 1
+because the document shape did not change—measurement compatibility is an
+independent per-entry contract. AutoBest uses `coding_agent_e2e_tps` by default,
+so it prefers long-prefill, end-to-end latency over decode-only generation TPS.
 Expanded LocalBench entries can be saved as `pure` or `balanced`; entries
 without a `profile` field are treated as `pure` for backwards compatibility.
 

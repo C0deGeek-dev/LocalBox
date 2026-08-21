@@ -4,6 +4,12 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- AutoBest now rejects saved entries produced by unsupported tuner measurement
+  versions before ranking them. Version-4 and future-version entries remain on
+  disk and readable, but LocalBox falls back with the typed
+  `unsupported_tuner_version` reason and an actionable `localbench findbest`
+  retune warning; mixed stores still select an eligible version-5 entry.
+
 ## v3.3.2 - 2026-08-20
 
 - **Install a model straight from a Hugging Face repo.** `localbox download`

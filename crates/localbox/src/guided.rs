@@ -2107,7 +2107,7 @@ mod tests {
                 ..Overrides::default()
             },
             measured_at: "2026-01-01".to_string(),
-            tuner_version: 1,
+            tuner_version: localx_llama_core::CURRENT_TUNER_VERSION,
             trial_count: None,
             gpu_names: None,
             llamacpp_build: None,

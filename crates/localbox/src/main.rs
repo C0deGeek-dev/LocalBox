@@ -1207,9 +1207,13 @@ mod tests {
                     "args": [],
                     "overrides": { "NCpuMoe": 12 },
                     "measured_at": "2026-01-01T00:00:00Z",
-                    "tuner_version": 1
+                    "tuner_version": $CURRENT_TUNER_VERSION
                 }]
-            }"#,
+            }"#
+            .replace(
+                "$CURRENT_TUNER_VERSION",
+                &localx_llama_core::CURRENT_TUNER_VERSION.to_string(),
+            ),
         )
         .unwrap();
         let catalog = localbox_launcher::catalog::Catalog::from_layers(
@@ -1285,9 +1289,13 @@ mod tests {
                     "quant":"q4","contextKey":"64k","mode":"native","vramGB":24,
                     "prompt_length":"short","profile":"balanced","score":42.0,
                     "scoreUnit":"tok/s","args":[],"overrides":{"NCpuMoe":7},
-                    "measured_at":"2026-08-10T00:00:00Z","tuner_version":4
+                    "measured_at":"2026-08-10T00:00:00Z","tuner_version":$CURRENT_TUNER_VERSION
                 }]
-            }"#,
+            }"#
+            .replace(
+                "$CURRENT_TUNER_VERSION",
+                &localx_llama_core::CURRENT_TUNER_VERSION.to_string(),
+            ),
         )
         .unwrap();
         let catalog = localbox_launcher::catalog::Catalog::from_layers(

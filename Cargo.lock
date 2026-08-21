@@ -924,7 +924,7 @@ dependencies = [
 [[package]]
 name = "localx-llama-core"
 version = "0.1.0"
-source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=c4f91f180168a0d7a62e9de2ec4c9acf358f5430#c4f91f180168a0d7a62e9de2ec4c9acf358f5430"
+source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=f76e9591cc9a1b09120a924427fb7adbf66fd2e8#f76e9591cc9a1b09120a924427fb7adbf66fd2e8"
 dependencies = [
  "regex",
  "serde",
@@ -935,7 +935,7 @@ dependencies = [
 [[package]]
 name = "localx-llama-runtime"
 version = "0.1.0"
-source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=c4f91f180168a0d7a62e9de2ec4c9acf358f5430#c4f91f180168a0d7a62e9de2ec4c9acf358f5430"
+source = "git+https://github.com/C0deGeek-dev/localx-llama.git?rev=f76e9591cc9a1b09120a924427fb7adbf66fd2e8#f76e9591cc9a1b09120a924427fb7adbf66fd2e8"
 dependencies = [
  "axum",
  "bytes",

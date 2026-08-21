@@ -399,6 +399,38 @@ mod tests {
         Catalog::from_layers(&Map::new(), &raw, &Map::new()).unwrap()
     }
 
+    fn write_profile(home: &Path, entries: Value) {
+        let dir = home.join(".local-llm").join("tuner");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("best-q36apex.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema": 1,
+                "key": "q36apex",
+                "entries": entries,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn profile_entry(quant: &str, score: f64, tuner_version: i64) -> Value {
+        serde_json::json!({
+            "quant": quant,
+            "contextKey": "64k",
+            "mode": "native",
+            "vramGB": 24,
+            "prompt_length": "short",
+            "profile": "balanced",
+            "score": score,
+            "scoreUnit": "tok/s",
+            "args": [],
+            "overrides": {},
+            "measured_at": "2026-08-21T00:00:00Z",
+            "tuner_version": tuner_version,
+        })
+    }
+
     #[test]
     fn any_name_resolves_key_alias_and_folder() {
         let catalog = catalog();
@@ -466,6 +498,52 @@ mod tests {
         let rendered = render_models_catalog(&contract);
         assert!(rendered.contains("q36apex (aliases: apex)"));
         assert!(rendered.contains("quant apex-i-quality"));
+    }
+
+    #[test]
+    fn models_contract_reports_stale_profiles_and_mixed_store_selection() {
+        let home = tempfile::tempdir().unwrap();
+        let current = localx_llama_core::CURRENT_TUNER_VERSION;
+        write_profile(
+            home.path(),
+            serde_json::json!([profile_entry("legacy", 999.0, current - 1)]),
+        );
+
+        let stale = models_catalog(&catalog(), home.path());
+        let stale_profile = &stale
+            .models
+            .iter()
+            .find(|model| model.name == "q36apex")
+            .unwrap()
+            .run_profile;
+        assert_eq!(stale_profile.source, "defaults");
+        assert_eq!(
+            stale_profile.reason.as_deref(),
+            Some("unsupported_tuner_version")
+        );
+        assert!(stale_profile
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("localbench findbest q36apex"));
+
+        write_profile(
+            home.path(),
+            serde_json::json!([
+                profile_entry("legacy", 999.0, current - 1),
+                profile_entry("current", 10.0, current),
+            ]),
+        );
+        let mixed = models_catalog(&catalog(), home.path());
+        let mixed_profile = &mixed
+            .models
+            .iter()
+            .find(|model| model.name == "q36apex")
+            .unwrap()
+            .run_profile;
+        assert_eq!(mixed_profile.source, "tuned");
+        assert_eq!(mixed_profile.quant.as_deref(), Some("current"));
+        assert_eq!(mixed_profile.reason, None);
     }
 
     #[test]

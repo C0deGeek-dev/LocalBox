@@ -36,6 +36,8 @@ pub enum UnavailableReason {
     Invalid,
     /// The store schema is newer or older than this LocalBox build supports.
     UnsupportedSchema,
+    /// Matching entries exist, but their measurement methodology is unsupported.
+    UnsupportedTunerVersion,
     /// The store is valid but has no entry satisfying the requested fields.
     NoMatch,
 }
@@ -48,6 +50,7 @@ impl UnavailableReason {
             Self::Missing => "missing",
             Self::Invalid => "invalid",
             Self::UnsupportedSchema => "unsupported_schema",
+            Self::UnsupportedTunerVersion => "unsupported_tuner_version",
             Self::NoMatch => "no_match",
         }
     }
@@ -79,6 +82,9 @@ impl RunProfileResolution {
             UnavailableReason::Invalid => "the saved tuned profile is invalid",
             UnavailableReason::UnsupportedSchema => {
                 "the saved tuned profile uses an unsupported schema"
+            }
+            UnavailableReason::UnsupportedTunerVersion => {
+                "matching saved entries use an unsupported tuner measurement version"
             }
             UnavailableReason::NoMatch => {
                 "no saved tuned entry matches the requested quant/context/mode"
@@ -124,6 +130,14 @@ fn profile_rank(entry: &TunerEntry, preferred: Option<Profile>) -> u8 {
     u8::from(preferred.is_some_and(|profile| entry.profile != profile))
 }
 
+fn matches_query(entry: &TunerEntry, query: RunProfileQuery<'_>) -> bool {
+    query.quant.is_none_or(|quant| entry.quant == quant)
+        && query
+            .context_key
+            .is_none_or(|context| entry.context_key == context)
+        && query.mode.is_none_or(|mode| entry.mode == mode)
+}
+
 /// Select an entry from an already-loaded store. This is the pure seam used
 /// by the file-backed resolver and by guided-plan previews.
 #[must_use]
@@ -137,13 +151,8 @@ pub fn select_run_profile<'a>(
     let mut entries = store
         .entries
         .iter()
-        .filter(|entry| query.quant.is_none_or(|quant| entry.quant == quant))
-        .filter(|entry| {
-            query
-                .context_key
-                .is_none_or(|context| entry.context_key == context)
-        })
-        .filter(|entry| query.mode.is_none_or(|mode| entry.mode == mode))
+        .filter(|entry| matches_query(entry, query))
+        .filter(|entry| entry.measurement_supported())
         .collect::<Vec<_>>();
     entries.sort_by(|a, b| {
         profile_rank(a, query.preferred_profile)
@@ -195,9 +204,20 @@ pub fn resolve_run_profile(
         };
     }
     let entry = select_run_profile(&store, query).cloned();
+    let unavailable = if entry.is_some() {
+        None
+    } else if store
+        .entries
+        .iter()
+        .any(|candidate| matches_query(candidate, query))
+    {
+        Some(UnavailableReason::UnsupportedTunerVersion)
+    } else {
+        Some(UnavailableReason::NoMatch)
+    };
     RunProfileResolution {
         path,
-        unavailable: entry.is_none().then_some(UnavailableReason::NoMatch),
+        unavailable,
         entry,
     }
 }
@@ -207,6 +227,7 @@ pub fn resolve_run_profile(
 mod tests {
     use super::*;
     use localx_llama_core::tuner::{Overrides, PromptLength, SearchStrategy};
+    use localx_llama_core::CURRENT_TUNER_VERSION;
 
     fn entry(quant: &str, score: f64, profile: Profile, vram_gb: i64) -> TunerEntry {
         TunerEntry {
@@ -225,7 +246,7 @@ mod tests {
             args: Vec::new(),
             overrides: Overrides::default(),
             measured_at: "2026-08-10T00:00:00Z".to_string(),
-            tuner_version: 4,
+            tuner_version: CURRENT_TUNER_VERSION,
             trial_count: None,
             gpu_names: None,
             llamacpp_build: None,
@@ -291,5 +312,34 @@ mod tests {
             },
         );
         assert_eq!(found.entry.unwrap().score, 80.0);
+    }
+
+    #[test]
+    fn unsupported_versions_are_distinct_and_mixed_stores_select_current() {
+        let home = tempfile::tempdir().unwrap();
+        let mut older = entry("q4", 1_000.0, Profile::Balanced, 24);
+        older.tuner_version = CURRENT_TUNER_VERSION - 1;
+        let mut newer = older.clone();
+        newer.tuner_version = CURRENT_TUNER_VERSION + 1;
+
+        write_store(home.path(), vec![older.clone(), newer]);
+        let unsupported = resolve_run_profile(home.path(), "model", RunProfileQuery::default());
+        assert_eq!(
+            unsupported.unavailable,
+            Some(UnavailableReason::UnsupportedTunerVersion)
+        );
+        assert_eq!(
+            unsupported.unavailable.map(UnavailableReason::as_str),
+            Some("unsupported_tuner_version")
+        );
+        let warning = unsupported.warning("model").unwrap();
+        assert!(warning.contains("unsupported tuner measurement version"));
+        assert!(warning.contains("localbench findbest model"));
+
+        let current = entry("q4", 10.0, Profile::Balanced, 24);
+        write_store(home.path(), vec![older, current]);
+        let selected = resolve_run_profile(home.path(), "model", RunProfileQuery::default());
+        assert_eq!(selected.entry.unwrap().score, 10.0);
+        assert_eq!(selected.unavailable, None);
     }
 }
