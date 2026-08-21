@@ -126,7 +126,8 @@ surface.
 - Sets up one consistent dispatch path for Claude Code, Codex, LocalPilot, and
   plain server mode.
 - Saves measured [LocalBench](https://github.com/C0deGeek-dev/LocalBench)
-  recommendations as reusable AutoBest profiles.
+  recommendations as reusable AutoBest profiles, while refusing stale or
+  future measurement versions with an actionable re-tune warning.
 
 ```text
 GGUF model ──> LocalBox ──> llama-server ──> Claude Code / Codex / LocalPilot

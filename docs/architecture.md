@@ -81,4 +81,5 @@ Seeded on first run, never overwritten: `defaults.json`,
 Everything else appears as it is used — `settings.json` (per-machine
 overrides), `gguf/` (model weights), `llama-cpp*/` (per-mode server
 binaries + `.build-stamp`), `tuner/` (AutoBest profiles and the trial
-cache), and `logs/`.
+cache), and `logs/` (including LocalBench's per-run tuner manifests and unique
+candidate logs).

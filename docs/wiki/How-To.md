@@ -72,5 +72,11 @@ localbench findbest --model q36plus --context 64k    # tune
 localbox                                             # guided launch replays it
 ```
 
+Current AutoBest replay requires tuner measurement version 5. Older entries
+are preserved but skipped with an `unsupported_tuner_version` warning; rerun
+the command above to replace the matching slot with a templated-chat
+measurement. LocalBench records each attempt under
+`~/.local-llm/logs/tuner/` if diagnosis is needed.
+
 See [auto-tuner.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/auto-tuner.md)
 and [autobest-profile.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/autobest-profile.md).

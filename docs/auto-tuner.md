@@ -45,14 +45,25 @@ localbench findbest --model q36plus --context 64k --no-save
 # trial cache (tuner/trial-cache-<key>[-<context>].json); a repeated or
 # interrupted tune reuses them. The cache invalidates itself — naming the
 # differing fields — when anything shaping a measurement changes (model file,
-# runs, optimize goal, tuner version, ...). Skip it for one run with:
+# chat protocol/template, session defaults, runs, optimize goal, tuner version,
+# ...). Skip it for one run with:
 localbench findbest --model q36plus --context 64k --no-cache
 ```
 
 Candidates are measured through `llama-server` — the same binary LocalBox will
-actually launch — so turboquant KV encodings (`turbo3`/`turbo4`) are measured
-through the fork that registers them, never approximated with mainline
-`llama-bench` numbers.
+actually launch — as deterministic `/v1/chat/completions` requests. LocalBench
+reuses LocalBox's settings overlay and single-session defaults (`--parallel 1`,
+`--cache-reuse 256` when nothing more explicit wins), validates visible text
+and finite prompt/decode timings, and never falls back to raw completion.
+Turboquant KV encodings (`turbo3`/`turbo4`) are therefore measured through the
+fork that registers them, never approximated with mainline `llama-bench`
+numbers.
+
+Every attempted or cached candidate also has a typed outcome in a JSONL run
+manifest under `~/.local-llm/logs/tuner/`; live attempts point to unique server
+logs. HTTP/schema/content failures remain distinct from startup/OOM evidence and
+cannot rank or trigger a memory recovery sweep. Completed diagnostic runs are
+bounded to 20, while interrupted runs remain protected for diagnosis.
 
 `--quant` selects the GGUF model file and stays fixed during a tuner run; KV
 cache types are only runtime encodings.
@@ -62,9 +73,13 @@ cache types are only runtime encodings.
 The guided launcher (`localbox`) replays a saved profile automatically when
 auto-tune is on: the entry is matched on quant, context key, and mode, with
 the wanted profile first, then the nearest measured VRAM, then score. An
-unsupported store schema fails closed to the recommended defaults, and manual
-KV choices only fill gaps the profile left. The Customize menu's auto-tune
-item points at `localbench findbest` when no profile matches.
+unsupported store schema or measurement version fails closed to the recommended
+defaults, and manual KV choices only fill gaps the profile left. Current
+LocalBox accepts tuner version 5. Older/future entries remain on disk but are
+ineligible; `models --json` and the guided warning report
+`unsupported_tuner_version` and direct the user to re-run `localbench
+findbest`. A mixed store still selects a matching version-5 entry. The Customize
+menu's auto-tune item points at `localbench findbest` when no profile matches.
 
 Before handing a session to an agent, LocalBox sends a tiny `/v1/messages`
 smoke request through the same route the agent will use. The smoke must
