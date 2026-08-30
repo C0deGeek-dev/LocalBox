@@ -2,6 +2,7 @@
 plan-next.md
 plan.md
 analysis.md
+/tasks/
 
 # Per-machine settings overlay — overrides scalars in the catalog,
 # never committed (paths are user-specific).
