@@ -1,0 +1,33 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2025-0134", # unmaintained rustls-pemfile via reqwest
+    "RUSTSEC-2024-0436", # unmaintained paste via ratatui
+    # lru 0.12.5 is transitive through ratatui; LocalBox does not use the
+    # affected IterMut or pop APIs. Remove when ratatui updates lru.
+    "RUSTSEC-2026-0002",
+    "RUSTSEC-2026-0253",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "Zlib",
+    "PolyForm-Noncommercial-1.0.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/C0deGeek-dev/localx-llama"]
