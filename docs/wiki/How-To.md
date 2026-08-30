@@ -1,0 +1,99 @@
+# How-To guides
+
+Task-oriented recipes — each answers a single "how do I…?" against shipped
+behaviour at the current `VERSION`. See **[[Getting-Started]]** first.
+
+> **Do not edit on github.com.** This wiki is generated from in-repo Markdown
+> under `docs/wiki/` and synced one-way on every push to `main`. Edit the source
+> in `docs/wiki/`; web edits are overwritten on the next sync.
+
+## Install LocalBox
+
+```text
+cargo install --path crates/localbox --locked
+```
+
+No PowerShell, .NET, or Python needed at runtime. Full reference:
+[install.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/install.md).
+
+## Manage local models
+
+The catalog is `~/.local-llm/llm-models.json` — an ordinary JSON file, seeded
+on first run and yours to edit (add a model by copying an entry and pointing
+`Repo`/`Quants` at the Hugging Face repo):
+
+```text
+localbox info                    # list the configured models by tier
+localbox info <model>            # one model in detail (any of its names works)
+localbox download <model>        # put its files on disk without starting anything
+localbox download owner/repo      # install straight from a Hugging Face repo id
+localbox purge                   # stop servers, delete downloaded model files
+```
+
+`localbox download` also takes a Hugging Face repo id or URL in place of a
+catalog name: it registers every GGUF quant in the catalog but downloads only
+the chosen one. Re-run the repo to merge newly published variants, or use the
+catalog key with `--quant` to fetch another registered variant. See
+[Model management](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/model-management.md).
+
+For an interactive, no-surprises path, run `localbox` and choose
+`[Add a Hugging Face model]`. LocalBox analyzes every quant and recommends one
+for your graphics memory, but downloads nothing until you explicitly choose a
+quant. `[Register only — download later]` writes only the catalog metadata;
+Cancel writes nothing.
+
+VRAM-aware: the guided launcher shows each quant's size, explicit
+fits / tight / over verdict, and useful catalog note (ellipsized on narrow
+terminals). Imported Hub descriptions become bounded plain text before they
+reach the catalog. Full detail:
+[model-management.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/model-management.md).
+
+## Install or repair an engine
+
+```text
+localbox update --mode native --check   # exact assets + expected sizes
+localbox update --mode native           # verified atomic activation
+```
+
+Use `turboquant`, `mtpturbo`, or `prism` for another mode. Missing-binary
+errors print the same runnable command. Windows CUDA installs include the
+matching runtime companion; partial or failed updates do not replace a working
+engine tree.
+
+## Run the no-think proxy / serve a model
+
+For Claude Code launches LocalBox automatically brings up its in-process
+no-think proxy (`127.0.0.1:11435`) in front of `llama-server` and strips
+`thinking`/`reasoning` blocks the local backend can't parse. You don't start
+it manually — it comes up with the launch.
+
+To serve a model to other machines over an Anthropic-compatible endpoint:
+
+```text
+localbox serve q3635ba3bapex --context 32k --lan --password chosenpass
+```
+
+Password-only HTTP is for LAN/VPN use; put HTTPS in front for anything public.
+A public-looking bind with no password is refused unless you explicitly opt in.
+See [harness-mode.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/harness-mode.md).
+
+## Save and replay an AutoBest profile
+
+Tune with LocalBench, then let the guided launcher replay the saved profile:
+
+```text
+localbench findbest --model q36plus --context 64k    # tune
+localbox                                             # guided launch replays it
+```
+
+Current AutoBest replay requires tuner measurement version 5. Older entries
+are preserved but skipped with an `unsupported_tuner_version` warning. Re-run
+the command above for an accurate templated-chat measurement, or explicitly
+adopt the older tune's runnable settings from the guided menu. For a scripted
+launch, use `localbox launch <model> --adopt-tune`; adoption records the old
+version and adoption time, keeps a `.json.bak`, and does not claim the old score
+was re-verified. LocalBench records each tuning attempt under
+`~/.local-llm/logs/tuner/` if diagnosis is needed.
+
+See [auto-tuner.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/auto-tuner.md)
+and [autobest-profile.md](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/autobest-profile.md).

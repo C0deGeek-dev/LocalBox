@@ -1,0 +1,176 @@
+{
+  "Models": {
+    "q3635ba3bapex": {
+      "DisplayName": "Qwen 3.6 35B A3B uncensored heretic APEX GGUF",
+      "Root": "q3635ba3bapex",
+      "Repo": "mudler/Qwen3.6-35B-A3B-uncensored-heretic-APEX-GGUF",
+      "Quants": {
+        "apex-balanced": {
+          "File": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-Balanced.gguf",
+          "SizeGB": 25.6,
+          "Note": "Balanced quality and memory use"
+        },
+        "apex-compact": {
+          "File": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-Compact.gguf",
+          "SizeGB": 17.3,
+          "Note": "More memory headroom"
+        },
+        "apex-i-balanced": {
+          "File": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Balanced.gguf",
+          "SizeGB": 25.6,
+          "Note": "Imatrix-tuned balance of quality and memory"
+        },
+        "apex-i-compact": {
+          "File": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact.gguf",
+          "SizeGB": 17.3,
+          "Note": "Imatrix-tuned for extra memory headroom"
+        },
+        "apex-i-mini": {
+          "File": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Mini.gguf",
+          "SizeGB": 14.3,
+          "Note": "Smallest imatrix build"
+        },
+        "apex-i-quality": {
+          "File": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Quality.gguf",
+          "SizeGB": 22.8,
+          "Note": "Imatrix-tuned higher-quality build"
+        },
+        "apex-quality": {
+          "File": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-Quality.gguf",
+          "SizeGB": 22.8,
+          "Note": "Higher-quality build"
+        }
+      },
+      "Quant": "apex-balanced",
+      "Parser": "qwen36",
+      "Tier": "experimental",
+      "Contexts": {
+        "": 65536,
+        "32k": 32768,
+        "64k": 65536,
+        "128k": 131072,
+        "256k": 262144
+      },
+      "Strict": true,
+      "Description": "Qwen 3.6 35B A3B uncensored Heretic model packaged in APEX quant variants for llama.cpp."
+    },
+    "ornith35hapex": {
+      "DisplayName": "Ornith 1.0 35B heretic APEX GGUF",
+      "Root": "ornith35hapex",
+      "Repo": "C0deGeek/Ornith-1.0-35B-heretic-APEX-GGUF",
+      "Quants": {
+        "apex-quality": {
+          "File": "Ornith-1.0-35B-heretic-Q6_K-APEX-Quality.gguf",
+          "SizeGB": 22.8,
+          "Note": "APEX-QUALITY · ~22.8 GB · plain-APEX control"
+        },
+        "apex-compact": {
+          "File": "Ornith-1.0-35B-heretic-Q4_K_M-APEX-Compact.gguf",
+          "SizeGB": 16.5,
+          "Note": "APEX-COMPACT · ~16.5 GB · headroom"
+        },
+        "apex-i-quality": {
+          "File": "Ornith-1.0-35B-heretic-Q6_K-APEX-I-Quality.gguf",
+          "SizeGB": 22.8,
+          "Note": "APEX-I-QUALITY · ~22.8 GB · imatrix · 24 GB 4090 primary (ctx <=16k with vision)"
+        },
+        "apex-i-compact": {
+          "File": "Ornith-1.0-35B-heretic-Q4_K_M-APEX-I-Compact.gguf",
+          "SizeGB": 16.5,
+          "Note": "APEX-I-COMPACT · ~16.5 GB · imatrix · long-context headroom"
+        }
+      },
+      "Quant": "apex-i-quality",
+      "Parser": "qwen36",
+      "Tier": "experimental",
+      "Contexts": {
+        "": 16384,
+        "8k": 8192,
+        "16k": 16384,
+        "32k": 32768,
+        "64k": 65536,
+        "128k": 131072,
+        "256k": 262144
+      },
+      "Strict": true,
+      "Description": "Ornith-1.0-35B decensored (Heretic) + APEX I-Quality, built locally with LocalWorkshop. Trunk-only (no MTP draft head). Vision via mmproj. Native window 256k (max_position_embeddings 262144) — no rope scaling needed for 64k/128k/256k. On a 24 GB GPU keep context <= 16k when the projector is loaded; 32k is text-only; 64k+ does not fit a single 24 GB card (needs more VRAM or heavy KV-cache quant).",
+      "VisionModule": "mmproj-Ornith-1.0-35B-heretic-f16.gguf"
+    },
+    "tbonsai27b": {
+      "DisplayName": "Ternary Bonsai 27B GGUF",
+      "Root": "tbonsai27b",
+      "Repo": "prism-ml/Ternary-Bonsai-27B-gguf",
+      "Quants": {
+        "q2-0": {
+          "File": "Ternary-Bonsai-27B-Q2_0.gguf",
+          "SizeGB": 7.2,
+          "Note": "Q2_0_g128 ternary · ~7.2 GB · primary pack (PrismML llama.cpp fork)"
+        },
+        "pq2-0": {
+          "File": "Ternary-Bonsai-27B-PQ2_0.gguf",
+          "SizeGB": 7.2,
+          "Note": "PQ2_0 · ~7.2 GB · alternate pack (see model card)"
+        },
+        "q2-g64": {
+          "File": "Ternary-Bonsai-27B-Q2_g64.gguf",
+          "SizeGB": 7.6,
+          "Note": "Q2 group-64 · ~7.6 GB · matches llama.cpp 64-value-group Q2_0 packing"
+        },
+        "f16": {
+          "File": "Ternary-Bonsai-27B-F16.gguf",
+          "SizeGB": 53.8,
+          "Note": "F16 · ~53.8 GB · full-precision reference"
+        }
+      },
+      "Quant": "q2-0",
+      "RequiredMode": "prism",
+      "Parser": "qwen36",
+      "Tier": "experimental",
+      "Contexts": {
+        "": 65536,
+        "16k": 16384,
+        "32k": 32768,
+        "64k": 65536,
+        "128k": 131072,
+        "256k": 262144
+      },
+      "Strict": true,
+      "Description": "Prism ML Ternary Bonsai 27B — Qwen3.6-27B compressed to end-to-end ternary weights (GGUF Q2_0_g128, ~1.71 bits/weight true, ~7.2 GB deployed vs ~54 GB FP16; claims 95% of FP16 intelligence). Hybrid attention (~75% linear), native 262k window; ~14.7 GB peak at 100k ctx without KV compression. Vision via mmproj (HQQ 4-bit, loaded only for image input). NOTE: the ternary kernels need the PrismML llama.cpp fork (CUDA/Metal/Linux) — pinned mainline/turboquant builds may not load Q2_0_g128. --draft wires the shipped DSpark Q4_1 drafter (vendor-measured 1.34x on H100), but the current Prism release rejects it for speculation (draft/target vocab-type mismatch) and runs without it — the launcher warns when that happens.",
+      "DraftModule": "Ternary-Bonsai-27B-dspark-Q4_1.gguf",
+      "VisionModule": "Ternary-Bonsai-27B-mmproj-Q8_0.gguf"
+    },
+    "bonsai27b": {
+      "DisplayName": "Bonsai 27B 1-bit GGUF",
+      "Root": "bonsai27b",
+      "Repo": "prism-ml/Bonsai-27B-gguf",
+      "Quants": {
+        "q1-0": {
+          "File": "Bonsai-27B-Q1_0.gguf",
+          "SizeGB": 3.8,
+          "Note": "Q1_0 1-bit · ~3.8 GB · mainline llama.cpp (native mode)"
+        },
+        "f16": {
+          "File": "Bonsai-27B-F16.gguf",
+          "SizeGB": 53.8,
+          "Note": "F16 · ~53.8 GB · full-precision reference"
+        }
+      },
+      "Quant": "q1-0",
+      "Parser": "qwen36",
+      "Tier": "experimental",
+      "Contexts": {
+        "": 65536,
+        "16k": 16384,
+        "32k": 32768,
+        "64k": 65536,
+        "128k": 131072,
+        "256k": 262144
+      },
+      "Strict": true,
+      "Description": "Prism ML Bonsai 27B 1-bit — Qwen3.6-27B at ~1.125 effective bits/weight (GGUF Q1_0, ~3.8 GB deployed). Q1_0 is merged upstream, so this runs on the pinned mainline llama.cpp in native mode — no fork required — making it the fallback when the Prism engine is unavailable or misbehaves. Same hybrid attention and native 262k window as the ternary pack; expect lower quality than Q2_0 ternary. Vision via mmproj (loaded only for image input). --draft wires the shipped DSpark Q4_1 drafter, but current llama.cpp builds reject it for speculation (draft/target vocab-type mismatch) and run without it — the launcher warns when that happens.",
+      "DraftModule": "Bonsai-27B-dspark-Q4_1.gguf",
+      "VisionModule": "Bonsai-27B-mmproj-Q8_0.gguf"
+    }
+  },
+  "CommandAliases": {}
+}

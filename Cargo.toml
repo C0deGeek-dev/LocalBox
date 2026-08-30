@@ -1,0 +1,56 @@
+# LocalBox — native Rust workspace.
+#
+# The launcher is native Rust. The legacy PowerShell module was fully ported
+# and retired; the Rust binary is now the sole authoritative entry point:
+#   - localbox            the application binary: live wiring (model download,
+#                         server spawn, no-think proxy hosting, agent exec)
+#                         and the command-line surface
+#   - localbox-launcher   the launcher-contract implementation: model catalog
+#                         resolution, hardware/binary resolution, and server
+#                         lifecycle over the shared localx-llama crate tier
+#   - localbox-tui        the friendly launcher UI: plain-language vocabulary,
+#                         the guided plan resolver, and the ratatui widgets
+#
+# Shared primitives come from the public localx-llama crate tier via a
+# rev-pinned git dependency. MSRV 1.82 / edition 2021, exact-pinned deps.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/localbox",
+    "crates/localbox-launcher",
+    "crates/localbox-tui",
+]
+
+[workspace.package]
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+authors = ["David <David@c0degeek.dev>", "Bram (C0deGeek.dev)"]
+repository = "https://github.com/C0deGeek-dev/LocalBox"
+rust-version = "1.82"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+dbg_macro = "deny"
+
+[workspace.dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+thiserror = "=2.0.9"
+sysinfo = "=0.32.1"
+tempfile = "=3.14.0"
+toml = "=0.8.23"
+toml_edit = "=0.22.27"
+ratatui = { version = "=0.29.0", default-features = false, features = ["unstable-rendered-line-info"] }
+crossterm = "=0.28.1"
+tokio = { version = "=1.44.2", features = ["macros", "rt-multi-thread", "net", "time"] }
+reqwest = { version = "=0.12.11", features = ["json", "stream", "rustls-tls"], default-features = false }
+# Exact revision contains both the Prism engine contract and the Anthropic SSE
+# lifecycle normalization required by Prism's llama.cpp fork.
+localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "b3b0c844e5a99e855e94865924e5f6bb4dec6fe6" }
+localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "b3b0c844e5a99e855e94865924e5f6bb4dec6fe6" }

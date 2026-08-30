@@ -1,0 +1,7 @@
+{
+  "version": "5.0.0",
+  "api_version": 1,
+  "launcher_export_version": 1,
+  "supported_targets": ["LocalBox"],
+  "supported_runtimes": ["llamacpp"]
+}

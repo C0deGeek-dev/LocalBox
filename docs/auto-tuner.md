@@ -1,0 +1,96 @@
+# LocalBench auto-tuner (findbest)
+
+Part of the [LocalBox documentation](README.md).
+
+Tuning belongs to
+[LocalBench](https://github.com/C0deGeek-dev/LocalBench): its `findbest`
+command measures candidate configurations live through the launcher contract
+and writes a LocalBox-compatible result to `~/.local-llm/tuner/best-<key>.json`.
+LocalBox's guided launcher replays that saved profile as the auto-tuned
+configuration.
+
+The trait, envelope, shared file formats, and version gates the two repos
+exchange are governed by the formal contract LocalBench owns:
+[`docs/launcher-contract.md`](https://github.com/C0deGeek-dev/LocalBench/blob/main/docs/launcher-contract.md).
+Both repos' CI assert conformance against the real counterpart, so a breaking
+change on either side fails that side's build.
+
+Standard catalog context aliases are `32k`, `64k`, `128k`, and `256k` unless a
+model explicitly lacks support. AutoBest profiles are context-aware: the saved
+entry records both `contextKey` and the resolved `contextTokens`, and launcher
+selection still requires the same context key.
+
+```text
+# Tune a model at the 64k context preset, native llama.cpp, default budget.
+# Default goal is coding-agent: long-prefill end-to-end latency.
+localbench findbest --model q36plus --context 64k
+
+# Optimize for prompt-eval (prefill) or generation explicitly
+localbench findbest --model q36plus --context 64k --optimize prompt
+localbench findbest --model q36plus --context 64k --optimize gen
+
+# Save both the fastest raw profile and a workstation-friendly balanced one
+localbench findbest --model q36plus --context 64k --profile both
+
+# Default sampling is three runs per candidate; override when needed
+localbench findbest --model q36plus --context 64k --runs 5
+
+# Bound the search (trial budget, clamped to [1, 100])
+localbench findbest --model q36plus --context 64k --budget 20
+
+# Measure without saving a profile
+localbench findbest --model q36plus --context 64k --no-save
+
+# Cache control. Decisive measurements persist across runs in a fingerprinted
+# trial cache (tuner/trial-cache-<key>[-<context>].json); a repeated or
+# interrupted tune reuses them. The cache invalidates itself — naming the
+# differing fields — when anything shaping a measurement changes (model file,
+# chat protocol/template, session defaults, runs, optimize goal, tuner version,
+# ...). Skip it for one run with:
+localbench findbest --model q36plus --context 64k --no-cache
+```
+
+Candidates are measured through `llama-server` — the same binary LocalBox will
+actually launch — as deterministic `/v1/chat/completions` requests. LocalBench
+reuses LocalBox's settings overlay and single-session defaults (`--parallel 1`,
+`--cache-reuse 256` when nothing more explicit wins), validates visible text
+and finite prompt/decode timings, and never falls back to raw completion.
+Turboquant KV encodings (`turbo3`/`turbo4`) are therefore measured through the
+fork that registers them, never approximated with mainline `llama-bench`
+numbers.
+
+Every attempted or cached candidate also has a typed outcome in a JSONL run
+manifest under `~/.local-llm/logs/tuner/`; live attempts point to unique server
+logs. HTTP/schema/content failures remain distinct from startup/OOM evidence and
+cannot rank or trigger a memory recovery sweep. Completed diagnostic runs are
+bounded to 20, while interrupted runs remain protected for diagnosis.
+
+`--quant` selects the GGUF model file and stays fixed during a tuner run; KV
+cache types are only runtime encodings.
+
+**Replaying the saved best:**
+
+The guided launcher (`localbox`) replays a saved profile automatically when
+auto-tune is on: the entry is matched on quant, context key, and mode, with
+the wanted profile first, then the nearest measured VRAM, then score. An
+unsupported store schema or measurement version fails closed to the recommended
+defaults, and manual KV choices only fill gaps the profile left. Current
+LocalBox accepts tuner version 5. A matching older entry can be re-tuned, used
+once with defaults, or explicitly adopted: the guided launcher offers the
+choice, and `localbox launch <model> --adopt-tune` is its scripted equivalent.
+Adoption carries the llama-server settings forward without claiming that the
+old score is comparable to version 5, records the original tuner version and
+adoption time, keeps the previous store as `.json.bak`, and applies the tune in
+that same launch. Future-version entries cannot be adopted. Without an explicit
+choice, fallback still fails closed; a mixed store still selects a matching
+version-5 entry and never offers adoption. `models --json` reports tuned entries
+with `origin: "measured"` or `origin: "adopted"` so the distinction remains
+visible.
+
+Before handing a session to an agent, LocalBox sends a tiny `/v1/messages`
+smoke request through the same route the agent will use. The smoke must
+produce the requested visible answer; text hidden inside `<think>...</think>`
+does not count. If the reply is degenerate, the launch stops with a
+plain-language explanation instead of starting an unusable session.
+
+---

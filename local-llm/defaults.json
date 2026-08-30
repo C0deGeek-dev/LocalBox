@@ -1,0 +1,30 @@
+{
+  "NoThinkProxyPort": 11435,
+  "LlamaCppTurboquantRepo": "C0deGeek-dev/llama-cpp-turboquant",
+  "LlamaCppPrismRepo": "PrismML-Eng/llama.cpp",
+  "LlamaCppPrismPinnedTag": "prism-b9596-9fcaed7",
+  "LlamaCppGgufRoot": "%USERPROFILE%\\.local-llm\\gguf",
+  "LlamaCppHealthCheckTimeoutSec": 300,
+  "LlamaCppSmokeTestTimeoutSec": 300,
+  "LlamaCppPinnedTag": "b9596",
+  "LlamaCppTurboquantPinnedTag": "tqp-v0.2.0",
+  "LlamaCppRequireDownloadPins": true,
+  "LlamaCppDownloadPins": {
+    "llama-b9596-bin-win-cpu-x64.zip": "d6af2cdf070fe3222c1ffc0cf9665d1d395aff32b985a29d8dc2e3ae1398d780",
+    "llama-b9596-bin-win-cuda-12.4-x64.zip": "4be0993b63ff501e3aa23e7f35e16e03a8b44404462792994cd66ce98915fa7e",
+    "llama-b9596-bin-win-cuda-13.3-x64.zip": "7edbf71071ead99843700d2800c92b5f14270e67da29941738dab1eb3daae91f",
+    "llama-b9596-bin-win-vulkan-x64.zip": "46bf6ee71b3d9c842aaadee2f6e51da6e8d9139dc3d8b931e5615150521f8f71",
+    "cudart-llama-bin-win-cuda-12.4-x64.zip": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+    "cudart-llama-bin-win-cuda-13.3-x64.zip": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e",
+    "turboquant-plus-tqp-v0.2.0-windows-x64-cuda12.4.zip": "2cd1dac233226b90bc0564495b526d2baf1a435c0ee00b4be3513b6211ead744",
+    "turboquant-plus-tqp-v0.2.0-windows-x64-cuda13.3.zip": "ce536b6dfed4051806b0c2d92c112f9b58644663010f90a1308cb3e075433276",
+    "llama-prism-b1-9fcaed7-bin-win-cuda-12.4-x64.zip": "6d109e2930c0eaf2f729c3a6fc58dd7809ce2ba7047bfb294547cc389af6de5d",
+    "llama-prism-b9596-9fcaed7-bin-macos-arm64.tar.gz": "9c14bcdba8c99378ca3fd4dbf3c28f94bb8c528186a80f8bc40b5fdd7edb9937",
+    "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.4-x64.tar.gz": "c9c266bdcedda6f457d69ac28cf7a43166affa5ee0f87c5067d47484e4098a71",
+    "llama-prism-b9596-9fcaed7-bin-linux-cuda-12.8-x64.tar.gz": "d2d982ace4ef50b239a427f28568215b3617a9ee3b7e7fe11aea865a2ae0061a",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-x64.tar.gz": "e361c09f128a407c659d07361b008155e1eab0cd0ed0a12ccdcf7147f7c22948",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-x64.tar.gz": "6871dc3a26c27151f9d045d0d97e781b356286591b222ccbb0d5b975410bcbfb",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-arm64.tar.gz": "4bf7ac9514f78bf25bd09c4f70ee5c5b5885c4781bfe48d093c4374d141c11b8",
+    "llama-prism-b9596-9fcaed7-bin-ubuntu-vulkan-arm64.tar.gz": "521fff87553d5a65a630587218539105dbdfaf29d057a0a1e37038c3e828973f"
+  }
+}

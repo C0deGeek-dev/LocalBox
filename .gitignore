@@ -1,0 +1,64 @@
+# Working notes — kept locally, not pushed
+plan-next.md
+plan.md
+analysis.md
+
+# Per-machine settings overlay — overrides scalars in the catalog,
+# never committed (paths are user-specific).
+local-llm/settings.json
+**/settings.local.json
+
+# Per-user model catalog — the shipped template is llm-models.example.json;
+# the first run seeds this from it. Your models are yours, not shipped.
+local-llm/llm-models.json
+
+# Runtime state generated at run time — never commit
+local-llm/profile-versions/
+local-llm/parser-versions/
+local-llm/logs/
+local-llm/tuner/
+local-llm/localbench/
+local-llm/tools/
+local-llm/llama-cpp/
+local-llm/llama-cpp-turboquant/
+local-llm/gguf/
+**/.llm-default
+
+# Model weights / large local runtime artifacts
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.st
+
+# Backups / temp
+*.bak
+*.tmp
+*.swp
+
+
+# Windows / shell junk
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+.idea
+*.backup
+
+# Log files (dev / runtime temp logs)
+*.log
+.localpilot/
+/.localpilot.toml
+
+# LocalMind / LocalPilot runtime stores (derived; never commit — ADR-0011)
+.localmind/
+.localmind.toml
+
+# Rust build output
+/target/
+
+# Retired/generated .NET TUI build output
+/tui/
