@@ -1,9 +1,16 @@
 [advisories]
+# Owner: c0degeek-dev. All four ignores below first observed 2026-08-30;
+# disposition: accept indefinitely — none are directly controlled deps, and
+# none have a known vulnerability (unmaintained/unsound-category only).
+# Revisit if reqwest/ratatui drop the transitive that carries them.
 ignore = [
     "RUSTSEC-2025-0134", # unmaintained rustls-pemfile via reqwest
     "RUSTSEC-2024-0436", # unmaintained paste via ratatui
     # lru 0.12.5 is transitive through ratatui; LocalBox does not use the
-    # affected IterMut or pop APIs. Remove when ratatui updates lru.
+    # affected IterMut or pop APIs. Remove when ratatui updates lru. Note:
+    # cargo-deny's default `unsound = "workspace"` scope does not evaluate a
+    # transitive-only crate like this anyway, so `cargo audit` in CI is what
+    # actually keeps this pair visible, not this ignore entry.
     "RUSTSEC-2026-0002",
     "RUSTSEC-2026-0253",
 ]
