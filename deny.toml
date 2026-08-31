@@ -1,7 +1,10 @@
 [advisories]
 # Owner: c0degeek-dev. All four ignores below first observed 2026-08-30;
-# disposition: accept indefinitely — none are directly controlled deps, and
-# none have a known vulnerability (unmaintained/unsound-category only).
+# disposition: accept indefinitely — none are directly controlled deps.
+# rustls-pemfile/paste are "unmaintained"-category only, no known
+# vulnerability. Both lru entries ARE real "unsound" (memory-corruption)
+# advisories, not vulnerability-free — accepted because LocalBox never calls
+# the affected IterMut/pop paths, not because they are harmless in general.
 # Revisit if reqwest/ratatui drop the transitive that carries them.
 ignore = [
     "RUSTSEC-2025-0134", # unmaintained rustls-pemfile via reqwest
