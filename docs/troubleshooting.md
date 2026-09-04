@@ -9,9 +9,9 @@ Part of the [LocalBox documentation](README.md).
   plain-text menus with no escape sequences; a non-TTY session degrades to
   them automatically.
 - **A download or install looks wrong** → `localbox update --check` reports
-  what each mode's binary resolves to, including runtime companions and
-  expected download sizes, without changing anything. If an engine binary is
-  missing, run the exact mode command from the error, for example
+  each mode's latest release and selected assets, including runtime companions
+  and expected download sizes, without changing anything. If an engine binary
+  is missing, run the exact mode command from the error, for example
   `localbox update --mode native`. A checksum/extraction failure leaves the
   prior engine and stamp active; fix the pin/release problem and rerun;
   `localbox launch <model> --dry-run` prints the full plan (paths, argv,

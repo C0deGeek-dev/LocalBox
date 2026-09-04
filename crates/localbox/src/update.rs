@@ -16,6 +16,11 @@ use localx_llama_runtime::download::{
     select_cpu_asset, AssetArch, PinOutcome,
 };
 
+/// How many releases back to look for one this host can install. Deep enough
+/// to step over marker releases and platform gaps, shallow enough to stay one
+/// API page.
+const RELEASE_SCAN_DEPTH: u8 = 30;
+
 /// A named release asset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asset {
@@ -526,6 +531,45 @@ pub fn mtp_stamp_sha(stamp_first_line: &str) -> Option<&str> {
     (!sha.is_empty() && sha.chars().all(|c| c.is_ascii_hexdigit())).then_some(sha)
 }
 
+/// Fetch a repository's releases, newest first.
+///
+/// # Errors
+/// A plain message when the API cannot be reached or answers unexpectedly.
+pub async fn fetch_releases(repo: &str, limit: u8) -> Result<Vec<Release>, String> {
+    let url = format!("https://api.github.com/repos/{repo}/releases?per_page={limit}");
+    let client = reqwest::Client::new();
+    let value: serde_json::Value = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, "localbox")
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("release lookup failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("release lookup returned no JSON: {e}"))?;
+    Ok(releases_from_json(&value))
+}
+
+/// The downloadable assets carried by one release payload.
+fn assets_from_json(value: &serde_json::Value) -> Vec<Asset> {
+    value["assets"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|a| {
+                    Some(Asset {
+                        name: a["name"].as_str()?.to_string(),
+                        url: a["browser_download_url"].as_str()?.to_string(),
+                        size: a["size"].as_u64(),
+                        digest: a["digest"].as_str().and_then(parse_github_digest),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Resolve a GitHub release (the pinned tag when set, else latest).
 ///
 /// # Errors
@@ -550,22 +594,45 @@ pub async fn fetch_release(repo: &str, tag: Option<&str>) -> Result<Release, Str
         .as_str()
         .ok_or_else(|| format!("no release found at {url}"))?
         .to_string();
-    let assets = value["assets"]
+    let assets = assets_from_json(&value);
+    Ok(Release { tag, assets })
+}
+
+/// Parse a `/releases` list payload into releases, newest first.
+///
+/// Split from the HTTP call so the selection rule below is unit-testable.
+#[must_use]
+pub fn releases_from_json(value: &serde_json::Value) -> Vec<Release> {
+    value
         .as_array()
         .map(|list| {
             list.iter()
-                .filter_map(|a| {
-                    Some(Asset {
-                        name: a["name"].as_str()?.to_string(),
-                        url: a["browser_download_url"].as_str()?.to_string(),
-                        size: a["size"].as_u64(),
-                        digest: a["digest"].as_str().and_then(parse_github_digest),
+                .filter_map(|entry| {
+                    Some(Release {
+                        tag: entry["tag_name"].as_str()?.to_string(),
+                        assets: assets_from_json(entry),
                     })
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    Ok(Release { tag, assets })
+        .unwrap_or_default()
+}
+
+/// The newest release this host can actually install, given a per-release
+/// asset selector.
+///
+/// GitHub's "latest release" is a publisher's flag, not a statement that the
+/// release carries binaries: llama.cpp marks a version-numbered marker release
+/// (`v0.3.0`, carrying only `nightly-tag.txt`) as latest while every usable
+/// build lives on an unflagged `b####` tag. Walking newest-first and taking
+/// the first release whose assets fit skips those, and skips a real release
+/// published without this platform's archive.
+#[must_use]
+pub fn newest_installable<F>(releases: &[Release], fits: F) -> Option<&Release>
+where
+    F: Fn(&Release) -> bool,
+{
+    releases.iter().find(|release| fits(release))
 }
 
 /// The lowercase hex from a GitHub `digest` field (`sha256:<hex>`); other
@@ -941,6 +1008,15 @@ pub enum UpdatePlan {
     },
     /// mtpturbo staleness verdict (source-built; no prebuilt asset exists).
     MtpStatus { message: String },
+    /// The resolved release is *older* than the installed build. Never applied
+    /// implicitly: replacing a working engine with an earlier one means
+    /// upstream withdrew or retagged a release, not that an upgrade is wanted.
+    WouldDowngrade {
+        /// The tag currently installed, per the build stamp.
+        installed: String,
+        /// The older tag the release lookup resolved to.
+        resolved: String,
+    },
 }
 
 /// Decide the update plan for a downloadable engine mode.
@@ -1001,33 +1077,6 @@ pub fn mode_release_source(
     Some((repo, pinned))
 }
 
-/// Whether a configured pin lags the latest upstream release.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PinFreshness {
-    /// The pinned tag is the latest release.
-    Current,
-    /// The latest release differs from the pin.
-    Behind {
-        /// The configured pinned tag.
-        pinned: String,
-        /// The upstream latest tag.
-        latest: String,
-    },
-}
-
-/// Compare a pinned tag against the latest release tag.
-#[must_use]
-pub fn pin_freshness(pinned: &str, latest: &str) -> PinFreshness {
-    if pinned.trim() == latest.trim() {
-        PinFreshness::Current
-    } else {
-        PinFreshness::Behind {
-            pinned: pinned.trim().to_string(),
-            latest: latest.trim().to_string(),
-        }
-    }
-}
-
 /// Merge a refreshed pin set into a settings layer: set the mode's pinned-tag
 /// key and upsert each asset hash under `LlamaCppDownloadPins`, leaving every
 /// unrelated key untouched. Pure — the caller owns the file write.
@@ -1061,23 +1110,113 @@ pub fn refreshed_settings(
     merged
 }
 
+/// The comparable part of a release tag: a family prefix plus its numbers.
+///
+/// Tags across the engines follow two shapes — a dotted `v` version
+/// (`tqp-v0.3.1`) and a llama.cpp build number (`b9596`, `prism-b9596-9fcaed7`).
+/// Anything else, or a mismatch of family, yields `None` so callers treat the
+/// pair as unordered rather than guessing.
+#[must_use]
+pub fn tag_order_key(tag: &str) -> Option<(String, Vec<u64>)> {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return None;
+    }
+    let lower = tag.to_ascii_lowercase();
+
+    // `...v1.2.3` — the dotted version wins when both shapes could match.
+    if let Some(pos) = lower.find('v') {
+        let rest = &lower[pos + 1..];
+        let digits: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let parts: Vec<&str> = digits.split('.').filter(|p| !p.is_empty()).collect();
+        if parts.len() >= 2 {
+            if let Some(nums) = parts.iter().map(|p| p.parse::<u64>().ok()).collect() {
+                return Some((format!("{}v", &lower[..pos]), nums));
+            }
+        }
+    }
+
+    // `b9596`, possibly embedded (`prism-b9596-9fcaed7`).
+    let bytes = lower.as_bytes();
+    for (i, c) in lower.char_indices() {
+        if c != 'b' {
+            continue;
+        }
+        let starts_token = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        if !starts_token {
+            continue;
+        }
+        let digits: String = lower[i + 1..].chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() {
+            if let Ok(n) = digits.parse::<u64>() {
+                return Some((format!("{}b", &lower[..i]), vec![n]));
+            }
+        }
+    }
+    None
+}
+
+/// Whether installing `resolved` over `installed` moves *backwards*.
+///
+/// Conservative on purpose: only tags of the same family whose numbers both
+/// parse are ordered at all. Unknown or mismatched shapes are never reported
+/// as a downgrade, so this can block a real mistake but never a legitimate
+/// re-pin it simply cannot read.
+#[must_use]
+pub fn is_downgrade(installed: &str, resolved: &str) -> bool {
+    match (tag_order_key(installed), tag_order_key(resolved)) {
+        (Some((lhs_family, lhs)), Some((rhs_family, rhs))) if lhs_family == rhs_family => rhs < lhs,
+        _ => false,
+    }
+}
+
 pub async fn plan_binary_update(
     catalog: &Catalog,
     mode: localx_llama_core::Mode,
     root: &Path,
     driver_major: Option<u32>,
     amd_gpu: bool,
+    allow_downgrade: bool,
 ) -> Result<UpdatePlan, String> {
-    let Some((repo, pinned_tag)) = mode_release_source(catalog, mode) else {
+    let Some((repo, _configured)) = mode_release_source(catalog, mode) else {
         return Ok(UpdatePlan::MtpStatus {
             message: mtp_status(catalog, root),
         });
     };
-    let release = fetch_release(&repo, pinned_tag.as_deref()).await?;
+    // Always the newest usable release, never the recorded tag: the tag in
+    // `settings.json` records what was last installed and verified, not a
+    // ceiling. "Newest usable" rather than GitHub's `latest` flag, because
+    // that flag says nothing about a release carrying binaries for this host.
+    let releases = fetch_releases(&repo, RELEASE_SCAN_DEPTH).await?;
+    let fits = |release: &Release| {
+        select_release_assets_reporting(release, mode, driver_major, amd_gpu)
+            .is_ok_and(|(assets, _)| !assets.is_empty())
+    };
+    let release = newest_installable(&releases, fits)
+        .ok_or_else(|| {
+            format!(
+                "none of the {} newest releases in {repo} carry an asset for this platform;                  provide your own llama-server (bring-your-own)",
+                releases.len()
+            )
+        })?
+        .clone();
 
     if let Some(installed) = read_stamp_tag(root) {
         if !build_stamp_is_stale(&installed, &release.tag) {
             return Ok(UpdatePlan::UpToDate { tag: release.tag });
+        }
+        // The stamp differing means "install", in both directions. Going
+        // backwards is the direction that costs something: it replaces a
+        // working engine with an earlier one, and the pin that asks for it is
+        // usually stale or reverted rather than deliberate.
+        if !allow_downgrade && is_downgrade(&installed, &release.tag) {
+            return Ok(UpdatePlan::WouldDowngrade {
+                installed,
+                resolved: release.tag,
+            });
         }
     }
 
@@ -1096,7 +1235,28 @@ pub fn select_release_assets(
     driver_major: Option<u32>,
     amd_gpu: bool,
 ) -> Result<Vec<Asset>, String> {
+    let (assets, warning) = select_release_assets_reporting(release, mode, driver_major, amd_gpu)?;
+    if let Some(warning) = warning {
+        eprintln!("Warning: {warning}");
+    }
+    Ok(assets)
+}
+
+/// The selection above, with its host-compatibility warning returned rather
+/// than printed. Scanning releases for the newest installable one calls this
+/// repeatedly, and a warning about the release finally chosen should be said
+/// once, by the caller that acts on it.
+///
+/// # Errors
+/// A plain message when no asset fits this host.
+pub fn select_release_assets_reporting(
+    release: &Release,
+    mode: localx_llama_core::Mode,
+    driver_major: Option<u32>,
+    amd_gpu: bool,
+) -> Result<(Vec<Asset>, Option<String>), String> {
     use localx_llama_core::Mode;
+    let mut host_warning = None;
     let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
     let picked: Vec<&str> = match mode {
         Mode::Native => {
@@ -1114,17 +1274,13 @@ pub fn select_release_assets(
         }
         Mode::Turboquant => {
             let (choice, warning) = select_turbo_asset(&names, driver_major);
-            if let Some(warning) = warning {
-                eprintln!("Warning: {warning}");
-            }
+            host_warning = warning;
             choice.into_iter().collect()
         }
         Mode::Mtpturbo => Vec::new(),
         Mode::PrismMl => {
             let (choice, warning) = select_prism_assets(&names, driver_major, amd_gpu)?;
-            if let Some(warning) = warning {
-                eprintln!("Warning: {warning}");
-            }
+            host_warning = warning;
             choice
         }
     };
@@ -1135,7 +1291,7 @@ pub fn select_release_assets(
             release.tag
         ));
     }
-    picked
+    let assets = picked
         .iter()
         .map(|name| {
             release
@@ -1145,31 +1301,8 @@ pub fn select_release_assets(
                 .cloned()
                 .ok_or_else(|| "selected asset vanished from the release listing".to_string())
         })
-        .collect()
-}
-
-/// Resolve the **latest** release for a mode and select this host's assets —
-/// the read-only half of a pin refresh.
-///
-/// # Errors
-/// A plain message for the mtpturbo mode (source-built, nothing to refresh),
-/// an unreachable release API, or a release with no asset for this host.
-pub async fn plan_refresh(
-    catalog: &Catalog,
-    mode: localx_llama_core::Mode,
-    driver_major: Option<u32>,
-    amd_gpu: bool,
-) -> Result<(Release, Vec<Asset>), String> {
-    let Some((repo, _pinned)) = mode_release_source(catalog, mode) else {
-        return Err(
-            "mtpturbo is source-built and has no release pins to refresh; see \
-             `localbox update --mode mtpturbo --check`"
-                .to_string(),
-        );
-    };
-    let release = fetch_release(&repo, None).await?;
-    let assets = select_release_assets(&release, mode, driver_major, amd_gpu)?;
-    Ok((release, assets))
+        .collect::<Result<Vec<Asset>, String>>()?;
+    Ok((assets, host_warning))
 }
 
 fn mtp_status(catalog: &Catalog, root: &Path) -> String {
@@ -1767,18 +1900,108 @@ mod tests {
     }
 
     #[test]
-    fn pin_freshness_compares_trimmed_tags() {
+    fn newest_installable_walks_past_a_marker_release() {
+        // llama.cpp flags a version-numbered marker release as "latest" while
+        // every usable Windows build lives on an unflagged b#### tag, so
+        // GitHub's latest-release endpoint resolves something with no
+        // binaries at all. Walk newest-first and take the first that fits.
+        let rel = |tag: &str, assets: &[&str]| Release {
+            tag: tag.to_string(),
+            assets: assets
+                .iter()
+                .map(|name| Asset {
+                    name: (*name).to_string(),
+                    url: String::new(),
+                    size: None,
+                    digest: None,
+                })
+                .collect(),
+        };
+        let releases = vec![
+            rel("v0.3.0", &["nightly-tag.txt"]),
+            rel("b10797", &["llama-b10797-bin-win-cuda-13.3-x64.zip"]),
+            rel("b10796", &["llama-b10796-bin-win-cuda-13.3-x64.zip"]),
+        ];
+        let fits = |release: &Release| release.assets.iter().any(|a| a.name.ends_with(".zip"));
         assert_eq!(
-            pin_freshness("prism-b9596-9fcaed7", "prism-b9596-9fcaed7\n"),
-            PinFreshness::Current
+            newest_installable(&releases, fits).map(|r| r.tag.as_str()),
+            Some("b10797")
         );
+        // Nothing usable anywhere is reported as such, not as a silent pick.
+        assert!(newest_installable(&releases[..1], fits).is_none());
+        assert!(newest_installable(&[], fits).is_none());
+    }
+
+    #[test]
+    fn releases_are_parsed_newest_first_with_digests() {
+        let payload = serde_json::json!([
+            {
+                "tag_name": "b10797",
+                "assets": [{
+                    "name": "llama-b10797-bin-win-cuda-13.3-x64.zip",
+                    "browser_download_url": "https://example.invalid/a.zip",
+                    "size": 42,
+                    "digest": "sha256:DDD2DFBC5E726D1A08F6D40D2129807693231B732655E5C17A058DDFD0708651"
+                }]
+            },
+            { "tag_name": "v0.3.0", "assets": [] }
+        ]);
+        let parsed = releases_from_json(&payload);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].tag, "b10797");
+        assert_eq!(parsed[0].assets[0].size, Some(42));
         assert_eq!(
-            pin_freshness("prism-b9591-62061f9", "prism-b9596-9fcaed7"),
-            PinFreshness::Behind {
-                pinned: "prism-b9591-62061f9".into(),
-                latest: "prism-b9596-9fcaed7".into(),
-            }
+            parsed[0].assets[0].digest.as_deref(),
+            Some("ddd2dfbc5e726d1a08f6d40d2129807693231b732655e5c17a058ddfd0708651"),
+            "the published digest is normalised to lowercase hex"
         );
+        assert!(parsed[1].assets.is_empty());
+    }
+
+    #[test]
+    fn tag_order_reads_both_release_shapes() {
+        assert_eq!(
+            tag_order_key("tqp-v0.3.1"),
+            Some(("tqp-v".to_string(), vec![0, 3, 1]))
+        );
+        assert_eq!(tag_order_key("b9596"), Some(("b".to_string(), vec![9596])));
+        assert_eq!(
+            tag_order_key("prism-b9596-9fcaed7"),
+            Some(("prism-b".to_string(), vec![9596]))
+        );
+        // Nothing orderable: never guess.
+        assert_eq!(tag_order_key("main"), None);
+        assert_eq!(tag_order_key(""), None);
+    }
+
+    #[test]
+    fn downgrade_is_detected_only_within_one_tag_family() {
+        // The case that shipped a broken engine: a reverted pin resolving to
+        // an older build than the one already installed.
+        assert!(is_downgrade("tqp-v0.3.1", "tqp-v0.2.0"));
+        assert!(is_downgrade("b10103", "b9596"));
+        assert!(is_downgrade(
+            "prism-b9596-9fcaed7",
+            "prism-b9591-62061f9"
+        ));
+
+        // Forward and equal are not downgrades.
+        assert!(!is_downgrade("tqp-v0.2.0", "tqp-v0.3.1"));
+        assert!(!is_downgrade("tqp-v0.3.1", "tqp-v0.3.1"));
+        assert!(!is_downgrade("b9596", "b10103"));
+
+        // Different families, or shapes we cannot read, stay unordered so a
+        // legitimate re-pin is never blocked by a guess.
+        assert!(!is_downgrade("tqp-v0.3.1", "b9596"));
+        assert!(!is_downgrade("tqp-v0.3.1", "some-branch-build"));
+        assert!(!is_downgrade("whatever", "tqp-v0.2.0"));
+    }
+
+    #[test]
+    fn patch_and_minor_order_within_a_family() {
+        assert!(is_downgrade("tqp-v0.3.10", "tqp-v0.3.9"));
+        assert!(!is_downgrade("tqp-v0.3.9", "tqp-v0.3.10"));
+        assert!(is_downgrade("tqp-v1.0.0", "tqp-v0.9.9"));
     }
 
     #[test]

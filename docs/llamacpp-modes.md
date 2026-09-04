@@ -13,7 +13,16 @@ The launcher supports four flavors of `llama-server`:
   with a quality cliff that's a function of context length). Only available
   through the fork binary. Auto-downloaded from GitHub releases on first use.
   Does **not** support MTP — LocalBox rejects `--spec-type draft-mtp` up front
-  in this mode.
+  in this mode. The pin (`LlamaCppTurboquantPinnedTag`) is `tqp-v0.3.1`, built
+  from fork commit `7f1a8b13` — upstream
+  [`TheTom/llama-cpp-turboquant`](https://github.com/TheTom/llama-cpp-turboquant)
+  tag `tqp-v0.3.0` (`30d6881`) plus two commits that touch only the release
+  workflow: one adds the Windows CUDA 13.3 build that upstream does not publish,
+  the other links BoringSSL statically so the archive carries no external
+  OpenSSL dependency (upstream's own archives do — TheTom#346). Neither commit
+  changes engine source. Fork tags carry upstream-shaped names but not
+  upstream's commits, so match a server log's `build_info` against the fork tag,
+  never against the upstream release notes.
 - **`mtpturbo`** — combined build: MTP spec-decode **and** turbo KV cache in
   one binary. No prebuilt release exists for any fork that carries both
   features, so the binary is built from source (pinned to an exact commit via

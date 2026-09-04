@@ -21,7 +21,7 @@ localbox log [--lines <n>]          tail the most recent server log
 localbox embed-serve [--port <p>]   start the CPU-only embedding server
 localbox embed-stop                 stop the embedding server
 localbox update [--mode <m>] [--check]
-                                    install or update the llama.cpp binaries
+                                    install and pin the latest llama.cpp releases
 localbox version                    print the launcher version envelope
 ```
 

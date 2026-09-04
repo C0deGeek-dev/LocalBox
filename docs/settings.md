@@ -62,33 +62,43 @@ without changing the persisted answer; clear a persisted choice by editing
 LocalBox downloads `llama-server` binaries from third-party GitHub releases.
 Out of the box, every binary download is pinned and verified:
 
-- **`defaults.json` ships pinned release tags** (`LlamaCppPinnedTag` for
+- **`defaults.json` ships baseline release tags** (`LlamaCppPinnedTag` for
   llama.cpp, `LlamaCppTurboquantPinnedTag` for turboquant, and
   `LlamaCppPrismPinnedTag` for PrismML) **and a
   `LlamaCppDownloadPins` table** with the SHA-256 of every asset those tags can
-  install. Downloads target the pinned tag, and a checksum mismatch deletes the
-  file and aborts the install.
+  install. A checksum mismatch deletes the file and aborts the install.
 - **`LlamaCppRequireDownloadPins` defaults to `true`**: an asset with no
   recorded pin is a hard failure. To opt out of pinning (trust-on-first-use),
   set it to `false` in `settings.json`.
-**Knowing when a pin has aged**: `localbox update --check` reports, per
-pinned mode, whether the pinned tag is still the latest upstream release
-("Pin is behind upstream: pinned b9596, latest b10103. …"). The report is
-informational — nothing auto-installs because upstream moved.
 
-**Advancing the pins** is one deliberate command per mode:
+**Updates always track the latest release.** A normal update resolves each
+downloadable mode's newest GitHub release, selects this host's assets, installs
+them, and records the new tag and SHA-256 hashes in
+`~/.local-llm/settings.json`:
 
 ```
-localbox update --mode native --refresh-pins --check   # preview: tag + assets
-localbox update --mode native --refresh-pins           # install + record pins
+localbox update --check                 # preview every mode without writes
+localbox update                         # update and pin every release mode
+localbox update --mode turboquant       # update and pin only turboquant
 ```
 
-The refresh resolves the *latest* release, installs this host's assets, and
-records the new tag and asset SHA-256 hashes in `~/.local-llm/settings.json`
-(only those keys are touched). A freshly recorded pin is verified against the
-GitHub release's published `sha256` digest — a mismatch refuses to install or
-record. `--refresh-pins` requires an explicit `--mode`; there is no
-refresh-everything sweep.
+This is also the path used by `localx install engine`, so that command always
+gets the latest available engine releases. Only the relevant tag and pin keys
+are touched.
+
+"Latest" means the newest release carrying an asset this host can install, not
+GitHub's latest-release flag — llama.cpp marks a version-numbered marker
+release holding only `nightly-tag.txt` as latest, so releases are walked
+newest-first until one fits. An update never moves *backwards*: if the newest
+usable release is older than the installed build (upstream withdrew or retagged
+one), the update refuses and leaves the engine in place unless
+`--allow-downgrade` is passed.
+
+A newly recorded pin is verified against the GitHub release's published
+`sha256` digest — a mismatch refuses to install or record. The old
+`--refresh-pins` spelling remains accepted for script compatibility but is no
+longer necessary. `mtpturbo` is source-built and continues to report its remote
+revision rather than participating in release pin updates.
 
 For split CUDA packages, the pin table must cover both the server and matching
 runtime companion. `--check` shows every selected asset and its expected size.
@@ -96,15 +106,14 @@ Live updates stage and verify that identical set, including its build stamp,
 then replace the engine directory as one unit; a partial or corrupt companion
 cannot replace a working install.
 
-The manual loop still works — set the tag key and the `LlamaCppDownloadPins`
-entries in `settings.json` yourself, then run `localbox update`; the install
-fails loudly if a hash doesn't match.
-
-The same keys in `settings.json` always win over `defaults.json`, so machine
-pins can lead or lag the shipped ones. `defaults.json` is a *shipped* layer:
+The same keys in `settings.json` always win over `defaults.json`, and automatic
+updates keep those machine pins current. `defaults.json` is a *shipped* layer:
 it refreshes to match the installed binary (so shipped pins never go stale on
 an existing install) — never edit it directly; overrides belong in
-`settings.json`.
+`settings.json`. The one file that refresh will not write is a symlink: if
+`defaults.json` or `llm-models.example.json` is a link (a developer pointing
+the live tree at a checkout), it is left alone with a warning rather than
+written through into a working tree.
 
 ### Per-workspace default model
 

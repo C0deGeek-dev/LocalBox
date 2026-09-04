@@ -4,6 +4,45 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`localbox update` now installs the newest usable release for every mode,
+  and records what it installed.** The tag in `settings.json` is a record of
+  what was last installed and verified, not a ceiling, so `localx install
+  engine` gets current engines without a second command; `--refresh-pins` is
+  accepted and ignored. "Newest usable" is not GitHub's latest-release flag:
+  llama.cpp marks a version-numbered marker release carrying only
+  `nightly-tag.txt` as latest, so releases are walked newest-first and the
+  first one carrying an asset for this host wins. A freshly resolved release
+  has no local pin, so the digest the release publishes is the integrity check
+  and a mismatch refuses the install; the resulting hashes are then written to
+  `settings.json`.
+- **An engine update can no longer move backwards or overwrite a developer's
+  checkout.**
+  - Seeding refreshes `~/.local-llm/defaults.json` and
+    `llm-models.example.json` from the running binary whenever they differ,
+    which is deliberate — but it followed a symlink, so anyone who had linked
+    those at a checkout had their working tree silently reverted to whatever
+    the binary was built with. A differing symlink is now left alone with a
+    warning, once per path, naming `settings.json` as the place for machine
+    overrides.
+  - A build stamp differing from the resolved release meant "install", in
+    either direction, so a withdrawn or retagged release could replace a
+    working engine with an older one. Backwards installs are now refused,
+    leaving the engine in place, unless `--allow-downgrade` is passed. Only
+    same-family tags whose numbers parse are ordered (`tqp-v0.3.1` against
+    `tqp-v0.2.0`, `b10103` against `b9596`), so an unreadable tag is never
+    mistaken for a downgrade.
+- **Advanced the turboquant engine pin to `tqp-v0.3.1`.** The previous pin,
+  `tqp-v0.2.0`, was a fork snapshot cut before upstream released a tag of that
+  name — the same tag string, a different commit, 52 commits behind upstream's
+  `tqp-v0.3.0`. The fork now carries a `tqp-v0.3.1` rebuilt from upstream's tag
+  plus two release-workflow commits: one adds the Windows CUDA 13.3 build that
+  upstream does not publish, the other links BoringSSL statically, because the
+  archives had been linking the build runner's OpenSSL and shipping
+  unresolvable `libcrypto-3-x64.dll` imports. Engine provenance is recorded in
+  `docs/llamacpp-modes.md`. The upgrade also resolves the `q8_0`/`q8_0`
+  degenerate-output defect that made both Ornith models untunable; that pair
+  now measures fastest on both.
+
 ## v5.0.0 - 2026-08-30
 
 - Began a new public Git history under PolyForm Noncommercial 1.0.0. Versions

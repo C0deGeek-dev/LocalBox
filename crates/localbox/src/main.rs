@@ -51,12 +51,14 @@ Usage:
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
   localbox embed-stop                 stop the embedding server
-  localbox update [--mode <m>] [--check] [--refresh-pins] [--merge-models]
-                                      install or update the llama.cpp binaries;
-                                      --check also reports pin freshness, and
-                                      --refresh-pins (explicit --mode) advances
-                                      the pin to the latest release, verified
-                                      against the published release digest;
+  localbox update [--mode <m>] [--check] [--allow-downgrade] [--merge-models]
+                                      install or update the llama.cpp binaries
+                                      to the newest upstream release, verified
+                                      against the published release digest and
+                                      recorded in settings.json; --check
+                                      previews without writing;
+                                      --allow-downgrade permits installing a
+                                      release older than the installed build;
                                       --merge-models adds newly shipped catalog
                                       models to llm-models.json (additive only,
                                       existing entries untouched)
@@ -820,15 +822,12 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let launcher = build_launcher(&home)?;
     let check_only = has_flag(args, "--check");
-    let refresh = has_flag(args, "--refresh-pins");
+    // `--refresh-pins` used to be the opt-in for "resolve the latest
+    // release". That is now what every update does, so the flag is accepted
+    // and ignored rather than breaking scripts that still pass it.
+    let _refresh = has_flag(args, "--refresh-pins");
+    let allow_downgrade = has_flag(args, "--allow-downgrade");
     let explicit_mode = flag_value(args, "--mode");
-    if refresh && explicit_mode.is_none() {
-        return Err(
-            "--refresh-pins re-pins to the latest upstream release, so it needs an \
-             explicit --mode (native, turboquant, or prism)."
-                .to_string(),
-        );
-    }
     if has_flag(args, "--merge-models") {
         return merge_shipped_models(&home, check_only);
     }
@@ -850,60 +849,59 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     for mode in modes {
         let root = localx_llama_core::Launcher::install_root(&launcher, mode);
         println!("== {} ==", mode.as_str());
-        if refresh {
-            refresh_mode_pins(
-                &runtime,
-                &catalog,
-                mode,
-                &root,
-                &home,
-                driver_major,
-                amd_gpu,
-                check_only,
-            )?;
-            continue;
-        }
         match runtime.block_on(plan_binary_update(
             &catalog,
             mode,
             &root,
             driver_major,
             amd_gpu,
+            allow_downgrade,
         )) {
             Ok(UpdatePlan::UpToDate { tag }) => println!("Up to date ({tag})."),
             Ok(UpdatePlan::MtpStatus { message }) => println!("{message}"),
+            Ok(UpdatePlan::WouldDowngrade {
+                installed,
+                resolved,
+            }) => println!(
+                concat!(
+                    "Refusing to downgrade: {} is installed, but the newest release ",
+                    "resolves to the older {}. The working engine was left in place; ",
+                    "upstream most likely withdrew or retagged a release. Pass ",
+                    "--allow-downgrade to install it anyway."
+                ),
+                installed,
+                resolved
+            ),
             Ok(UpdatePlan::Install { release, assets }) => {
                 let summary = asset_set_summary(&assets);
                 if check_only {
-                    println!("Update available: {} (assets: {summary}).", release.tag);
-                    report_pin_freshness(&runtime, &catalog, mode);
+                    println!("Would update to {} (assets: {summary}).", release.tag);
                     continue;
                 }
                 println!("Installing {} (assets: {summary}).", release.tag);
-                let require = catalog
-                    .setting("LlamaCppRequireDownloadPins")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
+                // A newly resolved release has no local pin by definition, so
+                // `install_asset` falls back to the digest the release itself
+                // publishes and refuses anything that does not match. Known
+                // pins are still passed, so re-installing a tag already in the
+                // table is checked against the hash recorded at that time.
                 let pins = assets
                     .iter()
                     .map(|asset| localbox::update::pin_for(&catalog, &asset.name))
                     .collect::<Vec<_>>();
                 let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
                 let variant = localbox::update::stamp_variant(mode, &names, driver_major, amd_gpu);
-                runtime.block_on(install_asset_set(
+                let recorded = runtime.block_on(install_asset_set(
                     &assets,
                     &pins,
                     &root,
-                    require,
+                    false,
                     &release.tag,
                     &variant,
                 ))?;
                 println!("Installed {} into {}.", release.tag, root.display());
+                record_installed_pins(&home, mode, &release.tag, &recorded)?;
             }
             Err(message) => println!("Skipped: {message}"),
-        }
-        if check_only {
-            report_pin_freshness(&runtime, &catalog, mode);
         }
     }
     report_missing_shipped_models(&home);
@@ -986,98 +984,40 @@ fn merge_shipped_models(home: &std::path::Path, check_only: bool) -> Result<(), 
     Ok(())
 }
 
-/// On `--check`, report whether a mode's configured pin lags the latest
-/// upstream release. Informational only — nothing auto-installs; a stale pin
-/// advances via `--refresh-pins` or the settings ceremony.
-fn report_pin_freshness(
-    runtime: &tokio::runtime::Runtime,
-    catalog: &localbox_launcher::catalog::Catalog,
-    mode: Mode,
-) {
-    use localbox::update::{fetch_release, mode_release_source, pin_freshness, PinFreshness};
-    let Some((repo, Some(pinned))) = mode_release_source(catalog, mode) else {
-        return; // unpinned modes already track latest; mtpturbo reports itself
-    };
-    match runtime.block_on(fetch_release(&repo, None)) {
-        Ok(latest) => match pin_freshness(&pinned, &latest.tag) {
-            PinFreshness::Current => println!("Pin {pinned} is the latest upstream release."),
-            PinFreshness::Behind { pinned, latest } => println!(
-                "Pin is behind upstream: pinned {pinned}, latest {latest}. Advance \
-                 deliberately with `localbox update --mode {} --refresh-pins`.",
-                cli_mode_name(mode)
-            ),
-        },
-        Err(e) => println!("Pin freshness unknown (release lookup failed: {e})."),
-    }
-}
-
-/// The `--refresh-pins` path for one mode: resolve the latest release, show
-/// the preview under `--check`, otherwise install with the upstream digest as
-/// the integrity check and record the resulting tag + hashes in
-/// `settings.json` (which outlives upgrades and wins layer precedence).
-#[allow(clippy::too_many_arguments)]
-fn refresh_mode_pins(
-    runtime: &tokio::runtime::Runtime,
-    catalog: &localbox_launcher::catalog::Catalog,
-    mode: Mode,
-    root: &std::path::Path,
+/// Record what was just installed into `settings.json`: the mode's tag key and
+/// the SHA-256 of every asset activated.
+///
+/// `settings.json` outlives upgrades and wins layer precedence, so this is the
+/// durable record of which engine build a host is running - `defaults.json` is
+/// refreshed from the running binary and cannot hold it.
+///
+/// # Errors
+/// A plain message when `settings.json` exists but is not valid JSON, or when
+/// it cannot be written.
+fn record_installed_pins(
     home: &std::path::Path,
-    driver_major: Option<u32>,
-    amd_gpu: bool,
-    check_only: bool,
+    mode: Mode,
+    tag: &str,
+    pins: &[(String, String)],
 ) -> Result<(), String> {
-    use localbox::update::{
-        asset_set_summary, install_asset_set, pinned_tag_setting_key, plan_refresh,
-        refreshed_settings,
-    };
+    use localbox::update::{pinned_tag_setting_key, refreshed_settings};
     let Some(tag_key) = pinned_tag_setting_key(mode) else {
-        println!("mtpturbo is source-built; nothing to refresh.");
-        return Ok(());
+        return Ok(()); // mtpturbo is source-built and has no release tag
     };
-    let (release, assets) = runtime.block_on(plan_refresh(catalog, mode, driver_major, amd_gpu))?;
-    let summary = asset_set_summary(&assets);
-    if check_only {
-        println!(
-            "Would refresh {tag_key} to {} and record pins for assets: {summary}.",
-            release.tag
-        );
-        return Ok(());
-    }
-    println!(
-        "Refreshing {tag_key} to {} (assets: {summary}).",
-        release.tag
-    );
-    // Validate the destination layer before replacing a working binary tree.
-    // A corrupt settings file is actionable and must fail before any download
-    // or activation side effect occurs.
     let settings_path = catalog_dir(home).join("settings.json");
     let existing: serde_json::Map<String, serde_json::Value> =
         match std::fs::read_to_string(&settings_path) {
             Ok(raw) => serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| {
-                format!("settings.json is not valid JSON ({e}); fix it before refreshing")
+                format!("settings.json is not valid JSON ({e}); fix it before updating")
             })?,
             Err(_) => serde_json::Map::new(),
         };
-    let no_pins = vec![None; assets.len()];
-    let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
-    let variant = localbox::update::stamp_variant(mode, &names, driver_major, amd_gpu);
-    // No local pins yet by definition; install_asset_set verifies the upstream
-    // release digests before atomically activating the complete asset set.
-    let pins = runtime.block_on(install_asset_set(
-        &assets,
-        &no_pins,
-        root,
-        false,
-        &release.tag,
-        &variant,
-    ))?;
-    let merged = refreshed_settings(&existing, tag_key, &release.tag, &pins);
+    let merged = refreshed_settings(&existing, tag_key, tag, pins);
     let pretty = serde_json::to_string_pretty(&serde_json::Value::Object(merged))
         .map_err(|e| e.to_string())?;
     std::fs::write(&settings_path, pretty + "\n").map_err(|e| e.to_string())?;
     println!(
-        "Refreshed {tag_key} to {} and recorded {} pin(s) in {}.",
-        release.tag,
+        "Recorded {tag_key} = {tag} and {} asset pin(s) in {}.",
         pins.len(),
         settings_path.display()
     );

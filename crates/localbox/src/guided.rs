@@ -1772,6 +1772,62 @@ pub const SHIPPED_CATALOG: &str = include_str!("../../../local-llm/llm-models.ex
 /// layer (`llm-models.json`) is seeded when absent and never touched after —
 /// new shipped models reach it only through the explicit additive merge
 /// (`localbox update --merge-models`).
+/// Whether a path is a symbolic link (never following it).
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// Warn about one path at most once per process. `catalog_dir` runs on every
+/// command and more than once within some of them, so an unconditional warning
+/// would repeat several times for a single invocation.
+fn warn_once(path: &Path) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let first = seen
+        .lock()
+        .map_or(true, |mut set| set.insert(path.to_path_buf()));
+    if !first {
+        return;
+    }
+    eprintln!(
+        concat!(
+            "Warning: {} is a symlink and differs from this binary's ",
+            "shipped copy; leaving it untouched. Machine overrides ",
+            "belong in settings.json, which wins layer precedence ",
+            "and is never seeded."
+        ),
+        path.display()
+    );
+}
+
+/// What seeding should do with one shipped layer on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShippedLayer {
+    /// On disk already matches this binary; nothing to do.
+    Matches,
+    /// Differs and is a plain file this seeding owns: refresh it.
+    Refresh,
+    /// Differs but is a symlink, so writing would follow it into whatever it
+    /// points at — typically a developer's checkout. Leave it and warn.
+    SkipSymlink,
+}
+
+/// The seeding decision for one shipped layer, split out from the file I/O so
+/// the symlink rule is testable on every platform rather than only where a
+/// test can create a link.
+#[must_use]
+pub fn shipped_layer_action(current: Option<&str>, shipped: &str, is_link: bool) -> ShippedLayer {
+    if current == Some(shipped) {
+        ShippedLayer::Matches
+    } else if is_link {
+        ShippedLayer::SkipSymlink
+    } else {
+        ShippedLayer::Refresh
+    }
+}
+
 pub fn seed_installed_tree(installed: &Path) {
     let _ = std::fs::create_dir_all(installed);
     for (name, content) in [
@@ -1780,8 +1836,17 @@ pub fn seed_installed_tree(installed: &Path) {
     ] {
         let path = installed.join(name);
         let current = std::fs::read_to_string(&path).ok();
-        if current.as_deref() != Some(content) {
-            let _ = std::fs::write(path, content);
+        match shipped_layer_action(current.as_deref(), content, is_symlink(&path)) {
+            ShippedLayer::Matches => {}
+            ShippedLayer::Refresh => {
+                let _ = std::fs::write(path, content);
+            }
+            // Refreshing is for the copies this function owns. A developer may
+            // link a shipped layer at their checkout so the live tree and the
+            // source agree; `fs::write` follows that link and rewrites their
+            // working tree, reverting edits and reinstating the pins this
+            // binary happens to carry.
+            ShippedLayer::SkipSymlink => warn_once(&path),
         }
     }
     let user_catalog = installed.join("llm-models.json");
@@ -2584,6 +2649,64 @@ mod tests {
         assert!(value.get("Action").is_some());
         assert!(value.get("ModelKey").is_some());
         assert_eq!(value["Vision"], true);
+    }
+
+    #[test]
+    fn a_symlinked_shipped_layer_is_never_refreshed_through() {
+        // Matching content is left alone whatever it is.
+        assert_eq!(
+            shipped_layer_action(Some("same"), "same", false),
+            ShippedLayer::Matches
+        );
+        assert_eq!(
+            shipped_layer_action(Some("same"), "same", true),
+            ShippedLayer::Matches
+        );
+        // A plain file that has drifted is refreshed: shipped pins must not
+        // stay frozen at whatever release-day copy was seeded first.
+        assert_eq!(
+            shipped_layer_action(Some("old pins"), "new pins", false),
+            ShippedLayer::Refresh
+        );
+        assert_eq!(
+            shipped_layer_action(None, "new pins", false),
+            ShippedLayer::Refresh
+        );
+        // A symlink that has drifted is not: writing follows it into whatever
+        // it points at, which is how a developer's working tree gets reverted.
+        assert_eq!(
+            shipped_layer_action(Some("edited pin"), "shipped pin", true),
+            ShippedLayer::SkipSymlink
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn seeding_leaves_a_symlinked_shipped_layer_alone() {
+        // A developer may link ~/.local-llm/defaults.json at their checkout.
+        // Refreshing through that link rewrites their working tree with the
+        // pins this binary was built with, which silently reverts edits.
+        let home = tempfile::tempdir().unwrap();
+        let checkout = home.path().join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        let source = checkout.join("defaults.json");
+        let edited = "{
+  \"LlamaCppTurboquantPinnedTag\": \"tqp-v0.3.1\"
+}
+";
+        std::fs::write(&source, edited).unwrap();
+
+        let installed = home.path().join(".local-llm");
+        std::fs::create_dir_all(&installed).unwrap();
+        std::os::unix::fs::symlink(&source, installed.join("defaults.json")).unwrap();
+
+        seed_installed_tree(&installed);
+
+        assert_eq!(
+            std::fs::read_to_string(&source).unwrap(),
+            edited,
+            "seeding must not write through a symlink into a working tree"
+        );
     }
 
     #[test]
