@@ -869,8 +869,7 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
                     "upstream most likely withdrew or retagged a release. Pass ",
                     "--allow-downgrade to install it anyway."
                 ),
-                installed,
-                resolved
+                installed, resolved
             ),
             Ok(UpdatePlan::Install { release, assets }) => {
                 let summary = asset_set_summary(&assets);

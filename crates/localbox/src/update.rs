@@ -1149,7 +1149,10 @@ pub fn tag_order_key(tag: &str) -> Option<(String, Vec<u64>)> {
         if !starts_token {
             continue;
         }
-        let digits: String = lower[i + 1..].chars().take_while(char::is_ascii_digit).collect();
+        let digits: String = lower[i + 1..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
         if !digits.is_empty() {
             if let Ok(n) = digits.parse::<u64>() {
                 return Some((format!("{}b", &lower[..i]), vec![n]));
@@ -1980,10 +1983,7 @@ mod tests {
         // an older build than the one already installed.
         assert!(is_downgrade("tqp-v0.3.1", "tqp-v0.2.0"));
         assert!(is_downgrade("b10103", "b9596"));
-        assert!(is_downgrade(
-            "prism-b9596-9fcaed7",
-            "prism-b9591-62061f9"
-        ));
+        assert!(is_downgrade("prism-b9596-9fcaed7", "prism-b9591-62061f9"));
 
         // Forward and equal are not downgrades.
         assert!(!is_downgrade("tqp-v0.2.0", "tqp-v0.3.1"));
