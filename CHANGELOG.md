@@ -4,6 +4,21 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **A staged engine now has to prove it can run before it replaces a working
+  one.** `install_asset_set` checked that `llama-server` existed in the staged
+  tree, which a `tqp-v0.3.0` archive satisfied while being unable to execute a
+  single binary: the server executable was a thin shim and the unresolvable
+  imports lived in a sibling library the release never packaged. Pins and
+  checksums had done their job — the bytes were exactly what upstream
+  published — but integrity is not usability, and the working install was
+  deleted on the way in. The staged binary is now asked for its version first,
+  and its reported build is printed; a failure discards the staged tree and
+  leaves the engine and build stamp untouched, because the rejection happens
+  while the staging directory is still temporary. On Windows the loader kills
+  such a process before it writes anything, so the exit status is translated
+  into a message that names the cause instead of a bare `0xC0000135`.
+  `--skip-load-probe` waives the check.
+
 - **`localbox update` now installs the newest usable release for every mode,
   and records what it installed.** The tag in `settings.json` is a record of
   what was last installed and verified, not a ceiling, so `localx install

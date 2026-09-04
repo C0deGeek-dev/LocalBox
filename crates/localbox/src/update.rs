@@ -815,6 +815,140 @@ pub fn asset_set_summary(assets: &[Asset]) -> String {
 /// # Errors
 /// A plain message for an invalid plan, download/integrity/extraction failure,
 /// a staged tree without `llama-server`, or an activation/rollback failure.
+/// How long a staged binary gets to answer `--version` before the probe gives
+/// up and rejects it.
+///
+/// A warm engine answers in about two seconds. The generous ceiling is for the
+/// cold case: the first execution of a freshly extracted multi-hundred-megabyte
+/// backend library can stall while antivirus reads all of it. A probe that
+/// hangs must still fail rather than block the install forever.
+const LOAD_PROBE_TIMEOUT_SECS: u64 = 120;
+
+/// Windows `STATUS_DLL_NOT_FOUND`: the loader could not find a DLL the binary
+/// imports. This is what an archive that links a dependency dynamically and
+/// then does not package it looks like from the outside.
+const STATUS_DLL_NOT_FOUND: i32 = 0xC000_0135_u32 as i32;
+
+/// Windows `STATUS_ENTRYPOINT_NOT_FOUND`: a DLL was found but does not export
+/// what the binary imports — the right name, the wrong version.
+const STATUS_ENTRYPOINT_NOT_FOUND: i32 = 0xC000_0139_u32 as i32;
+
+/// The first non-empty line of the probe's output, bounded.
+fn first_line(primary: &str, fallback: &str) -> String {
+    primary
+        .lines()
+        .chain(fallback.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no version reported")
+        .chars()
+        .take(200)
+        .collect()
+}
+
+/// A bounded, single-line excerpt of whatever the binary managed to say.
+fn probe_excerpt(stderr: &str) -> String {
+    let collapsed = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(200).collect()
+}
+
+/// Turn a load probe's exit into a verdict.
+///
+/// Pure so the exit-code mapping is testable without spawning anything. The
+/// mapping carries the diagnostic on Windows, where a binary that cannot
+/// resolve its imports is killed by the loader before `main` and writes
+/// nothing at all to stderr — the readable "… .dll was not found" text exists
+/// only in a GUI dialog. Without the translation the rejection would be a bare
+/// negative number.
+///
+/// # Errors
+/// A plain, operator-facing message for any outcome that is not a clean exit.
+pub fn classify_load_probe(
+    code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> Result<String, String> {
+    let excerpt = probe_excerpt(stderr);
+    let with_excerpt = |message: String| {
+        if excerpt.is_empty() {
+            message
+        } else {
+            format!("{message} The binary reported: {excerpt}")
+        }
+    };
+    match code {
+        Some(0) => Ok(first_line(stdout, stderr)),
+        Some(STATUS_DLL_NOT_FOUND) => Err(with_excerpt(
+            "the staged llama-server could not start because a runtime library it links against is missing from this host (Windows STATUS_DLL_NOT_FOUND). The release archive links that dependency dynamically and does not package it."
+                .to_string(),
+        )),
+        Some(STATUS_ENTRYPOINT_NOT_FOUND) => Err(with_excerpt(
+            "the staged llama-server found a runtime library but not the entry points it imports (Windows STATUS_ENTRYPOINT_NOT_FOUND), so the version on this host is the wrong one."
+                .to_string(),
+        )),
+        Some(127) => Err(with_excerpt(
+            "the staged llama-server could not start because a shared library it links against is missing from this host."
+                .to_string(),
+        )),
+        Some(status) => Err(with_excerpt(format!(
+            "the staged llama-server exited with status {status} instead of reporting its version."
+        ))),
+        None => Err(format!(
+            "the staged llama-server did not report its version within {LOAD_PROBE_TIMEOUT_SECS}s and was stopped."
+        )),
+    }
+}
+
+/// Run the staged binary's `--version` and require a clean exit.
+///
+/// Deliberately a load probe, not a smoke test: no model, no port. `--version`
+/// exercises exactly what fails when an archive is missing a dependency — the
+/// loader resolving every import — and costs one short process spawn against a
+/// download of hundreds of megabytes.
+///
+/// # Errors
+/// A plain message when the binary cannot be spawned, does not exit cleanly,
+/// or does not answer within [`LOAD_PROBE_TIMEOUT_SECS`].
+pub fn probe_staged_server(server: &Path) -> Result<String, String> {
+    let mut child = Command::new(server)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("the staged llama-server could not be started: {e}"))?;
+
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(LOAD_PROBE_TIMEOUT_SECS);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(e) => {
+                let _ = child.kill();
+                return Err(format!(
+                    "the staged llama-server could not be waited on: {e}"
+                ));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    let (stdout, stderr) = match child.wait_with_output() {
+        Ok(output) => (
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ),
+        Err(_) => (String::new(), String::new()),
+    };
+    classify_load_probe(status.and_then(|status| status.code()), &stdout, &stderr)
+}
+
 pub async fn install_asset_set(
     assets: &[Asset],
     pins: &[Option<String>],
@@ -822,6 +956,7 @@ pub async fn install_asset_set(
     require_pins: bool,
     tag: &str,
     variant: &str,
+    load_probe: bool,
 ) -> Result<Vec<(String, String)>, String> {
     if assets.is_empty() {
         return Err("the update plan contains no assets".to_string());
@@ -851,6 +986,27 @@ pub async fn install_asset_set(
             "verified assets extracted without {}; the working install was not replaced",
             server.display()
         ));
+    }
+    // Existing here is not the same as runnable. A pinned, checksum-verified
+    // archive is byte-for-byte what upstream published, which says nothing
+    // about whether it carries every library it links against — and the server
+    // binary can be a thin shim whose imports live in a sibling it cannot
+    // load. Ask the staged binary to report its version while `stage` is still
+    // a temporary directory: rejecting here drops the staged tree and leaves
+    // the working engine and its build stamp exactly where they were.
+    if load_probe {
+        match probe_staged_server(&server) {
+            Ok(version) => println!("Staged build reports: {version}."),
+            Err(message) => {
+                return Err(format!(
+                    concat!(
+                        "{} The staged install was discarded and the working engine ",
+                        "was left in place. Pass --skip-load-probe to install it anyway."
+                    ),
+                    message
+                ))
+            }
+        }
     }
     write_stamp(stage.path(), tag, variant)
         .map_err(|e| format!("could not stage the install stamp: {e}"))?;
@@ -1600,7 +1756,7 @@ mod tests {
         )];
         let pins = [Some("00".repeat(32))];
 
-        let result = install_asset_set(&assets, &pins, &root, true, "b2", "cuda-12").await;
+        let result = install_asset_set(&assets, &pins, &root, true, "b2", "cuda-12", false).await;
         server.join().unwrap();
 
         assert!(result.is_err());
@@ -1959,6 +2115,101 @@ mod tests {
             "the published digest is normalised to lowercase hex"
         );
         assert!(parsed[1].assets.is_empty());
+    }
+
+    #[test]
+    fn a_clean_probe_reports_the_build_it_measured() {
+        assert_eq!(
+            classify_load_probe(
+                Some(0),
+                "version: 9596 (18ef86ece)
+built with Clang
+",
+                ""
+            ),
+            Ok("version: 9596 (18ef86ece)".to_string())
+        );
+        // Some builds announce themselves on stderr; take whichever spoke.
+        assert_eq!(
+            classify_load_probe(
+                Some(0),
+                "",
+                "version: 1 (7f1a8b1)
+"
+            ),
+            Ok("version: 1 (7f1a8b1)".to_string())
+        );
+        // A clean exit that said nothing is still a pass — the loader resolved
+        // every import, which is what the probe is actually asking.
+        assert_eq!(
+            classify_load_probe(
+                Some(0),
+                "   
+",
+                ""
+            ),
+            Ok("no version reported".to_string())
+        );
+    }
+
+    /// The failure that motivated the probe. On Windows the loader kills the
+    /// process before `main`, so stderr is empty and the exit code carries the
+    /// entire diagnostic — an untranslated rejection would read as a bare
+    /// negative number.
+    #[test]
+    fn a_missing_runtime_library_is_named_not_left_as_a_status_number() {
+        let verdict = classify_load_probe(Some(0xC000_0135_u32 as i32), "", "");
+        let message = verdict.expect_err("a binary that cannot load must be rejected");
+        assert!(
+            message.contains("runtime library"),
+            "the rejection did not name the cause: {message}"
+        );
+        assert!(
+            !message.contains("-1073741515"),
+            "the rejection leaked the raw status instead of explaining it: {message}"
+        );
+
+        let wrong_version = classify_load_probe(Some(0xC000_0139_u32 as i32), "", "");
+        assert!(wrong_version
+            .expect_err("a wrong-version library must be rejected")
+            .contains("entry points"));
+    }
+
+    #[test]
+    fn a_unix_loader_failure_keeps_what_the_binary_said() {
+        let message = classify_load_probe(
+            Some(127),
+            "",
+            "llama-server: error while loading shared libraries: libcrypto.so.3: cannot open shared object file",
+        )
+        .expect_err("exit 127 is a rejection");
+        assert!(message.contains("shared library"), "{message}");
+        assert!(
+            message.contains("libcrypto.so.3"),
+            "the excerpt naming the missing library was dropped: {message}"
+        );
+    }
+
+    #[test]
+    fn other_failures_and_timeouts_are_reported_as_themselves() {
+        let other = classify_load_probe(Some(3), "", "boom").expect_err("non-zero is a rejection");
+        assert!(other.contains("status 3"), "{other}");
+        assert!(other.contains("boom"), "{other}");
+
+        let timed_out = classify_load_probe(None, "", "").expect_err("a timeout is a rejection");
+        assert!(
+            timed_out.contains("did not report its version"),
+            "{timed_out}"
+        );
+    }
+
+    /// A probe that cannot even start the binary must say so rather than
+    /// panic — the install is rejected either way.
+    #[test]
+    fn a_binary_that_cannot_be_spawned_is_a_rejection_not_a_panic() {
+        let missing = std::path::Path::new("definitely-not-a-real-llama-server-binary");
+        let message = probe_staged_server(missing).expect_err("a missing binary cannot pass");
+        assert!(message.contains("could not be started"), "{message}");
     }
 
     #[test]

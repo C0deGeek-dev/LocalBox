@@ -106,6 +106,17 @@ Live updates stage and verify that identical set, including its build stamp,
 then replace the engine directory as one unit; a partial or corrupt companion
 cannot replace a working install.
 
+**A staged build must prove it can run.** Checksums say the archive is
+byte-for-byte what upstream published, which is not the same as saying it works
+here: an archive that links a runtime library dynamically and does not package
+it extracts perfectly and then cannot start. Before the swap, the staged
+`llama-server` is asked for its version, and the reported build is printed. If
+it cannot load, the staged tree is discarded and the working engine and its
+build stamp are left untouched — the failure costs a download, not an install.
+This is a load probe, not a smoke test: no model is loaded and no port is
+bound. `--skip-load-probe` waives it, which is a last resort for a host where
+the probe itself is wrong.
+
 The same keys in `settings.json` always win over `defaults.json`, and automatic
 updates keep those machine pins current. `defaults.json` is a *shipped* layer:
 it refreshes to match the installed binary (so shipped pins never go stale on

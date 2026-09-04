@@ -52,6 +52,7 @@ Usage:
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
   localbox embed-stop                 stop the embedding server
   localbox update [--mode <m>] [--check] [--allow-downgrade] [--merge-models]
+                  [--skip-load-probe]
                                       install or update the llama.cpp binaries
                                       to the newest upstream release, verified
                                       against the published release digest and
@@ -59,6 +60,9 @@ Usage:
                                       previews without writing;
                                       --allow-downgrade permits installing a
                                       release older than the installed build;
+                                      a staged build must report its version
+                                      before it replaces a working engine,
+                                      which --skip-load-probe waives;
                                       --merge-models adds newly shipped catalog
                                       models to llm-models.json (additive only,
                                       existing entries untouched)
@@ -827,6 +831,10 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     // and ignored rather than breaking scripts that still pass it.
     let _refresh = has_flag(args, "--refresh-pins");
     let allow_downgrade = has_flag(args, "--allow-downgrade");
+    // The load probe is the gate that stops an archive missing a runtime
+    // dependency from replacing a working engine. Skipping it is a last
+    // resort for a host where the probe itself is wrong, not a routine flag.
+    let load_probe = !has_flag(args, "--skip-load-probe");
     let explicit_mode = flag_value(args, "--mode");
     if has_flag(args, "--merge-models") {
         return merge_shipped_models(&home, check_only);
@@ -896,6 +904,7 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
                     false,
                     &release.tag,
                     &variant,
+                    load_probe,
                 ))?;
                 println!("Installed {} into {}.", release.tag, root.display());
                 record_installed_pins(&home, mode, &release.tag, &recorded)?;

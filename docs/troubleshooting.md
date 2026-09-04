@@ -13,7 +13,12 @@ Part of the [LocalBox documentation](README.md).
   and expected download sizes, without changing anything. If an engine binary
   is missing, run the exact mode command from the error, for example
   `localbox update --mode native`. A checksum/extraction failure leaves the
-  prior engine and stamp active; fix the pin/release problem and rerun;
+  prior engine and stamp active, and so does a staged build that cannot start:
+  "the staged llama-server could not start because a runtime library it links
+  against is missing from this host" means the release archive is incomplete
+  for this machine, not that your install broke — the working engine is still
+  there. Report it upstream, pin a release that carries its dependencies, or
+  rerun with `--skip-load-probe` if you are certain the probe is wrong;
   `localbox launch <model> --dry-run` prints the full plan (paths, argv,
   environment) without touching the system.
 - **`localpilot` not on PATH** → install the CLI with
