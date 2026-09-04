@@ -74,6 +74,10 @@ pub enum LiveError {
     /// Local file I/O failed.
     #[error("{0}")]
     Io(String),
+    /// The operator declined the launch. Not a failure: nothing was started
+    /// and nothing was stopped.
+    #[error("{0}")]
+    Cancelled(String),
 }
 
 /// What a live launch brought up.
@@ -114,6 +118,204 @@ fn describe_source(source: &GateSource) -> String {
         GateSource::Setting => "from your saved setting".to_string(),
         GateSource::Prompted => "you chose just now (saved)".to_string(),
         GateSource::DefaultOff => "safe default".to_string(),
+    }
+}
+
+/// A llama-server already running on this host, as far as the process table
+/// can describe it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningModel {
+    /// The server process id.
+    pub pid: u32,
+    /// The port from its own argv, when it carries one.
+    pub port: Option<u16>,
+    /// The model file it was started with, file name only.
+    pub model: Option<String>,
+}
+
+/// What to do about a model that is already running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningModelChoice {
+    /// Start this one too.
+    Continue,
+    /// Stop what is running, then start this one.
+    StopFirst,
+    /// Start nothing.
+    Cancel,
+}
+
+/// How a launch decides. `Ask` prompts on a terminal and falls back to the
+/// safe answer without one; the rest are preselected, which is what the
+/// native-engine retry and a scripted launch need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningModelPolicy {
+    Ask,
+    Continue,
+    StopFirst,
+    Cancel,
+}
+
+/// The answer a non-interactive launch gets. Cancelling is the only safe
+/// default: a script that silently killed whatever model a colleague — or an
+/// agent session — was using would be far worse than one that stops and says
+/// why.
+pub const NON_INTERACTIVE_RUNNING_CHOICE: RunningModelChoice = RunningModelChoice::Cancel;
+
+/// The model file name from a llama-server argv, if it names one.
+fn model_from_argv(argv: &[String]) -> Option<String> {
+    let index = argv.iter().position(|a| a == "-m" || a == "--model")?;
+    let path = argv.get(index + 1)?;
+    std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+}
+
+/// The port from a llama-server argv, if it names one.
+fn port_from_argv(argv: &[String]) -> Option<u16> {
+    let index = argv.iter().position(|a| a == "--port")?;
+    argv.get(index + 1)?.parse().ok()
+}
+
+/// Describe running models for the prompt, one per line.
+#[must_use]
+pub fn describe_running(running: &[RunningModel]) -> String {
+    running
+        .iter()
+        .map(|model| {
+            let name = model.model.as_deref().unwrap_or("an unnamed model");
+            match model.port {
+                Some(port) => format!("  {name} on port {port} (pid {})", model.pid),
+                None => format!("  {name} (pid {})", model.pid),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
+}
+
+/// Read an answer to the already-running prompt.
+#[must_use]
+pub fn parse_running_answer(input: &str) -> Option<RunningModelChoice> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(RunningModelChoice::Continue),
+        "s" | "stop" => Some(RunningModelChoice::StopFirst),
+        "n" | "no" | "" => Some(RunningModelChoice::Cancel),
+        _ => None,
+    }
+}
+
+/// Every llama-server running on this host, minus LocalMind's embedding
+/// server.
+///
+/// Deliberately a process scan rather than a port probe: a model started on a
+/// non-default `--server-port` is still a model competing for the same GPU,
+/// and `LlamaLauncher::current_session` cannot help because it lives in the
+/// memory of the process that started it — a second `localbox` cannot see it.
+/// The embedding server is a llama-server too and is spared here for the same
+/// reason `stop_all` spares it: LocalMind depends on it surviving.
+#[must_use]
+pub fn running_models(home: &Path) -> Vec<RunningModel> {
+    let embed_pid = crate::embed::read_embed_state(home).and_then(|state| state.pid);
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let mut found: Vec<RunningModel> = system
+        .processes()
+        .values()
+        .filter(|process| is_server_process_name(&process.name().to_string_lossy()))
+        .filter(|process| !is_spared_embed_pid(process.pid().as_u32(), embed_pid))
+        .map(|process| {
+            let argv: Vec<String> = process
+                .cmd()
+                .iter()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect();
+            RunningModel {
+                pid: process.pid().as_u32(),
+                port: port_from_argv(&argv),
+                model: model_from_argv(&argv),
+            }
+        })
+        .collect();
+    found.sort_by_key(|model| model.pid);
+    found
+}
+
+/// Ask what to do about the models already running, on a terminal.
+///
+/// Returns the non-interactive answer without a TTY, and re-asks an
+/// unrecognised reply rather than guessing at it.
+fn ask_about_running(running: &[RunningModel]) -> RunningModelChoice {
+    use std::io::Write;
+    if !std::io::stdin().is_terminal() {
+        return NON_INTERACTIVE_RUNNING_CHOICE;
+    }
+    let plural = if running.len() == 1 {
+        "model"
+    } else {
+        "models"
+    };
+    eprintln!(
+        "It looks like you already have a {plural} running:
+{}",
+        describe_running(running)
+    );
+    loop {
+        eprint!("Start this one anyway [y], stop the running {plural} first [s], or cancel [N]? ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return NON_INTERACTIVE_RUNNING_CHOICE;
+        }
+        if let Some(choice) = parse_running_answer(&line) {
+            return choice;
+        }
+        eprintln!("Please answer y, s, or n.");
+    }
+}
+
+/// Settle what happens when a model is already running, before anything is
+/// spawned.
+///
+/// Every entry point that starts a model funnels through `execute_launch`, so
+/// this is the one place the question needs asking — the guided picker reaches
+/// it as surely as `launch` and `serve` do.
+///
+/// # Errors
+/// [`LiveError::Cancelled`] when the launch is declined; nothing has been
+/// started or stopped at that point.
+fn settle_running_models(
+    policy: RunningModelPolicy,
+    home: &Path,
+    proxy_port: u16,
+) -> Result<(), LiveError> {
+    let running = running_models(home);
+    if running.is_empty() {
+        // Nothing alive, so nothing to ask about. A server that died leaves no
+        // process behind and must not produce a prompt.
+        return Ok(());
+    }
+    let choice = match policy {
+        RunningModelPolicy::Ask => ask_about_running(&running),
+        RunningModelPolicy::Continue => RunningModelChoice::Continue,
+        RunningModelPolicy::StopFirst => RunningModelChoice::StopFirst,
+        RunningModelPolicy::Cancel => RunningModelChoice::Cancel,
+    };
+    match choice {
+        RunningModelChoice::Continue => Ok(()),
+        RunningModelChoice::StopFirst => {
+            let stopped = stop_all(home, &[proxy_port]);
+            eprintln!("Stopped {stopped} running model server(s).");
+            Ok(())
+        }
+        RunningModelChoice::Cancel => Err(LiveError::Cancelled(format!(
+            concat!(
+                "a model is already running and this launch was cancelled; nothing ",
+                "was started or stopped:\n{}"
+            ),
+            describe_running(&running)
+        ))),
     }
 }
 
@@ -263,7 +465,13 @@ pub fn execute_launch(
     request: &LaunchRequest,
     agent: AgentKind,
     home: &Path,
+    running_policy: RunningModelPolicy,
 ) -> Result<LaunchOutcome, LiveError> {
+    // Ask before anything is downloaded or spawned: a declined launch must
+    // cost nothing, and a second model loading into a full GPU is exactly what
+    // the operator is being warned about.
+    settle_running_models(running_policy, home, plan.proxy.listen_port)?;
+
     let mut outcome = LaunchOutcome::default();
 
     // Fetch exactly what this launch needs — the GGUF, plus the projector or
@@ -479,6 +687,113 @@ pub fn status_report(proxy_port: u16, server_port: u16) -> String {
 mod tests {
     use super::*;
     use localbox_launcher::proxy::EnsureProxyConfig;
+
+    fn running(pid: u32, port: Option<u16>, model: Option<&str>) -> RunningModel {
+        RunningModel {
+            pid,
+            port,
+            model: model.map(str::to_string),
+        }
+    }
+
+    /// "A model is running" alone does not tell an operator whether it is the
+    /// one they care about, so the prompt names each one.
+    #[test]
+    fn the_prompt_names_the_model_its_port_and_its_pid() {
+        let described = describe_running(&[
+            running(4321, Some(8080), Some("Ornith-1.5-35B-Q6_K.gguf")),
+            running(99, None, None),
+        ]);
+        assert!(
+            described.contains("Ornith-1.5-35B-Q6_K.gguf on port 8080 (pid 4321)"),
+            "{described}"
+        );
+        // A process whose argv we cannot read is still worth naming by pid.
+        assert!(
+            described.contains("an unnamed model (pid 99)"),
+            "{described}"
+        );
+    }
+
+    #[test]
+    fn every_answer_maps_to_one_of_the_three_choices() {
+        for yes in ["y", "Y", "yes", " yes "] {
+            assert_eq!(
+                parse_running_answer(yes),
+                Some(RunningModelChoice::Continue)
+            );
+        }
+        for stop in ["s", "stop", "STOP"] {
+            assert_eq!(
+                parse_running_answer(stop),
+                Some(RunningModelChoice::StopFirst)
+            );
+        }
+        // Enter is the safe answer, not a silent yes.
+        for no in ["n", "no", "", "   "] {
+            assert_eq!(parse_running_answer(no), Some(RunningModelChoice::Cancel));
+        }
+        // Anything else is re-asked rather than guessed at.
+        assert_eq!(parse_running_answer("maybe"), None);
+        assert_eq!(parse_running_answer("yolo"), None);
+    }
+
+    /// A script that silently killed whatever model a colleague — or an agent
+    /// session — was using would be worse than one that stops and says why.
+    #[test]
+    fn a_non_interactive_launch_cancels_rather_than_stopping_anything() {
+        assert_eq!(NON_INTERACTIVE_RUNNING_CHOICE, RunningModelChoice::Cancel);
+    }
+
+    #[test]
+    fn argv_parsing_reads_the_model_and_port_a_server_was_started_with() {
+        let argv: Vec<String> = [
+            "llama-server",
+            "-m",
+            "C:/models/Ornith-1.5-35B-Q6_K.gguf",
+            "--port",
+            "8091",
+            "-c",
+            "16384",
+        ]
+        .iter()
+        .map(|a| (*a).to_string())
+        .collect();
+        assert_eq!(
+            model_from_argv(&argv).as_deref(),
+            Some("Ornith-1.5-35B-Q6_K.gguf")
+        );
+        assert_eq!(port_from_argv(&argv), Some(8091));
+
+        // A truncated or unfamiliar argv yields nothing rather than a wrong
+        // answer; the pid still identifies the process.
+        let bare: Vec<String> = vec!["llama-server".to_string(), "-m".to_string()];
+        assert_eq!(model_from_argv(&bare), None);
+        assert_eq!(port_from_argv(&bare), None);
+    }
+
+    /// Nothing running means no question. A server that died must not leave a
+    /// prompt behind, which is why detection reads the process table rather
+    /// than a state file.
+    #[test]
+    fn no_running_model_means_no_prompt_whatever_the_policy() {
+        let home = tempfile::tempdir().unwrap();
+        for policy in [
+            RunningModelPolicy::Ask,
+            RunningModelPolicy::Cancel,
+            RunningModelPolicy::StopFirst,
+            RunningModelPolicy::Continue,
+        ] {
+            // With no llama-server alive this returns without prompting or
+            // stopping; under `cargo test` there is no TTY, so an `Ask` that
+            // reached the prompt would answer Cancel and fail here.
+            let settled = settle_running_models(policy, home.path(), 11_435);
+            assert!(
+                settled.is_ok(),
+                "policy {policy:?} must be a no-op when nothing is running"
+            );
+        }
+    }
 
     #[test]
     fn a_launch_fetches_only_what_the_plan_loads_and_lacks() {

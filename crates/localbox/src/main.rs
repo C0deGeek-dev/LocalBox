@@ -10,7 +10,9 @@ use std::process::ExitCode;
 
 use localbox::exec::{build_launcher, home_dir};
 use localbox::guided::{catalog_dir, run_guided};
-use localbox::live::{execute_launch, status_report, stop_all, AgentKind, LiveError};
+use localbox::live::{
+    execute_launch, status_report, stop_all, AgentKind, LiveError, RunningModelPolicy,
+};
 use localbox::product_envelope;
 use localbox_launcher::catalog::Catalog;
 use localbox_launcher::launcher::LlamaLauncher;
@@ -33,6 +35,10 @@ Usage:
   localbox --plain                    guided launcher with plain-text menus
   localbox launch <model> [options]   resolve, start, and hand off to an agent
   localbox serve <model> [options]    start the model (and proxy) headless
+                                      launch/serve take --if-running
+                                      <ask|continue|stop|cancel> for when a model
+                                      is already running (default: ask on a
+                                      terminal, cancel without one)
   localbox stop                       stop every model server and the proxy
   localbox status                     report serve health and the remedy
   localbox info [model]               list the configured models, or one in detail
@@ -333,7 +339,33 @@ fn confirm_profile_fallback_with_terminal(
     }
 }
 
+/// Resolve `--if-running` into a launch policy.
+///
+/// Absent, the launch asks on a terminal and cancels without one — a scripted
+/// launch must never silently stop a model someone else is using.
+///
+/// # Errors
+/// A plain message naming the accepted values.
+fn resolve_running_policy(args: &[String]) -> Result<RunningModelPolicy, String> {
+    match flag_value(args, "--if-running") {
+        None => Ok(RunningModelPolicy::Ask),
+        Some(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "ask" => Ok(RunningModelPolicy::Ask),
+            "continue" => Ok(RunningModelPolicy::Continue),
+            "stop" => Ok(RunningModelPolicy::StopFirst),
+            "cancel" => Ok(RunningModelPolicy::Cancel),
+            other => Err(format!(
+                "unknown --if-running value '{other}': expected ask, continue, stop, or cancel"
+            )),
+        },
+    }
+}
+
 fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
+    // Validate before resolving a model or touching the network: a typo in
+    // this flag decides what happens to someone's running model, so it must
+    // not surface only after the slow work is done.
+    let running_policy = resolve_running_policy(args)?;
     let model = args
         .first()
         .filter(|a| !a.starts_with("--"))
@@ -375,7 +407,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     // request with AutoBest off — the fork's tuned params/quant/context don't
     // apply to the native build (fork-only KV types would even fail its plan) —
     // and the failed launch already tore its own server/proxy down.
-    let outcome = match execute_launch(&launcher, &plan, &request, agent, &home) {
+    let outcome = match execute_launch(&launcher, &plan, &request, agent, &home, running_policy) {
         Ok(outcome) => outcome,
         Err(LiveError::Smoke(detail))
             if smoke_fallback(request.mode) == SmokeFallback::RetryNative =>
@@ -389,8 +421,18 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
             native.mode = Mode::Native;
             let mut native_plan = plan_launch(&launcher, &native).map_err(|e| e.to_string())?;
             apply_launch_posture(&mut native_plan, args, agent)?;
-            let outcome = execute_launch(&launcher, &native_plan, &native, agent, &home)
-                .map_err(|e| e.to_string())?;
+            // Same user action, second attempt: the question was already
+            // answered (and the failed launch tore its own server down), so
+            // asking again would be asking twice for one launch.
+            let outcome = execute_launch(
+                &launcher,
+                &native_plan,
+                &native,
+                agent,
+                &home,
+                RunningModelPolicy::Continue,
+            )
+            .map_err(|e| e.to_string())?;
             plan = native_plan;
             outcome
         }
@@ -1149,6 +1191,46 @@ fn cmd_nothink_proxy(args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|p| (*p).to_string()).collect()
+    }
+
+    /// The default has to be `Ask`, which degrades to cancelling without a
+    /// terminal — a scripted launch must never silently stop a model an agent
+    /// session or a colleague is using.
+    #[test]
+    fn if_running_defaults_to_asking_and_accepts_each_answer() {
+        assert_eq!(
+            resolve_running_policy(&argv(&["model"])),
+            Ok(RunningModelPolicy::Ask)
+        );
+        for (value, expected) in [
+            ("ask", RunningModelPolicy::Ask),
+            ("continue", RunningModelPolicy::Continue),
+            ("stop", RunningModelPolicy::StopFirst),
+            ("cancel", RunningModelPolicy::Cancel),
+            ("STOP", RunningModelPolicy::StopFirst),
+        ] {
+            assert_eq!(
+                resolve_running_policy(&argv(&["model", "--if-running", value])),
+                Ok(expected),
+                "--if-running {value}"
+            );
+        }
+    }
+
+    /// A typo must not quietly become a decision about someone's running model.
+    #[test]
+    fn an_unknown_if_running_value_is_refused_with_the_accepted_ones() {
+        let refused = resolve_running_policy(&argv(&["model", "--if-running", "kill"]))
+            .expect_err("an unknown value cannot be guessed at");
+        assert!(refused.contains("kill"), "{refused}");
+        assert!(
+            refused.contains("ask, continue, stop, or cancel"),
+            "{refused}"
+        );
+    }
+
     use super::*;
     use localbox_launcher::proxy::EnsureProxyConfig;
 

@@ -4,6 +4,22 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Starting a model while one is already running now asks first.** Every way
+  in — the guided picker, `localbox launch`, `localbox serve` — went straight to
+  spawning a second `llama-server`, so a second model began loading into a GPU
+  that was usually already full, and the session an agent was connected to was
+  the one that suffered. The guided picker now asks before the model list
+  appears, in its own menu: start anyway, stop the running model first, or
+  cancel. The answer travels with the launch, so one session asks once — the
+  native-engine fallback retry inherits it rather than asking twice.
+  `launch`/`serve` ask at the same point in their own flow and take
+  `--if-running <ask|continue|stop|cancel>`; without a terminal they cancel,
+  because a script that silently stopped a colleague's model would be worse
+  than one that refuses and says why. Detection reads the process table rather
+  than a state file, so a model on a non-default port is still seen and a
+  server that has died leaves nothing to prompt about; LocalMind's embedding
+  server is exempt, as it is from `localbox stop`.
+
 - **A staged engine now has to prove it can run before it replaces a working
   one.** `install_asset_set` checked that `llama-server` existed in the staged
   tree, which a `tqp-v0.3.0` archive satisfied while being unable to execute a

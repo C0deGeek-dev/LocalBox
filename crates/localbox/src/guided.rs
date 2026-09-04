@@ -613,6 +613,12 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         .map(|launcher| i64::from(localx_llama_core::Launcher::vram_gb(&launcher)))
         .unwrap_or(probed_vram);
     chooser.set_banner(gpu_banner(gpu.as_ref()));
+    // Ask before the picker: someone starting a second localbox while a model
+    // is loaded wants to know now, not after choosing a model. The answer
+    // rides along to the launch so the question is asked once per session.
+    let Some(running_policy) = choose_running_action(chooser.as_mut(), &home) else {
+        return Ok(());
+    };
     let mut show_all = false;
 
     loop {
@@ -690,7 +696,15 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
             continue;
         };
 
-        confirm_flow(chooser.as_mut(), &home, &catalog, &key, &def, vram);
+        confirm_flow(
+            chooser.as_mut(),
+            &home,
+            &catalog,
+            &key,
+            &def,
+            vram,
+            running_policy,
+        );
         if chooser.quit_requested() {
             chooser.release();
             return Ok(());
@@ -912,6 +926,7 @@ fn confirm_flow(
     key: &str,
     def: &ModelDef,
     vram: i64,
+    running_policy: crate::live::RunningModelPolicy,
 ) {
     let defaults = load_default_launch(catalog);
     let required_mode = catalog.required_mode(key);
@@ -936,7 +951,7 @@ fn confirm_flow(
         };
         match CONFIRM_ROWS[choice].1 {
             ConfirmAction::LaunchNow => {
-                if launch_guided(chooser, home, &plan) {
+                if launch_guided(chooser, home, &plan, running_policy) {
                     return;
                 }
             }
@@ -1620,7 +1635,12 @@ fn auto_tune_flow(
     }
 }
 
-fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) -> bool {
+fn launch_guided(
+    chooser: &mut dyn Chooser,
+    home: &Path,
+    plan: &GuidedPlan,
+    running_policy: crate::live::RunningModelPolicy,
+) -> bool {
     // The same launcher construction as the CLI path (shared VRAM ladder:
     // config > probe > fallback) — a raw probe here once ignored the VRAMGB
     // setting and painted every quant `over` on a no-probe host.
@@ -1676,7 +1696,10 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) -> b
     for note in &resolved.notes {
         chooser.notice(note);
     }
-    match execute_launch(&launcher, &resolved, &request, agent, home) {
+    // Carries the answer given when this localbox started: `Continue` once it
+    // has been settled, `Ask` when there was nothing running then and a model
+    // could have appeared since.
+    match execute_launch(&launcher, &resolved, &request, agent, home, running_policy) {
         Ok(_) => {
             if agent == AgentKind::ServeOnly {
                 chooser.announce(&format!(
@@ -1685,6 +1708,9 @@ fn launch_guided(chooser: &mut dyn Chooser, home: &Path, plan: &GuidedPlan) -> b
                 ));
             }
         }
+        // Declining is a decision, not a fault: say so plainly rather
+        // than dressing the operator's own answer up as a warning.
+        Err(crate::live::LiveError::Cancelled(detail)) => chooser.announce(&detail),
         Err(e) => chooser.announce_error(&plain_warning("launch", &e.to_string())),
     }
     true
@@ -1706,6 +1732,64 @@ fn unavailable_profile_rows(profile: &RunProfileResolution) -> Vec<MenuRow> {
             MenuRow::plain("Configure first (return to Auto-tune)"),
             MenuRow::plain("Continue once with LocalBox defaults"),
         ]
+    }
+}
+
+/// The rows offered when a model is already running, in the order the question
+/// is usually asked: keep it, replace it, or do nothing.
+fn running_model_rows() -> Vec<MenuRow> {
+    vec![
+        MenuRow::plain("Start this model anyway (leave the running one alone)"),
+        MenuRow::plain("Stop the running model first, then continue"),
+        MenuRow::plain("Cancel - leave everything as it is"),
+    ]
+}
+
+/// Ask, in the guided UI, what to do about models already running.
+///
+/// Returns the policy the eventual launch carries, or `None` when the operator
+/// cancelled - the caller then exits without starting or stopping anything.
+/// `Ask` is returned when nothing was running, so a model appearing between
+/// this menu and the launch is still caught.
+///
+/// Escape and every unrecognised outcome mean cancel: the destructive answer is
+/// never the one a stray keypress lands on.
+fn choose_running_action(
+    chooser: &mut dyn Chooser,
+    home: &Path,
+) -> Option<crate::live::RunningModelPolicy> {
+    let running = crate::live::running_models(home);
+    if running.is_empty() {
+        return Some(crate::live::RunningModelPolicy::Ask);
+    }
+    chooser.set_panel(Some((
+        "Already running".to_string(),
+        crate::live::describe_running(&running),
+    )));
+    let choice = chooser.choose(
+        "It looks like you already have a model running",
+        &running_model_rows(),
+        0,
+    );
+    chooser.set_panel(None);
+    match choice {
+        Some(0) => Some(crate::live::RunningModelPolicy::Continue),
+        Some(1) => {
+            let proxy_port = crate::exec::build_launcher(home)
+                .ok()
+                .and_then(|launcher| launcher.configured_no_think_proxy_port())
+                .unwrap_or(localbox_launcher::orchestrate::DEFAULT_PROXY_PORT);
+            let stopped = crate::live::stop_all(home, &[proxy_port]);
+            chooser.notice(&format!("Stopped {stopped} running model server(s)."));
+            Some(crate::live::RunningModelPolicy::Continue)
+        }
+        _ => {
+            chooser.announce(&format!(
+                "Left the running model alone and started nothing:\n{}",
+                crate::live::describe_running(&running)
+            ));
+            None
+        }
     }
 }
 
@@ -2500,6 +2584,35 @@ mod tests {
             serde_json::to_string_pretty(store).unwrap(),
         )
         .unwrap();
+    }
+
+    /// The three answers are the same three the CLI offers, in the guided
+    /// picker's own menu rather than a raw prompt in the middle of the TUI.
+    #[test]
+    fn the_running_model_menu_offers_continue_stop_and_cancel() {
+        let rows = running_model_rows();
+        assert_eq!(rows.len(), 3);
+        let labels: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                row.segments
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<String>()
+                    .to_lowercase()
+            })
+            .collect();
+        assert!(labels[0].contains("anyway"), "{labels:?}");
+        assert!(
+            labels[1].contains("stop the running model first"),
+            "{labels:?}"
+        );
+        assert!(labels[2].contains("cancel"), "{labels:?}");
+        // Enter lands on the row that changes nothing about the running model.
+        assert!(
+            !labels[0].contains("stop"),
+            "the highlighted default must not be the destructive answer: {labels:?}"
+        );
     }
 
     #[test]

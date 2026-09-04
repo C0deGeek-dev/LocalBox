@@ -20,6 +20,8 @@ localbox purge                      stop servers and delete downloaded model fil
 localbox log [--lines <n>]          tail the most recent server log
 localbox embed-serve [--port <p>]   start the CPU-only embedding server
 localbox embed-stop                 stop the embedding server
+localbox launch <model> [--if-running <ask|continue|stop|cancel>]
+                                    warn when a model is already running
 localbox update [--mode <m>] [--check]
                                     install and pin the latest llama.cpp releases
 localbox version                    print the launcher version envelope
