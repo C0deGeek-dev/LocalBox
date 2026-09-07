@@ -32,7 +32,7 @@ Options for `launch` / `serve`:
 | Flag | Effect |
 |------|--------|
 | `--context <key>` | One of the model's context keys (see `localbox info <model>`). Omit for the default. |
-| `--mode <m>` | `native` / `turboquant` / `mtpturbo` / `prism` — which llama-server binary to use. A model's `RequiredMode` wins. |
+| `--mode <m>` | `native` / `turboquant` / `prism` — which llama-server binary to use. A model's `RequiredMode` wins. |
 | `--quant <key>` | Switch the GGUF quant for this launch (default per model). |
 | `--auto-best` | Require a usable saved tune; refuse fallback. |
 | `--no-auto-best` | Deliberately use catalog/settings defaults. |

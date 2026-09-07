@@ -4,6 +4,24 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The `mtpturbo` engine mode is retired; three modes remain.** Of the four,
+  it was the only one LocalBox did not actually deliver: the Rust rewrite never
+  ported the source build the 1.x product had, so the mode downloaded nothing
+  and pinned nothing, and all that remained was a `git ls-remote` against a
+  personal fork branch that has not moved since 2026-05-12 and publishes no
+  releases — a call every bare `localbox update` made. It was also the one mode
+  outside the pinned, checksum-verified download posture, since the
+  `LlamaCppMtpTurboCommit` pin the docs described was read by no code. The cost
+  is stated plainly in `docs/llamacpp-modes.md`: MTP and turbo KV can no longer
+  be combined in one binary; `native` speaks mainline MTP and `turboquant`
+  carries the turbo KV types. Nothing you already have is destroyed — an
+  installed `~/.local-llm/llama-cpp-mtpturbo/` tree is untouched, a saved
+  launch recipe naming the mode keeps its model/quant/context/KV and loses only
+  the engine, and a tuner store containing an `mtpturbo` entry still serves the
+  `native` and `turboquant` entries beside it instead of being condemned whole.
+  `--mode mtpturbo` and a catalog `RequiredMode: mtpturbo` now say the mode was
+  retired and where to go instead, rather than reporting a spelling mistake.
+
 - **Starting a model while one is already running now asks first.** Every way
   in — the guided picker, `localbox launch`, `localbox serve` — went straight to
   spawning a second `llama-server`, so a second model began loading into a GPU

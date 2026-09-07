@@ -78,7 +78,7 @@ Usage:
 
 Options for launch/serve:
   --context <key>       context window key from the model catalog (e.g. 64k)
-  --mode <m>            native | turboquant | mtpturbo | prism   (default native)
+  --mode <m>            native | turboquant | prism              (default native)
   --quant <key>         quant variant from the catalog (default per model)
   --auto-best           compatibility spelling: require the saved tuned profile
   --no-auto-best        explicitly use catalog/settings defaults instead
@@ -173,11 +173,11 @@ fn parse_mode(value: Option<&str>) -> Result<Mode, String> {
     match value.unwrap_or("native") {
         "native" => Ok(Mode::Native),
         "turboquant" => Ok(Mode::Turboquant),
-        "mtpturbo" => Ok(Mode::Mtpturbo),
         "prism" | "prismml" => Ok(Mode::PrismMl),
-        other => Err(format!(
-            "unknown mode '{other}' (expected native, turboquant, mtpturbo, or prism)"
-        )),
+        other => Err(match localbox_launcher::catalog::retired_mode_note(other) {
+            Some(note) => note.to_string(),
+            None => format!("unknown mode '{other}' (expected native, turboquant, or prism)"),
+        }),
     }
 }
 
@@ -402,7 +402,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
         return Ok(());
     }
 
-    // A fork build (turboquant/mtpturbo) that fails its reply check falls back to
+    // A fork build (turboquant/prism) that fails its reply check falls back to
     // native llama.cpp once, rather than hard-stopping. The retry re-derives its
     // request with AutoBest off — the fork's tuned params/quant/context don't
     // apply to the native build (fork-only KV types would even fail its plan) —
@@ -883,12 +883,7 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     }
     let modes: Vec<Mode> = match explicit_mode {
         Some(m) => vec![parse_mode(Some(m))?],
-        None => vec![
-            Mode::Native,
-            Mode::Turboquant,
-            Mode::Mtpturbo,
-            Mode::PrismMl,
-        ],
+        None => vec![Mode::Native, Mode::Turboquant, Mode::PrismMl],
     };
     let driver_major = localbox::update::parse_cuda_driver_major(&nvidia_smi_banner());
     // No NVIDIA driver but an AMD card present → the Vulkan build uses the GPU
@@ -908,7 +903,6 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
             allow_downgrade,
         )) {
             Ok(UpdatePlan::UpToDate { tag }) => println!("Up to date ({tag})."),
-            Ok(UpdatePlan::MtpStatus { message }) => println!("{message}"),
             Ok(UpdatePlan::WouldDowngrade {
                 installed,
                 resolved,
@@ -1051,9 +1045,7 @@ fn record_installed_pins(
     pins: &[(String, String)],
 ) -> Result<(), String> {
     use localbox::update::{pinned_tag_setting_key, refreshed_settings};
-    let Some(tag_key) = pinned_tag_setting_key(mode) else {
-        return Ok(()); // mtpturbo is source-built and has no release tag
-    };
+    let tag_key = pinned_tag_setting_key(mode);
     let settings_path = catalog_dir(home).join("settings.json");
     let existing: serde_json::Map<String, serde_json::Value> =
         match std::fs::read_to_string(&settings_path) {
@@ -1233,6 +1225,33 @@ mod tests {
 
     use super::*;
     use localbox_launcher::proxy::EnsureProxyConfig;
+
+    #[test]
+    fn a_retired_mode_is_named_as_retired_not_as_a_typo() {
+        let refused = parse_mode(Some("mtpturbo"))
+            .expect_err("mtpturbo is no longer an engine LocalBox can launch");
+        assert!(refused.contains("was retired"), "{refused}");
+        assert!(refused.contains("native"), "{refused}");
+        assert!(refused.contains("turboquant"), "{refused}");
+        assert!(
+            !refused.contains("unknown mode"),
+            "a retired mode must not read as a spelling mistake: {refused}"
+        );
+
+        // A genuine typo still gets the unknown-mode listing.
+        let typo = parse_mode(Some("turbowuant")).expect_err("not a mode");
+        assert!(typo.contains("unknown mode 'turbowuant'"), "{typo}");
+        assert!(
+            typo.contains("native, turboquant, or prism"),
+            "the listing names exactly the three live modes: {typo}"
+        );
+
+        // The live modes still resolve, including both prism spellings.
+        assert_eq!(parse_mode(None).unwrap(), Mode::Native);
+        assert_eq!(parse_mode(Some("turboquant")).unwrap(), Mode::Turboquant);
+        assert_eq!(parse_mode(Some("prism")).unwrap(), Mode::PrismMl);
+        assert_eq!(parse_mode(Some("prismml")).unwrap(), Mode::PrismMl);
+    }
 
     fn plan(base_url: &str) -> LaunchPlan {
         LaunchPlan {

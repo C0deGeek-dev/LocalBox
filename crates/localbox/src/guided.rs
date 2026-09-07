@@ -1104,7 +1104,7 @@ fn customize_flow(
                 }
             }
             CustomizeAction::PickKv => {
-                let fork = matches!(plan.mode, Mode::Turboquant | Mode::Mtpturbo);
+                let fork = matches!(plan.mode, Mode::Turboquant);
                 let mut kinds = vec!["auto", "q8_0", "q4_0", "f16"];
                 if fork {
                     kinds.extend(["turbo3", "turbo4"]);
@@ -1241,11 +1241,6 @@ const TUNE_ENGINES: &[(&str, Mode, &str)] = &[
         "Turbo",
         Mode::Turboquant,
         "Turbo (turboquant) — a tuned llama.cpp build, faster on supported GPUs",
-    ),
-    (
-        "Turbo+",
-        Mode::Mtpturbo,
-        "Turbo+ (mtpturbo) — Turbo plus draft speed-ups, fastest when the model supports it",
     ),
     (
         "Prism",

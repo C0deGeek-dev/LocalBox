@@ -287,7 +287,7 @@ pub enum SmokeFallback {
 pub fn smoke_fallback(mode: Mode) -> SmokeFallback {
     match mode {
         Mode::Native => SmokeFallback::Fail,
-        Mode::Turboquant | Mode::Mtpturbo => SmokeFallback::RetryNative,
+        Mode::Turboquant => SmokeFallback::RetryNative,
         Mode::PrismMl => SmokeFallback::Fail,
     }
 }
@@ -510,7 +510,6 @@ mod tests {
     #[test]
     fn the_smoke_fallback_rule_is_native_or_nothing() {
         assert_eq!(smoke_fallback(Mode::Turboquant), SmokeFallback::RetryNative);
-        assert_eq!(smoke_fallback(Mode::Mtpturbo), SmokeFallback::RetryNative);
         assert_eq!(smoke_fallback(Mode::Native), SmokeFallback::Fail);
         assert_eq!(smoke_fallback(Mode::PrismMl), SmokeFallback::Fail);
     }

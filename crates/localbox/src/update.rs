@@ -1,6 +1,5 @@
 //! llama.cpp binary install/update: pin-verified prebuilt release assets for
-//! native and turboquant, and a staleness check for the source-built
-//! mtpturbo fork.
+//! every engine mode.
 //!
 //! Cross-platform posture: prebuilt assets are selected per OS and verified
 //! against SHA-256 pins in settings; there is no package-manager or
@@ -520,15 +519,6 @@ pub fn read_stamp_tag(root: &Path) -> Option<String> {
 /// Write the two-line build stamp (release tag, then variant).
 pub fn write_stamp(root: &Path, tag: &str, variant: &str) -> std::io::Result<()> {
     std::fs::write(root.join(".build-stamp"), format!("{tag}\n{variant}\n"))
-}
-
-/// The short source SHA recorded in an mtpturbo stamp
-/// (`mtpturbo-<sha>-...`), when the stamp has that shape.
-#[must_use]
-pub fn mtp_stamp_sha(stamp_first_line: &str) -> Option<&str> {
-    let rest = stamp_first_line.strip_prefix("mtpturbo-")?;
-    let sha: &str = rest.split('-').next()?;
-    (!sha.is_empty() && sha.chars().all(|c| c.is_ascii_hexdigit())).then_some(sha)
 }
 
 /// Fetch a repository's releases, newest first.
@@ -1162,8 +1152,6 @@ pub enum UpdatePlan {
         release: Release,
         assets: Vec<Asset>,
     },
-    /// mtpturbo staleness verdict (source-built; no prebuilt asset exists).
-    MtpStatus { message: String },
     /// The resolved release is *older* than the installed build. Never applied
     /// implicitly: replacing a working engine with an earlier one means
     /// upstream withdrew or retagged a release, not that an upgrade is wanted.
@@ -1194,26 +1182,23 @@ pub fn native_variant(driver_major: Option<u32>, amd_gpu: bool) -> Variant {
     }
 }
 
-/// The settings key holding a mode's pinned release tag (`None` for the
-/// source-built mtpturbo, which has no downloadable release).
+/// The settings key holding a mode's pinned release tag.
 #[must_use]
-pub fn pinned_tag_setting_key(mode: localx_llama_core::Mode) -> Option<&'static str> {
+pub fn pinned_tag_setting_key(mode: localx_llama_core::Mode) -> &'static str {
     use localx_llama_core::Mode;
     match mode {
-        Mode::Native => Some("LlamaCppPinnedTag"),
-        Mode::Turboquant => Some("LlamaCppTurboquantPinnedTag"),
-        Mode::PrismMl => Some("LlamaCppPrismPinnedTag"),
-        Mode::Mtpturbo => None,
+        Mode::Native => "LlamaCppPinnedTag",
+        Mode::Turboquant => "LlamaCppTurboquantPinnedTag",
+        Mode::PrismMl => "LlamaCppPrismPinnedTag",
     }
 }
 
-/// The GitHub repo and configured pinned tag a mode's releases come from
-/// (`None` for mtpturbo — see [`pinned_tag_setting_key`]).
+/// The GitHub repo and configured pinned tag a mode's releases come from.
 #[must_use]
 pub fn mode_release_source(
     catalog: &Catalog,
     mode: localx_llama_core::Mode,
-) -> Option<(String, Option<String>)> {
+) -> (String, Option<String>) {
     use localx_llama_core::Mode;
     let repo = match mode {
         Mode::Native => "ggerganov/llama.cpp".to_string(),
@@ -1225,12 +1210,11 @@ pub fn mode_release_source(
             .setting_str("LlamaCppPrismRepo")
             .unwrap_or("PrismML-Eng/llama.cpp")
             .to_string(),
-        Mode::Mtpturbo => return None,
     };
-    let pinned = pinned_tag_setting_key(mode)
-        .and_then(|key| catalog.setting_str(key))
+    let pinned = catalog
+        .setting_str(pinned_tag_setting_key(mode))
         .map(str::to_string);
-    Some((repo, pinned))
+    (repo, pinned)
 }
 
 /// Merge a refreshed pin set into a settings layer: set the mode's pinned-tag
@@ -1340,11 +1324,7 @@ pub async fn plan_binary_update(
     amd_gpu: bool,
     allow_downgrade: bool,
 ) -> Result<UpdatePlan, String> {
-    let Some((repo, _configured)) = mode_release_source(catalog, mode) else {
-        return Ok(UpdatePlan::MtpStatus {
-            message: mtp_status(catalog, root),
-        });
-    };
+    let (repo, _configured) = mode_release_source(catalog, mode);
     // Always the newest usable release, never the recorded tag: the tag in
     // `settings.json` records what was last installed and verified, not a
     // ceiling. "Newest usable" rather than GitHub's `latest` flag, because
@@ -1436,7 +1416,6 @@ pub fn select_release_assets_reporting(
             host_warning = warning;
             choice.into_iter().collect()
         }
-        Mode::Mtpturbo => Vec::new(),
         Mode::PrismMl => {
             let (choice, warning) = select_prism_assets(&names, driver_major, amd_gpu)?;
             host_warning = warning;
@@ -1462,51 +1441,6 @@ pub fn select_release_assets_reporting(
         })
         .collect::<Result<Vec<Asset>, String>>()?;
     Ok((assets, host_warning))
-}
-
-fn mtp_status(catalog: &Catalog, root: &Path) -> String {
-    let repo = catalog
-        .setting_str("LlamaCppMtpTurboRepo")
-        .unwrap_or("EsmaeelNabil/llama.cpp");
-    let branch = catalog
-        .setting_str("LlamaCppMtpTurboBranch")
-        .unwrap_or("feat/mtp-turboquant-kv-cache");
-    let installed = read_stamp_tag(root);
-    let installed_sha = installed.as_deref().and_then(mtp_stamp_sha);
-
-    let remote = Command::new("git")
-        .args([
-            "ls-remote",
-            &format!("https://github.com/{repo}.git"),
-            branch,
-        ])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| {
-            String::from_utf8_lossy(&out.stdout)
-                .split_whitespace()
-                .next()
-                .map(|sha| sha.chars().take(7).collect::<String>())
-        });
-
-    match (installed_sha, remote) {
-        (Some(have), Some(want))
-            if want.starts_with(have) || have.starts_with(&want[..have.len().min(want.len())]) =>
-        {
-            format!("mtpturbo is current (source {have} matches {repo}@{branch}).")
-        }
-        (Some(have), Some(want)) => format!(
-            "mtpturbo is stale: installed source {have}, {repo}@{branch} is at {want}. \
-             The mtpturbo fork ships no prebuilt binaries — rebuild it from source, or \
-             keep using the installed build."
-        ),
-        (None, _) => format!(
-            "mtpturbo is not installed. It is a source-built fork ({repo}@{branch}) with \
-             no prebuilt binaries — build it from source, or use the native/turboquant modes."
-        ),
-        (_, None) => "could not reach the mtpturbo repository to compare versions.".to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -2293,15 +2227,11 @@ built with Clang
     }
 
     #[test]
-    fn build_stamps_round_trip_and_mtp_shas_parse() {
+    fn build_stamps_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_stamp_tag(dir.path()), None);
         write_stamp(dir.path(), "b4567", "cuda").unwrap();
         assert_eq!(read_stamp_tag(dir.path()).as_deref(), Some("b4567"));
-
-        assert_eq!(mtp_stamp_sha("mtpturbo-a1b2c3d-cuda"), Some("a1b2c3d"));
-        assert_eq!(mtp_stamp_sha("b4567"), None);
-        assert_eq!(mtp_stamp_sha("mtpturbo-xyz-cuda"), None);
     }
 
     #[test]

@@ -61,7 +61,6 @@ pub fn engine_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Native => "Standard",
         Mode::Turboquant => "Turbo (auto-tuned for your GPU)",
-        Mode::Mtpturbo => "Turbo+ (draft speed-ups)",
         Mode::PrismMl => "Prism (Bonsai low-bit)",
     }
 }
@@ -230,7 +229,7 @@ mod tests {
             assert!(summary.contains(required), "summary must carry {required}");
         }
         // ...and the jargon MUST NOT.
-        for banned in ["quant", "AutoBest", "turboquant", "mtpturbo"] {
+        for banned in ["quant", "AutoBest", "turboquant"] {
             assert!(
                 !summary.contains(banned),
                 "summary leaked jargon '{banned}':\n{summary}"
@@ -308,7 +307,7 @@ mod tests {
             engine_label(Mode::Turboquant),
             "Turbo (auto-tuned for your GPU)"
         );
-        assert_eq!(engine_label(Mode::Mtpturbo), "Turbo+ (draft speed-ups)");
+        assert_eq!(engine_label(Mode::PrismMl), "Prism (Bonsai low-bit)");
     }
 
     #[test]

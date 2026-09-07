@@ -97,8 +97,8 @@ one), the update refuses and leaves the engine in place unless
 A newly recorded pin is verified against the GitHub release's published
 `sha256` digest — a mismatch refuses to install or record. The old
 `--refresh-pins` spelling remains accepted for script compatibility but is no
-longer necessary. `mtpturbo` is source-built and continues to report its remote
-revision rather than participating in release pin updates.
+longer necessary. Every mode installs from pin-verified release assets; none is
+built from source.
 
 For split CUDA packages, the pin table must cover both the server and matching
 runtime companion. `--check` shows every selected asset and its expected size.

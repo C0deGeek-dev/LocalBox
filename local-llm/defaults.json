@@ -5,7 +5,6 @@
   "LlamaCppTurboquantRepo": "C0deGeek-dev/llama-cpp-turboquant",
   "LlamaCppPrismRepo": "PrismML-Eng/llama.cpp",
   "LlamaCppPrismPinnedTag": "prism-b9596-9fcaed7",
-  "LlamaCppMtpTurboRoot": "%USERPROFILE%\\.local-llm\\llama-cpp-mtpturbo",
   "LlamaCppGgufRoot": "%USERPROFILE%\\.local-llm\\gguf",
   "LlamaCppHealthCheckTimeoutSec": 300,
   "LlamaCppSmokeTestTimeoutSec": 300,

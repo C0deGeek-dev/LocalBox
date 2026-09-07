@@ -2,7 +2,7 @@
 
 Part of the [LocalBox documentation](README.md).
 
-The launcher supports four flavors of `llama-server`:
+The launcher supports three flavors of `llama-server`:
 
 - **`native`** — upstream `llama-server.exe`. Mainline KV types only
   (`q8_0`, `f16`, `q5_1`, `q5_0`, `q4_1`, `q4_0`, `iq4_nl`, `bf16`, `f32`).
@@ -23,16 +23,6 @@ The launcher supports four flavors of `llama-server`:
   changes engine source. Fork tags carry upstream-shaped names but not
   upstream's commits, so match a server log's `build_info` against the fork tag,
   never against the upstream release notes.
-- **`mtpturbo`** — combined build: MTP spec-decode **and** turbo KV cache in
-  one binary. No prebuilt release exists for any fork that carries both
-  features, so the binary is built from source (pinned to an exact commit via
-  `LlamaCppMtpTurboCommit`; repo/branch overrideable via
-  `LlamaCppMtpTurboRepo` / `LlamaCppMtpTurboBranch`) and installed into
-  `~/.local-llm/llama-cpp-mtpturbo/` with a `.build-stamp`.
-  `localbox update --mode mtpturbo --check` reports whether the installed
-  stamp still matches the pinned source; when no build is present, LocalBox
-  explains honestly that this mode has no prebuilt download and how to
-  provide the binary yourself.
 - **`prism`** — the pinned [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp)
   with the group-128 low-bit kernels required by Bonsai. LocalBox installs the
   Windows x64 CUDA 12.4 binary plus its CUDA runtime DLL bundle, the regular
@@ -46,7 +36,32 @@ The launcher supports four flavors of `llama-server`:
   garbage output; the launch smoke test is the backstop. Not installed on
   Windows CPU/Vulkan/HIP or Intel macOS.
 
-All four modes start a native `llama-server` process on a free port (default
+### Retired: `mtpturbo`
+
+`mtpturbo` was a fourth mode — a combined build offering MTP spec-decode and the
+turbo KV cache in one binary — and it is gone. LocalBox never actually built it:
+the 1.x PowerShell product did, the Rust rewrite kept only a staleness *report*,
+so the mode downloaded nothing, pinned nothing, and left the operator to supply
+their own binary. Its upstream source, the personal fork branch
+`EsmaeelNabil/llama.cpp@feat/mtp-turboquant-kv-cache`, published no releases and
+last moved on 2026-05-12; it was also the one mode outside the pinned,
+SHA-256-verified download posture the other three share, because the
+`LlamaCppMtpTurboCommit` pin it documented was never read by any code.
+
+What that costs is real and worth naming: MTP and turbo KV can no longer be
+combined. Use `native` for mainline MTP (`--spec-type draft-mtp`) or
+`turboquant` for `turbo3`/`turbo4`. Bringing the combination back means a
+maintained fork publishing release assets, resolved the way `turboquant` and
+`prism` already are — not another bring-your-own-binary path.
+
+Upgrading is non-destructive. An existing `~/.local-llm/llama-cpp-mtpturbo/`
+tree is left exactly where it is. A saved launch recipe naming the mode keeps
+its model, quant, context and KV cache and loses only the engine choice; a
+tuner store holding an `mtpturbo` entry still serves its `native` and
+`turboquant` entries. `--mode mtpturbo` and a catalog `RequiredMode` of
+`mtpturbo` both fail saying the mode was retired, not that it was misspelled.
+
+All three modes start a native `llama-server` process on a free port (default
 search starts at `8080`), wait for readiness, then point the agent at
 `http://127.0.0.1:<port>` (through the no-think proxy when thinking is
 stripped).
@@ -66,11 +81,6 @@ localbox launch q3635ba3bapex --context 256k --mode turboquant
 # and the launcher warns so a --draft launch never silently costs the
 # drafter's memory for nothing.
 localbox launch tbonsai27b --context 64k --draft
-
-# MTP + turbo KV together — the 256K-on-24GB recipe. The catalog stores
-# SpecType=draft-mtp (mainline canonical); LocalBox translates it to the
-# fork's spelling at emit time for this mode automatically.
-localbox launch genesisv2 --context 128k --mode mtpturbo
 
 # The catalog requires Prism automatically for this model; --mode is optional.
 localbox launch tbonsai27b --context 64k --vision

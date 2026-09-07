@@ -274,6 +274,29 @@ fn adoption_from_value(value: &serde_json::Value) -> Option<ProfileAdoption> {
 /// Resolve the best saved entry using the same selection path for direct,
 /// guided, and parent-process launches.
 #[must_use]
+/// Drop entries whose engine mode this build no longer recognises.
+///
+/// `TunerEntry::mode` is a required typed field, so one entry naming a retired
+/// mode would otherwise make the whole store `Invalid` and take the `native`
+/// and `turboquant` tunes sitting beside it down with it. Only an unrecognised
+/// mode is dropped — every other malformed field still fails the typed parse,
+/// because a corrupt store must not be quietly treated as a thin one. The file
+/// on disk is never rewritten here.
+fn without_unrecognised_modes(document: &serde_json::Value) -> serde_json::Value {
+    let mut filtered = document.clone();
+    if let Some(entries) = filtered
+        .get_mut("entries")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        entries.retain(|entry| match entry.get("mode") {
+            Some(mode) => serde_json::from_value::<Mode>(mode.clone()).is_ok(),
+            // A missing mode is corruption, not a retirement: leave it to fail.
+            None => true,
+        });
+    }
+    filtered
+}
+
 pub fn resolve_run_profile(
     home: &Path,
     key: &str,
@@ -304,6 +327,7 @@ pub fn resolve_run_profile(
             };
         }
     };
+    let document = without_unrecognised_modes(&document);
     let store: TunerBestConfig = match serde_json::from_value(document.clone()) {
         Ok(store) => store,
         Err(_) => {
@@ -635,7 +659,7 @@ fn adopt_superseded_profile_at(
     let raw = std::fs::read_to_string(&resolution.path)?;
     let document: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|error| ProfileAdoptionError::InvalidStore(error.to_string()))?;
-    let store: TunerBestConfig = serde_json::from_value(document.clone())
+    let store: TunerBestConfig = serde_json::from_value(without_unrecognised_modes(&document))
         .map_err(|error| ProfileAdoptionError::InvalidStore(error.to_string()))?;
     if !store.schema_supported() {
         return Err(ProfileAdoptionError::InvalidStore(format!(
@@ -658,8 +682,9 @@ fn adopt_superseded_profile_at(
     let patched = patched_adoption_json(&raw, entry_index, selected.tuner_version, adopted_at)?;
     let validated_document: serde_json::Value = serde_json::from_str(&patched)
         .map_err(|error| ProfileAdoptionError::InvalidStore(error.to_string()))?;
-    let validated: TunerBestConfig = serde_json::from_value(validated_document.clone())
-        .map_err(|error| ProfileAdoptionError::InvalidStore(error.to_string()))?;
+    let validated: TunerBestConfig =
+        serde_json::from_value(without_unrecognised_modes(&validated_document))
+            .map_err(|error| ProfileAdoptionError::InvalidStore(error.to_string()))?;
     if !validated.schema_supported() {
         return Err(ProfileAdoptionError::InvalidStore(format!(
             "schema {} is unsupported",
@@ -750,6 +775,60 @@ mod tests {
             serde_json::to_string(&store).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_retired_mode_entry_is_skipped_and_its_neighbours_still_resolve() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".local-llm").join("tuner");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A store written before mtpturbo was retired: one entry names a mode
+        // this build no longer has, two do not. Losing the two would be losing
+        // real tuning work over a word.
+        let native = serde_json::to_value(entry("q4", 70.0, Profile::Balanced, 24)).unwrap();
+        let mut turbo = serde_json::to_value(entry("q6", 90.0, Profile::Balanced, 24)).unwrap();
+        turbo["mode"] = "turboquant".into();
+        let mut retired = serde_json::to_value(entry("q8", 99.0, Profile::Balanced, 24)).unwrap();
+        retired["mode"] = "mtpturbo".into();
+        std::fs::write(
+            dir.join("best-model.json"),
+            serde_json::to_string(&serde_json::json!({
+                "schema": 1,
+                "key": "model",
+                "vram_gb": 24,
+                "entries": [retired, native, turbo]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let resolution = resolve_run_profile(home.path(), "model", RunProfileQuery::default());
+        assert_eq!(
+            resolution.unavailable, None,
+            "one retired entry must not condemn the whole store"
+        );
+        // The retired entry scored highest; it must not be selectable.
+        let selected = resolution.entry.as_ref().unwrap();
+        assert_eq!(selected.quant, "q6");
+        assert_eq!(selected.mode, Mode::Turboquant);
+
+        // Genuine corruption is still corruption: a missing mode is not a
+        // retirement and must keep failing the typed parse.
+        let mut broken = serde_json::to_value(entry("q4", 70.0, Profile::Balanced, 24)).unwrap();
+        broken.as_object_mut().unwrap().remove("mode");
+        std::fs::write(
+            dir.join("best-model.json"),
+            serde_json::to_string(&serde_json::json!({
+                "schema": 1, "key": "model", "entries": [broken]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_run_profile(home.path(), "model", RunProfileQuery::default()).unavailable,
+            Some(UnavailableReason::Invalid)
+        );
     }
 
     #[test]

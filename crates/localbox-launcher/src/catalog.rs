@@ -162,6 +162,23 @@ pub struct Catalog {
     warnings: Vec<String>,
 }
 
+/// Guidance for an engine mode that was offered once and is no longer built.
+///
+/// A retired name is recognised on purpose: reporting it as "unknown" reads as
+/// a typo and leaves the user hunting for a spelling mistake, when what they
+/// actually need to know is where the mode went.
+#[must_use]
+pub fn retired_mode_note(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "mtpturbo" => Some(
+            "the mtpturbo mode was retired: LocalBox never built it and its upstream fork \
+             is unmaintained. Use native for mainline MTP (--spec-type draft-mtp), or \
+             turboquant for the turbo3/turbo4 KV cache types",
+        ),
+        _ => None,
+    }
+}
+
 fn parse_required_mode(value: &Value, def: &ModelDef) -> Result<Option<Mode>, String> {
     let configured = value.get("RequiredMode");
     let parsed = match configured {
@@ -170,9 +187,13 @@ fn parse_required_mode(value: &Value, def: &ModelDef) -> Result<Option<Mode>, St
         Some(Value::String(raw)) => Some(match raw.trim().to_ascii_lowercase().as_str() {
             "native" => Mode::Native,
             "turboquant" => Mode::Turboquant,
-            "mtpturbo" => Mode::Mtpturbo,
             "prism" | "prismml" => Mode::PrismMl,
-            other => return Err(format!("unknown RequiredMode '{other}'")),
+            other => {
+                return Err(match retired_mode_note(other) {
+                    Some(note) => format!("RequiredMode '{other}': {note}"),
+                    None => format!("unknown RequiredMode '{other}'"),
+                })
+            }
         }),
         Some(_) => return Err("RequiredMode must be a string".to_string()),
     };
@@ -507,6 +528,54 @@ mod tests {
             warning.contains("model 'broken' is invalid and was skipped")
                 && warning.contains("broken.Quant 'missing'")
         }));
+    }
+
+    #[test]
+    fn a_retired_required_mode_names_the_retirement_not_a_typo() {
+        let catalog = obj(r#"{
+            "Models": {
+                "legacy": {
+                    "Repo": "owner/legacy",
+                    "Quants": { "q4": "legacy-Q4_K_M.gguf" },
+                    "Quant": "q4",
+                    "RequiredMode": "mtpturbo"
+                },
+                "valid": {
+                    "Repo": "owner/valid",
+                    "Quants": { "q4": "valid-Q4_K_M.gguf" },
+                    "Quant": "q4"
+                }
+            }
+        }"#);
+
+        // A model pinned to a mode that no longer exists cannot launch as
+        // configured, so the load still fails — the severity is unchanged. What
+        // changes is the message: it names the retirement and where to go next
+        // instead of implying a spelling mistake.
+        let error = Catalog::from_layers(&Map::new(), &catalog, &Map::new())
+            .expect_err("a model pinned to a retired mode cannot be honoured");
+        let text = error.to_string();
+        assert!(text.contains("legacy"), "{text}");
+        assert!(text.contains("RequiredMode 'mtpturbo'"), "{text}");
+        assert!(text.contains("was retired"), "{text}");
+        assert!(text.contains("turboquant"), "{text}");
+        assert!(!text.contains("unknown RequiredMode"), "{text}");
+
+        // An actual typo still reports as unknown.
+        let typo = obj(r#"{
+            "Models": {
+                "m": {
+                    "Repo": "o/m",
+                    "Quants": { "q4": "m.gguf" },
+                    "Quant": "q4",
+                    "RequiredMode": "turbowuant"
+                }
+            }
+        }"#);
+        let text = Catalog::from_layers(&Map::new(), &typo, &Map::new())
+            .expect_err("an unknown mode is still an error")
+            .to_string();
+        assert!(text.contains("unknown RequiredMode 'turbowuant'"), "{text}");
     }
 
     #[test]

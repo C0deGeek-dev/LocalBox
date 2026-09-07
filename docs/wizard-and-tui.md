@@ -20,7 +20,7 @@ pick a model  →  read the summary  →  confirm  →  launch  →  return
 - **The confirm menu** offers exactly five actions: launch, customize, save
   as my default, help, and back.
 - **Customize** is the power level: quant variant, context window, engine
-  (`native` / `turboquant` / `mtpturbo` / `prism`), KV cache, vision, strict, and
+  (`native` / `turboquant` / `prism`), KV cache, vision, strict, and
   auto-tune. Rows the current selection locks out explain *why* instead of
   disappearing. Auto-tune (on by default when a measured profile exists)
   replays the best saved `localbench findbest` result and owns the

@@ -31,6 +31,26 @@ pub struct GuidedPlan {
     pub kv_cache_v: Option<String>,
 }
 
+/// Read a saved engine mode, treating an unrecognised name as absent.
+///
+/// A recipe written by an older build can name a mode this one no longer has.
+/// Failing the field would fail the whole `DefaultLaunch`, and the loader's
+/// `.ok()` would then discard the user's entire saved recipe — target, quant,
+/// context, KV, auto-tune — over one stale word. The mode is the only part
+/// that is actually unusable, so it is the only part dropped.
+fn lenient_mode<'de, D>(deserializer: D) -> Result<Option<Mode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::IntoDeserializer as _;
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|name| {
+        let name: serde::de::value::StrDeserializer<'_, serde::de::value::Error> =
+            name.as_str().into_deserializer();
+        Mode::deserialize(name).ok()
+    }))
+}
+
 /// The saved last-good launch recipe (`DefaultLaunch` in settings).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
@@ -41,7 +61,12 @@ pub struct DefaultLaunch {
     /// The run target (`Action` on disk).
     #[serde(rename = "Action", skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
-    #[serde(rename = "LlamaCppMode", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "LlamaCppMode",
+        default,
+        deserialize_with = "lenient_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub llama_cpp_mode: Option<Mode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_best_profile: Option<String>,
@@ -417,5 +442,41 @@ mod tests {
         assert_eq!(json["AutoBestProfile"], "balanced");
         let back: DefaultLaunch = serde_json::from_value(json).unwrap();
         assert_eq!(back, saved());
+    }
+
+    #[test]
+    fn a_retired_engine_name_drops_only_the_mode_not_the_whole_recipe() {
+        // Written by a build that still had mtpturbo. Everything except the
+        // engine is still perfectly usable and must survive the upgrade.
+        let recipe: DefaultLaunch = serde_json::from_value(serde_json::json!({
+            "ModelKey": "q36apex",
+            "Action": "claude",
+            "LlamaCppMode": "mtpturbo",
+            "AutoBestProfile": "balanced",
+            "UseAutoBest": true,
+            "Quant": "apex-i-mini",
+            "ContextKey": "64k",
+            "Vision": true,
+            "KvCacheK": "turbo3",
+            "KvCacheV": "turbo3"
+        }))
+        .expect("a retired mode must not fail the whole recipe");
+
+        assert_eq!(recipe.llama_cpp_mode, None, "the retired mode is dropped");
+        assert_eq!(recipe.model_key.as_deref(), Some("q36apex"));
+        assert_eq!(recipe.action.as_deref(), Some("claude"));
+        assert_eq!(recipe.quant.as_deref(), Some("apex-i-mini"));
+        assert_eq!(recipe.context_key.as_deref(), Some("64k"));
+        assert_eq!(recipe.kv_cache_k.as_deref(), Some("turbo3"));
+        assert_eq!(recipe.kv_cache_v.as_deref(), Some("turbo3"));
+        assert_eq!(recipe.use_auto_best, Some(true));
+        assert_eq!(recipe.vision, Some(true));
+
+        // A live mode still parses, and a dropped one is not serialized back.
+        let live: DefaultLaunch =
+            serde_json::from_value(serde_json::json!({ "LlamaCppMode": "turboquant" })).unwrap();
+        assert_eq!(live.llama_cpp_mode, Some(Mode::Turboquant));
+        let written = serde_json::to_value(&recipe).unwrap();
+        assert!(written.get("LlamaCppMode").is_none());
     }
 }

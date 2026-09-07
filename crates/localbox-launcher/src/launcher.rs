@@ -455,15 +455,10 @@ impl Launcher for LlamaLauncher {
         };
         Err(LauncherError::Unavailable(format!(
             "no {exe} under {}; run `localbox update --mode {}` to install or repair the \
-             {} mode{}",
+             {} mode",
             root.display(),
             repair_mode,
             mode.as_str(),
-            if mode == Mode::Mtpturbo {
-                " (this source-built mode will print its required build instructions)"
-            } else {
-                ""
-            }
         )))
     }
 
@@ -495,7 +490,6 @@ impl Launcher for LlamaLauncher {
         let dir = match mode {
             Mode::Native => "llama-cpp",
             Mode::Turboquant => "llama-cpp-turboquant",
-            Mode::Mtpturbo => "llama-cpp-mtpturbo",
             Mode::PrismMl => "llama-cpp-prism",
         };
         self.home.join(".local-llm").join(dir)
@@ -511,7 +505,7 @@ impl Launcher for LlamaLauncher {
         let lower = kv_type.to_ascii_lowercase();
         if lower.starts_with("turbo") {
             // The turbo cache types exist only in the turbo forks.
-            return matches!(mode, Mode::Turboquant | Mode::Mtpturbo);
+            return matches!(mode, Mode::Turboquant);
         }
         STANDARD_KV_TYPES.contains(&lower.as_str())
     }
@@ -864,21 +858,12 @@ mod tests {
             home.join(".local-llm").join("llama-cpp-turboquant")
         );
         assert_eq!(
-            launcher.install_root(Mode::Mtpturbo),
-            home.join(".local-llm").join("llama-cpp-mtpturbo")
-        );
-        assert_eq!(
             launcher.install_root(Mode::PrismMl),
             home.join(".local-llm").join("llama-cpp-prism")
         );
         // Every missing-binary error keeps its typed launcher variant and
         // names the exact non-interactive repair command for that mode.
-        for mode in [
-            Mode::Native,
-            Mode::Turboquant,
-            Mode::Mtpturbo,
-            Mode::PrismMl,
-        ] {
+        for mode in [Mode::Native, Mode::Turboquant, Mode::PrismMl] {
             let err = launcher.server_binary(mode, true).unwrap_err();
             assert!(matches!(err, LauncherError::Unavailable(_)));
             let repair_mode = if mode == Mode::PrismMl {
@@ -910,7 +895,8 @@ mod tests {
         assert!(launcher.kv_type_supported("q8_0", Mode::Native));
         assert!(!launcher.kv_type_supported("turbo3", Mode::Native));
         assert!(launcher.kv_type_supported("turbo3", Mode::Turboquant));
-        assert!(launcher.kv_type_supported("TURBO4", Mode::Mtpturbo));
+        assert!(launcher.kv_type_supported("TURBO4", Mode::Turboquant));
+        assert!(!launcher.kv_type_supported("turbo3", Mode::PrismMl));
         assert!(!launcher.kv_type_supported("q9_9", Mode::Native));
     }
 

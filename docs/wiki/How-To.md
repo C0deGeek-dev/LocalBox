@@ -55,7 +55,7 @@ localbox update --mode native --check   # exact assets + expected sizes
 localbox update --mode native           # verified atomic activation
 ```
 
-Use `turboquant`, `mtpturbo`, or `prism` for another mode. Missing-binary
+Use `turboquant` or `prism` for another mode. Missing-binary
 errors print the same runnable command. Windows CUDA installs include the
 matching runtime companion; partial or failed updates do not replace a working
 engine tree.
