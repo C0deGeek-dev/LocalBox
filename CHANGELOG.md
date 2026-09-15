@@ -4,6 +4,19 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`localbox update` no longer prints the same catalog warning twice.** It
+  loaded the catalog, then built the launcher, which loaded it again — a second
+  parse of three JSON layers and a second copy of every `unknown field ... is
+  ignored` line. The already-loaded catalog is now passed in.
+
+- **Retired catalog fields can be removed instead of only reported.**
+  `localbox update --prune-models` drops `LimitTools` and `SourceType` from
+  `~/.local-llm/llm-models.json` (`--check` previews), and the warning for a
+  retired field now names that command. `SourceType` was written by LocalBox's
+  own installer, so the old wording blamed the user for the tool's leftovers.
+  Only retired fields are touched; an unrecognised field with no retirement
+  history is left alone.
+
 - **The `mtpturbo` engine mode is retired; three modes remain.** Of the four,
   it was the only one LocalBox did not actually deliver: the Rust rewrite never
   ported the source build the 1.x product had, so the mode downloaded nothing

@@ -267,6 +267,21 @@ pub fn kill_pid(pid: u32) {
 pub fn build_launcher(home: &Path) -> Result<localbox_launcher::launcher::LlamaLauncher, String> {
     let dir = crate::guided::catalog_dir(home);
     let catalog = localbox_launcher::catalog::Catalog::load(&dir).map_err(|e| e.to_string())?;
+    Ok(build_launcher_with(catalog, home))
+}
+
+/// The same launcher from a catalog the caller already loaded.
+///
+/// Loading is not free and is not silent: it re-reads three JSON layers and
+/// prints a warning line per unknown field. A command that has a catalog in
+/// hand and then called [`build_launcher`] paid both twice, which is where the
+/// duplicated `unknown field ... is ignored` warnings on `localbox update` came
+/// from.
+#[must_use]
+pub fn build_launcher_with(
+    catalog: localbox_launcher::catalog::Catalog,
+    home: &Path,
+) -> localbox_launcher::launcher::LlamaLauncher {
     // Resolve VRAM through the shared ladder (config > 0 -> auto-probe ->
     // fallback). `probe_vram_gb()` returns 0 when no GPU tool answers; treat
     // that as "undetected" so the shared fallback (not 0 GB, which would paint
@@ -280,12 +295,7 @@ pub fn build_launcher(home: &Path) -> Result<localbox_launcher::launcher::LlamaL
         (gb > 0).then(|| i64::from(gb))
     };
     let vram = resolve_launcher_vram(configured, probed);
-    Ok(localbox_launcher::launcher::LlamaLauncher::new(
-        catalog,
-        crate::product_version(),
-        home,
-        vram,
-    ))
+    localbox_launcher::launcher::LlamaLauncher::new(catalog, crate::product_version(), home, vram)
 }
 
 /// Resolve the launcher's VRAM figure through the shared `resolve_vram` ladder

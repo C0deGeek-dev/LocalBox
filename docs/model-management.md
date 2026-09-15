@@ -16,6 +16,20 @@ localbox update --merge-models --check   # preview: which keys would be added
 localbox update --merge-models           # add them (additive only)
 ```
 
+Fields the catalog format has retired are reported on every load and removed
+only when you ask:
+
+```
+localbox update --prune-models --check   # preview: which fields would be dropped
+localbox update --prune-models           # drop them
+```
+
+`LimitTools` and `SourceType` are the retired ones today — `SourceType` was
+written by LocalBox's own guided installer, so a catalog can carry it without
+anyone having typed it. Pruning touches those fields and nothing else: an
+unrecognised field with no retirement history stays, because it may be a typo
+worth seeing or a field a newer LocalBox reads.
+
 The merge only *adds* missing model keys from the shipped set — an entry you
 already have is never rewritten, and everything else in the file
 (`CommandAliases`, your edits) stays as it was. Note for source checkouts: run

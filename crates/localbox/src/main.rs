@@ -58,7 +58,7 @@ Usage:
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
   localbox embed-stop                 stop the embedding server
   localbox update [--mode <m>] [--check] [--allow-downgrade] [--merge-models]
-                  [--skip-load-probe]
+                  [--skip-load-probe] [--prune-models]
                                       install or update the llama.cpp binaries
                                       to the newest upstream release, verified
                                       against the published release digest and
@@ -71,7 +71,10 @@ Usage:
                                       which --skip-load-probe waives;
                                       --merge-models adds newly shipped catalog
                                       models to llm-models.json (additive only,
-                                      existing entries untouched)
+                                      existing entries untouched);
+                                      --prune-models removes retired fields
+                                      from llm-models.json (the ones each load
+                                      warns about)
   localbox version                    print the launcher version envelope
   localbox nothink-proxy --listen <port> --target-port <port>
                                       host the no-think proxy (plumbing)
@@ -866,7 +869,9 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     let home = home_dir().ok_or("could not determine the user home directory")?;
     let catalog = localbox_launcher::catalog::Catalog::load(&catalog_dir(&home))
         .map_err(|e| e.to_string())?;
-    let launcher = build_launcher(&home)?;
+    // One load, one set of warnings: `build_launcher` would read the same three
+    // layers again and print every unknown-field warning a second time.
+    let launcher = localbox::exec::build_launcher_with(catalog.clone(), &home);
     let check_only = has_flag(args, "--check");
     // `--refresh-pins` used to be the opt-in for "resolve the latest
     // release". That is now what every update does, so the flag is accepted
@@ -880,6 +885,9 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     let explicit_mode = flag_value(args, "--mode");
     if has_flag(args, "--merge-models") {
         return merge_shipped_models(&home, check_only);
+    }
+    if has_flag(args, "--prune-models") {
+        return prune_retired_model_fields(&home, check_only);
     }
     let modes: Vec<Mode> = match explicit_mode {
         Some(m) => vec![parse_mode(Some(m))?],
@@ -1024,6 +1032,51 @@ fn merge_shipped_models(home: &std::path::Path, check_only: bool) -> Result<(), 
         missing.len(),
         user_path.display(),
         missing.join(", ")
+    );
+    Ok(())
+}
+
+/// Remove retired fields from the user's own catalog, so the warning about them
+/// has an end.
+///
+/// The catalog is the user's file and is never rewritten behind their back —
+/// that is why the fields have been warned about rather than dropped. This is
+/// the explicit migration, and it removes only the fields this LocalBox knows
+/// it retired; an unrecognised field with no such history is left alone,
+/// because it may be a typo worth seeing or a field a newer build reads.
+fn prune_retired_model_fields(home: &std::path::Path, check_only: bool) -> Result<(), String> {
+    let user_path = catalog_dir(home).join("llm-models.json");
+    let raw = std::fs::read_to_string(&user_path)
+        .map_err(|e| format!("could not read {}: {e}", user_path.display()))?;
+    let user: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| {
+            format!(
+                "{} is not valid JSON ({e}); fix it before pruning",
+                user_path.display()
+            )
+        })?;
+    let (pruned, removed) = localbox_launcher::catalog::prune_retired_fields(&user);
+    if removed.is_empty() {
+        println!("Your catalog has no retired fields.");
+        return Ok(());
+    }
+    if check_only {
+        println!(
+            "Would remove {} retired field(s) from {}: {}.",
+            removed.len(),
+            user_path.display(),
+            removed.join(", ")
+        );
+        return Ok(());
+    }
+    let pretty = serde_json::to_string_pretty(&serde_json::Value::Object(pruned))
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&user_path, pretty + "\n").map_err(|e| e.to_string())?;
+    println!(
+        "Removed {} retired field(s) from {}: {}.",
+        removed.len(),
+        user_path.display(),
+        removed.join(", ")
     );
     Ok(())
 }

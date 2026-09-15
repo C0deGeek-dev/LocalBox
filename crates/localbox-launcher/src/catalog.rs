@@ -41,6 +41,42 @@ const MODEL_FIELDS: &[&str] = &[
     "RequiredMode",
 ];
 
+/// Fields earlier versions of LocalBox wrote or read and this one does not.
+///
+/// They are unknown fields like any other, but with a known history, so the
+/// warning can say what to do about them rather than leaving a user to wonder
+/// whether their catalog is broken. `SourceType` is the sharper case: LocalBox's
+/// own guided installer wrote it, so a warning that reads like a user typo is
+/// blaming the user for the tool's leftovers.
+pub const RETIRED_MODEL_FIELDS: &[&str] = &["LimitTools", "SourceType"];
+
+/// Remove every retired field from every model in a catalog document, returning
+/// the rewritten document and the `model.field` pairs that were dropped.
+///
+/// Pure over the document so the migration can be tested without a catalog on
+/// disk, and so the command that writes the file does nothing but write it.
+/// Nothing else is touched: an unrecognised field that is *not* retired may be
+/// a typo the user still wants to see, or a field a newer LocalBox reads.
+#[must_use]
+pub fn prune_retired_fields(document: &Map<String, Value>) -> (Map<String, Value>, Vec<String>) {
+    let mut pruned = document.clone();
+    let mut removed = Vec::new();
+    let Some(Value::Object(models)) = pruned.get_mut("Models") else {
+        return (pruned, removed);
+    };
+    for (key, model) in models.iter_mut() {
+        let Some(fields) = model.as_object_mut() else {
+            continue;
+        };
+        for retired in RETIRED_MODEL_FIELDS {
+            if fields.remove(*retired).is_some() {
+                removed.push(format!("{key}.{retired}"));
+            }
+        }
+    }
+    (pruned, removed)
+}
+
 fn metadata_map(value: Option<Value>, field: &str) -> Result<Map<String, Value>, String> {
     match value {
         None | Some(Value::Null) => Ok(Map::new()),
@@ -76,7 +112,16 @@ fn prepare_model(value: &Value) -> Result<(Value, Vec<String>), String> {
     let mut warnings: Vec<String> = model
         .keys()
         .filter(|field| !MODEL_FIELDS.contains(&field.as_str()))
-        .map(|field| format!("unknown field '{field}' is ignored"))
+        .map(|field| {
+            if RETIRED_MODEL_FIELDS.contains(&field.as_str()) {
+                format!(
+                    "retired field '{field}' is ignored; \
+                     `localbox update --prune-models` removes it"
+                )
+            } else {
+                format!("unknown field '{field}' is ignored")
+            }
+        })
         .collect();
 
     let has_legacy_metadata = !sizes.is_empty() || !notes.is_empty();
@@ -484,6 +529,56 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("TypoField")));
         }
+    }
+
+    #[test]
+    fn a_retired_field_names_the_command_that_removes_it() {
+        // The live nuisance: every `localbox update` on a catalog carrying
+        // `LimitTools`/`SourceType` printed a warning with no way to act on it,
+        // and `SourceType` was written by LocalBox's own installer.
+        let catalog = obj(
+            r#"{"Models": {"m": {"Repo": "o/r", "Root": "r", "LimitTools": true,
+                "SourceType": "gguf", "TypoField": 1}}}"#,
+        );
+        let catalog = Catalog::from_layers(&Map::new(), &catalog, &Map::new()).unwrap();
+        let warnings = catalog.warnings().join("\n");
+        assert!(
+            warnings.contains("retired field 'LimitTools'"),
+            "{warnings}"
+        );
+        assert!(warnings.contains("--prune-models"), "{warnings}");
+        // A field with no retirement history keeps the plain wording: it may be
+        // a typo worth seeing.
+        assert!(warnings.contains("unknown field 'TypoField'"), "{warnings}");
+    }
+
+    #[test]
+    fn pruning_removes_retired_fields_and_nothing_else() {
+        let document = obj(
+            r#"{"VRAMGB": 24, "Models": {"a": {"Repo": "o/r", "LimitTools": true, "Quant": "q4"},
+                "b": {"Repo": "o/r", "SourceType": "gguf", "TypoField": 1}}}"#,
+        );
+        let (pruned, removed) = prune_retired_fields(&document);
+        assert_eq!(removed, vec!["a.LimitTools", "b.SourceType"]);
+        let models = pruned.get("Models").and_then(Value::as_object).unwrap();
+        assert!(models["a"].get("LimitTools").is_none());
+        assert_eq!(models["a"]["Quant"], Value::from("q4"));
+        assert!(models["b"].get("SourceType").is_none());
+        // Untouched: not retired, so not this command's business.
+        assert_eq!(models["b"]["TypoField"], Value::from(1));
+        assert_eq!(pruned["VRAMGB"], Value::from(24));
+
+        // Idempotent: a pruned catalog reports nothing to do.
+        let (_, again) = prune_retired_fields(&pruned);
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn pruning_a_document_without_models_is_a_no_op() {
+        let document = obj(r#"{"VRAMGB": 24}"#);
+        let (pruned, removed) = prune_retired_fields(&document);
+        assert!(removed.is_empty());
+        assert_eq!(pruned, document);
     }
 
     #[test]
