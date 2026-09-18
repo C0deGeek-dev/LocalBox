@@ -4,6 +4,16 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The "a model is already running" check names the model and ignores
+  embedding servers.** The process scan never asked for command lines, so every
+  running server was reported as "an unnamed model", and an embedding server not
+  recorded in this home (LocalMind's, started by another tool) counted as a chat
+  model competing for the launch. The scan now reads each server's argv: the
+  prompt shows the model file and port, and any `llama-server --embedding` is
+  left out. `localbox stop` still spares only the recorded embedding server. The
+  tests that exercise this no longer depend on what is running on the machine
+  that runs them.
+
 - **`localbox update` no longer prints the same catalog warning twice.** It
   loaded the catalog, then built the launcher, which loaded it again — a second
   parse of three JSON layers and a second copy of every `unknown field ... is

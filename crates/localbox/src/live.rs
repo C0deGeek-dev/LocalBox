@@ -218,28 +218,68 @@ pub fn parse_running_answer(input: &str) -> Option<RunningModelChoice> {
 #[must_use]
 pub fn running_models(home: &Path) -> Vec<RunningModel> {
     let embed_pid = crate::embed::read_embed_state(home).and_then(|state| state.pid);
+    running_models_among(host_processes(), embed_pid)
+}
+
+/// One process-table row: enough to recognise a llama-server and describe it.
+#[derive(Debug, Clone)]
+struct ProcessRow {
+    pid: u32,
+    name: String,
+    argv: Vec<String>,
+}
+
+/// Every process on this host with its command line.
+///
+/// The command line must be requested explicitly: sysinfo's plain
+/// `refresh_processes` leaves it empty, which would make every running model
+/// "unnamed" and hide an embedding server's `--embedding` flag.
+fn host_processes() -> Vec<ProcessRow> {
     let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    let mut found: Vec<RunningModel> = system
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always),
+    );
+    system
         .processes()
         .values()
-        .filter(|process| is_server_process_name(&process.name().to_string_lossy()))
-        .filter(|process| !is_spared_embed_pid(process.pid().as_u32(), embed_pid))
-        .map(|process| {
-            let argv: Vec<String> = process
+        .map(|process| ProcessRow {
+            pid: process.pid().as_u32(),
+            name: process.name().to_string_lossy().to_string(),
+            argv: process
                 .cmd()
                 .iter()
                 .map(|a| a.to_string_lossy().to_string())
-                .collect();
-            RunningModel {
-                pid: process.pid().as_u32(),
-                port: port_from_argv(&argv),
-                model: model_from_argv(&argv),
-            }
+                .collect(),
+        })
+        .collect()
+}
+
+/// The chat models among `rows`: llama-server processes that are neither the
+/// recorded embedding server nor any other embedding server. An embedding
+/// server answers `/v1/embeddings`, not chat, so it never makes a launch ask
+/// whether to share the machine — whoever started it.
+fn running_models_among(rows: Vec<ProcessRow>, embed_pid: Option<u32>) -> Vec<RunningModel> {
+    let mut found: Vec<RunningModel> = rows
+        .into_iter()
+        .filter(|row| is_server_process_name(&row.name))
+        .filter(|row| !is_spared_embed_pid(row.pid, embed_pid))
+        .filter(|row| !is_embedding_argv(&row.argv))
+        .map(|row| RunningModel {
+            pid: row.pid,
+            port: port_from_argv(&row.argv),
+            model: model_from_argv(&row.argv),
         })
         .collect();
     found.sort_by_key(|model| model.pid);
     found
+}
+
+/// Whether a llama-server argv starts an embedding server.
+fn is_embedding_argv(argv: &[String]) -> bool {
+    argv.iter()
+        .any(|arg| arg == "--embedding" || arg == "--embeddings")
 }
 
 /// Ask what to do about the models already running, on a terminal.
@@ -290,14 +330,23 @@ fn settle_running_models(
     home: &Path,
     proxy_port: u16,
 ) -> Result<(), LiveError> {
-    let running = running_models(home);
+    settle_running(policy, &running_models(home), home, proxy_port)
+}
+
+/// Apply a running-model policy to an already-scanned list.
+fn settle_running(
+    policy: RunningModelPolicy,
+    running: &[RunningModel],
+    home: &Path,
+    proxy_port: u16,
+) -> Result<(), LiveError> {
     if running.is_empty() {
         // Nothing alive, so nothing to ask about. A server that died leaves no
         // process behind and must not produce a prompt.
         return Ok(());
     }
     let choice = match policy {
-        RunningModelPolicy::Ask => ask_about_running(&running),
+        RunningModelPolicy::Ask => ask_about_running(running),
         RunningModelPolicy::Continue => RunningModelChoice::Continue,
         RunningModelPolicy::StopFirst => RunningModelChoice::StopFirst,
         RunningModelPolicy::Cancel => RunningModelChoice::Cancel,
@@ -314,7 +363,7 @@ fn settle_running_models(
                 "a model is already running and this launch was cancelled; nothing ",
                 "was started or stopped:\n{}"
             ),
-            describe_running(&running)
+            describe_running(running)
         ))),
     }
 }
@@ -786,13 +835,75 @@ mod tests {
         ] {
             // With no llama-server alive this returns without prompting or
             // stopping; under `cargo test` there is no TTY, so an `Ask` that
-            // reached the prompt would answer Cancel and fail here.
-            let settled = settle_running_models(policy, home.path(), 11_435);
+            // reached the prompt would answer Cancel and fail here. The empty
+            // list is injected: the host may well be running a model.
+            let settled = settle_running(policy, &[], home.path(), 11_435);
             assert!(
                 settled.is_ok(),
                 "policy {policy:?} must be a no-op when nothing is running"
             );
         }
+    }
+
+    fn row(pid: u32, name: &str, argv: &[&str]) -> ProcessRow {
+        ProcessRow {
+            pid,
+            name: name.to_string(),
+            argv: argv.iter().map(|a| (*a).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_chat_server_is_named_from_its_own_argv() {
+        let found = running_models_among(
+            vec![
+                row(
+                    40,
+                    "llama-server.exe",
+                    &["llama-server", "-m", "/m/Chat-Q4.gguf", "--port", "8080"],
+                ),
+                row(7, "explorer.exe", &["explorer"]),
+            ],
+            None,
+        );
+        assert_eq!(
+            found,
+            vec![RunningModel {
+                pid: 40,
+                port: Some(8080),
+                model: Some("Chat-Q4.gguf".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn embedding_servers_never_count_as_a_running_model() {
+        let embed = [
+            "llama-server",
+            "-m",
+            "/m/Qwen3-Embedding-0.6B-Q8_0.gguf",
+            "--port",
+            "8090",
+            "--embedding",
+            "--pooling",
+            "last",
+            "-ngl",
+            "0",
+        ];
+        // Recorded in this home or not, an embedding server is not a chat model.
+        assert!(running_models_among(vec![row(11, "llama-server", &embed)], Some(11)).is_empty());
+        assert!(running_models_among(vec![row(11, "llama-server", &embed)], None).is_empty());
+        // The recorded PID alone still spares a server whose argv is unreadable.
+        assert!(running_models_among(vec![row(12, "llama-server.exe", &[])], Some(12)).is_empty());
+        // Any other server with an unreadable argv is still reported, unnamed.
+        assert_eq!(
+            running_models_among(vec![row(13, "llama-server.exe", &[])], Some(12)),
+            vec![RunningModel {
+                pid: 13,
+                port: None,
+                model: None,
+            }]
+        );
     }
 
     #[test]

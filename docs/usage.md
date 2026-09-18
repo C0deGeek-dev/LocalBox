@@ -22,6 +22,8 @@ localbox embed-serve [--port <p>]   start the CPU-only embedding server
 localbox embed-stop                 stop the embedding server
 localbox launch <model> [--if-running <ask|continue|stop|cancel>]
                                     warn when a model is already running
+                                    (named with its port; an embedding
+                                    server never counts)
 localbox update [--mode <m>] [--check]
                                     install and pin the latest llama.cpp releases
 localbox version                    print the launcher version envelope
