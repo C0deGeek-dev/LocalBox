@@ -17,6 +17,8 @@ keys (`Models`, `CommandAliases`) can never be overridden from settings.
   "VRAMGB": 32,                          // override nvidia-smi auto-detect
   "LlamaCppGgufRoot": "~/.local-llm/gguf",   // where model weights live (~ and %VAR% ok)
   "LlamaCppNCpuMoe": 35,                 // MoE expert CPU offload (0 disables)
+  "LlamaCppFitTargetMiB": 1536,          // VRAM llama.cpp's --fit leaves free when it
+                                          // places an untuned model (unset = 1024)
   "LlamaCppMlock": true,                 // lock the model in RAM
   "LlamaCppNoMmap": true,                // load into RAM instead of memory-mapping
   "LlamaCppAgentParallel": 1,            // server slots, every launch incl. serve
@@ -30,6 +32,16 @@ keys (`Models`, `CommandAliases`) can never be overridden from settings.
   "NoThinkProxyPort": 11435
 }
 ```
+
+**Untuned launches are placed by llama.cpp.** When nothing chooses a placement —
+no tuned profile, no catalog `NGpuLayers` / `NCpuMoe`, no `LlamaCppNCpuMoe`, no
+`-ngl`/`-ot`/`--n-cpu-moe` in extra args — and the installed build has `--fit`,
+LocalBox leaves `-ngl` out so llama.cpp fits the model into free VRAM itself
+(offloading MoE experts or layers to the CPU as needed) instead of trying every
+layer on the GPU. `LlamaCppFitTargetMiB` sets the free VRAM it keeps; a vision
+projector or draft model, which the fitter cannot see, widens that margin by its
+file size. Any explicit placement is used as given, and a build without `--fit`
+keeps `-ngl 999`.
 
 `LlamaCppMlock` and `LlamaCppNoMmap` (and the `Mlock` / `NoMmap` catalog and
 tune fields) state an intent; LocalBox spells it the way the installed

@@ -134,6 +134,16 @@ impl LlamaLauncher {
         }
     }
 
+    /// Free VRAM llama.cpp's `--fit` leaves per device (`LlamaCppFitTargetMiB`),
+    /// when set. Unset means llama.cpp's own default (1024 MiB).
+    #[must_use]
+    pub fn fit_target_mib_setting(&self) -> Option<u32> {
+        self.catalog
+            .setting("LlamaCppFitTargetMiB")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    }
+
     /// The agent output-token cap (`LocalModelMaxOutputTokens`), defaulting to
     /// 16384 when unset. Documented in `settings.md`; fed to both the agent env
     /// plan and the LocalPilot provider config.

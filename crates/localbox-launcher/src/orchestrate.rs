@@ -96,6 +96,28 @@ impl LaunchRequest {
     }
 }
 
+/// llama.cpp's own `--fit` default margin, MiB.
+const LLAMA_FIT_DEFAULT_MIB: u32 = 1024;
+
+/// The `--fit-target` margin for a launch that lets llama.cpp place the model.
+///
+/// The fitter cannot see a vision projector or a draft model (they load after
+/// it has placed the main model), so their on-disk size is added to the margin
+/// it keeps free. `None` leaves llama.cpp's default when nothing needs widening.
+fn fit_target_mib(setting: Option<u32>, companions: [Option<&std::path::Path>; 2]) -> Option<u32> {
+    let companion_mib: u64 = companions
+        .into_iter()
+        .flatten()
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .map(|meta| meta.len().div_ceil(1024 * 1024))
+        .sum();
+    if setting.is_none() && companion_mib == 0 {
+        return None;
+    }
+    let base = u64::from(setting.unwrap_or(LLAMA_FIT_DEFAULT_MIB));
+    u32::try_from(base + companion_mib).ok()
+}
+
 /// Everything a launch resolved, ready to print (DryRun) or execute (live).
 #[derive(Debug, Clone)]
 pub struct LaunchPlan {
@@ -203,7 +225,11 @@ pub fn plan_launch(
     let mut params = request.params.clone();
     // Memory-mapping flags are spelled the way the binary that will run
     // accepts them: mainline rejects `--no-mmap`/`--mlock`, the forks keep them.
-    params.load_flags = launcher.server_capabilities(request.mode).load_flags();
+    // A build with `--fit` places an unplaced model itself instead of the
+    // `-ngl 999` that would overflow VRAM for anything larger than the card.
+    let capabilities = launcher.server_capabilities(request.mode);
+    params.load_flags = capabilities.load_flags();
+    params.auto_fit = capabilities.fit;
     params.vision_module_path = vision_module
         .as_ref()
         .and_then(|p| p.to_str().map(str::to_string));
@@ -211,6 +237,10 @@ pub fn plan_launch(
     params.draft_module_path = draft_module
         .as_ref()
         .and_then(|p| p.to_str().map(str::to_string));
+    params.fit_target_mib = fit_target_mib(
+        launcher.fit_target_mib_setting(),
+        [vision_module.as_deref(), draft_module.as_deref()],
+    );
     let argv = build_llama_server_args(
         &def,
         &context_key,
@@ -345,7 +375,8 @@ mod tests {
 
     fn mainline_help(_binary: &std::path::Path, _timeout: std::time::Duration) -> Option<String> {
         Some(
-            "-lm,   --load-mode MODE                 model loading mode (default: auto)
+            "-fit,  --fit [on|off]                   whether to adjust unset arguments
+-lm,   --load-mode MODE                 model loading mode (default: auto)
 "
             .into(),
         )
@@ -394,6 +425,42 @@ mod tests {
         let joined = argv.join(" ");
         assert!(joined.contains("--load-mode none"), "{joined}");
         assert!(!argv.iter().any(|a| a == "--no-mmap"), "{joined}");
+    }
+
+    #[test]
+    fn an_unplaced_launch_on_a_fit_build_is_placed_by_llama_cpp() {
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher_with_native_build(dir.path(), mainline_help);
+        let request = LaunchRequest::new("q36apex", "64k", Mode::Native);
+        let argv = plan_launch(&launcher, &request).expect("plan").argv;
+        assert!(!argv.iter().any(|a| a == "-ngl"), "{argv:?}");
+        // A tuned placement still wins.
+        let mut placed = LaunchRequest::new("q36apex", "64k", Mode::Native);
+        placed.params.n_cpu_moe = Some(12);
+        let argv = plan_launch(&launcher, &placed)
+            .expect("plan")
+            .argv
+            .join(" ");
+        assert!(argv.contains("-ngl 999 --n-cpu-moe 12"), "{argv}");
+        // A build without --fit keeps -ngl 999.
+        let dir = tempfile::tempdir().unwrap();
+        let fork = launcher_with_native_build(dir.path(), fork_help);
+        let argv = plan_launch(&fork, &request).expect("plan").argv.join(" ");
+        assert!(argv.contains("-ngl 999"), "{argv}");
+    }
+
+    #[test]
+    fn the_fit_margin_makes_room_for_a_projector_it_cannot_see() {
+        let dir = tempfile::tempdir().unwrap();
+        let projector = dir.path().join("mmproj.gguf");
+        std::fs::write(&projector, vec![0u8; 3 * 1024 * 1024]).unwrap();
+        assert_eq!(fit_target_mib(None, [None, None]), None);
+        assert_eq!(fit_target_mib(Some(2048), [None, None]), Some(2048));
+        assert_eq!(fit_target_mib(None, [Some(&projector), None]), Some(1027));
+        assert_eq!(
+            fit_target_mib(Some(1536), [Some(&projector), Some(&projector)]),
+            Some(1542)
+        );
     }
 
     #[test]

@@ -43,6 +43,7 @@ Options for `launch` / `serve`:
 | `--vision` | Load the model's multimodal projector when it has one; a configured missing projector downloads on demand. |
 | `--keep-thinking` | Let the model's thinking reach the agent unfiltered. |
 | `--agent <a>` | `claude` (default) / `localpilot` / `codex` / `none`. |
+| `--server-arg <arg>` | Pass one raw argument to `llama-server` for this launch only — repeat it per token (`--server-arg --spec-type --server-arg ngram-mod`). Appended last so it wins; never saved. |
 | `--dry-run` | Print the full plan (GGUF, argv, env) and change nothing. |
 | `--lan` | Expose the gateway on the network (see [harness-mode.md](harness-mode.md)). |
 

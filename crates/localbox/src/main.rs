@@ -94,6 +94,9 @@ Options for launch/serve:
                         reaches it unfiltered (bypasses the no-think proxy, so
                         its system-message merge does not apply)
   --agent <a>           claude | localpilot | codex | none  (default claude)
+  --server-arg <arg>    pass one raw argument to llama-server for this launch
+                        (repeatable, appended last, never saved), e.g.
+                        --server-arg --spec-type --server-arg ngram-mod
   --dry-run             print what would happen; change nothing
   --lan                 expose the gateway on the network (0.0.0.0)
   --password <p>        the key LAN clients must present (with --lan)
@@ -166,6 +169,15 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
+}
+
+/// Every value given for a repeatable flag, in order.
+fn flag_values<'a>(args: &'a [String], flag: &str) -> Vec<&'a str> {
+    args.iter()
+        .enumerate()
+        .filter(|(_, a)| *a == flag)
+        .filter_map(|(i, _)| args.get(i + 1).map(String::as_str))
+        .collect()
 }
 
 fn has_flag(args: &[String], flag: &str) -> bool {
@@ -290,6 +302,13 @@ fn build_request(
     // default is now multi-slot auto, which allocates the full context per slot
     // and OOMs a model sized for one slot. See `apply_session_defaults`.
     request.apply_session_defaults(&launcher.settings_launch_params());
+    // Raw llama-server arguments for this launch only: appended last, so they
+    // win over everything above, and never saved.
+    request.params.extra_args.extend(
+        flag_values(args, "--server-arg")
+            .into_iter()
+            .map(str::to_string),
+    );
     Ok((request, profile))
 }
 

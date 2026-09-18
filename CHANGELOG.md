@@ -4,6 +4,20 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **An untuned launch no longer overflows VRAM: llama.cpp places it.** Every
+  launch passed `-ngl 999`, which switched off llama.cpp's own `--fit` — so a
+  model larger than the card, launched without a tune, simply ran out of
+  memory. When nothing chooses a placement and the installed build has `--fit`,
+  LocalBox now leaves `-ngl` out and lets llama.cpp fit the model (MoE experts
+  or layers go to the CPU as needed). New setting `LlamaCppFitTargetMiB` sets
+  the free VRAM it keeps; a vision projector or draft model widens that margin
+  by its size. Tuned profiles, catalog placements, and builds without `--fit`
+  keep their argv.
+
+- **`--server-arg <arg>` passes a raw `llama-server` argument for one launch.**
+  Repeatable, appended last so it wins, shown by `--dry-run`, never saved — for
+  trying a flag without editing the catalog.
+
 - **The launcher library exposes each build's `llama-fit-params`.** LocalBench's
   tuner asks llama.cpp's own memory fitter where a model fits instead of finding
   out by starting servers; the fitter is the one shipped beside the resolved
