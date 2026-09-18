@@ -3,15 +3,17 @@
 //! only what is launcher-specific — the catalog, on-disk layout, per-mode
 //! install roots, and the recorded backend session.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use localx_llama_core::quant::shard_files_from_primary;
 use localx_llama_core::{
     BackendSession, KvTypes, Launcher, LauncherError, LauncherVersion, Mode, ModelDef,
-    RUNTIME_LLAMACPP, TARGET_LOCALBOX,
+    ServerCapabilities, RUNTIME_LLAMACPP, TARGET_LOCALBOX,
 };
+use localx_llama_runtime::help::read_help_output;
 use localx_llama_runtime::is_port_free;
 use localx_llama_runtime::server::server_exe_name;
 
@@ -36,6 +38,38 @@ pub struct LlamaLauncher {
     /// Detected device VRAM in GB (0 = unknown), probed by the app at startup.
     vram_gb: u32,
     session: Mutex<Option<BackendSession>>,
+    /// How a binary's `--help` is read (a seam so tests need no real build).
+    help_reader: HelpReader,
+    /// Capabilities already read, per binary identity, so a tuning run that
+    /// launches the same build many times asks it once.
+    capabilities: Mutex<HashMap<BinaryIdentity, ServerCapabilities>>,
+}
+
+/// Reads a binary's `--help`, or `None` when it cannot.
+pub type HelpReader = fn(&Path, Duration) -> Option<String>;
+
+/// How long a binary may take to print its help before the long-standing
+/// flags are assumed. Real builds answer in well under a second.
+const HELP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A binary as it is on disk right now: an update in place changes the size or
+/// modification time, and with them the answer.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BinaryIdentity {
+    path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl BinaryIdentity {
+    fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(Self {
+            path: path.to_path_buf(),
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        })
+    }
 }
 
 impl LlamaLauncher {
@@ -53,7 +87,17 @@ impl LlamaLauncher {
             home: home.into(),
             vram_gb,
             session: Mutex::new(None),
+            help_reader: read_help_output,
+            capabilities: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Replace how binaries' help is read — for tests that must not run a
+    /// real llama.cpp build.
+    #[must_use]
+    pub fn with_help_reader(mut self, reader: HelpReader) -> Self {
+        self.help_reader = reader;
+        self
     }
 
     /// The recorded backend session, when one is active.
@@ -460,6 +504,32 @@ impl Launcher for LlamaLauncher {
             repair_mode,
             mode.as_str(),
         )))
+    }
+
+    fn server_capabilities(&self, mode: Mode) -> ServerCapabilities {
+        let Ok(binary) = self.server_binary(mode, true) else {
+            // Nothing installed yet: plan with the long-standing flags.
+            return ServerCapabilities::default();
+        };
+        let identity = BinaryIdentity::of(&binary);
+        if let Some(known) = identity.as_ref().and_then(|id| {
+            self.capabilities
+                .lock()
+                .ok()
+                .and_then(|cache| cache.get(id).copied())
+        }) {
+            return known;
+        }
+        // A binary that cannot answer gets the long-standing flags, and the
+        // miss is not cached: the next launch asks again.
+        let Some(help) = (self.help_reader)(&binary, HELP_TIMEOUT) else {
+            return ServerCapabilities::default();
+        };
+        let found = ServerCapabilities::from_help(&help);
+        if let (Some(id), Ok(mut cache)) = (identity, self.capabilities.lock()) {
+            cache.insert(id, found);
+        }
+        found
     }
 
     fn bench_binary(&self, _non_interactive: bool) -> Option<PathBuf> {

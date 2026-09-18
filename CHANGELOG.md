@@ -4,6 +4,16 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`NoMmap` and `Mlock` work on the native engine again.** Current mainline
+  llama.cpp replaced `--no-mmap` / `--mlock` with `--load-mode` and rejects the
+  old flags with `invalid argument`, so a native launch or tune carrying either
+  setting failed to start. LocalBox now reads each installed `llama-server`'s
+  help once and spells the intent the way that build accepts: `--load-mode none`
+  for no mmap, `mmap+mlock` for locking alone, `mlock` for both on builds that
+  have it (mainline, prism); the legacy flags on builds that do not (turboquant).
+  A build that cannot be asked keeps the legacy flags. `--dry-run` shows the
+  result.
+
 - **The "a model is already running" check names the model and ignores
   embedding servers.** The process scan never asked for command lines, so every
   running server was reported as "an unnamed model", and an embedding server not

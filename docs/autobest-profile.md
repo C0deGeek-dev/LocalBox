@@ -57,7 +57,7 @@ server-argument builder's parameters. The currently accepted tuning override key
 - `NGpuLayers`
 - `NCpuMoe`
 - `Mlock`
-- `NoMmap`
+- `NoMmap` (both spelled per build — see `--load-mode` in [settings](settings.md))
 - `UbatchSize`
 - `BatchSize`
 - `Threads`

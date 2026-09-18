@@ -201,6 +201,9 @@ pub fn plan_launch(
 
     // --mmproj enters argv for an existing projector or one planned for download.
     let mut params = request.params.clone();
+    // Memory-mapping flags are spelled the way the binary that will run
+    // accepts them: mainline rejects `--no-mmap`/`--mlock`, the forks keep them.
+    params.load_flags = launcher.server_capabilities(request.mode).load_flags();
     params.vision_module_path = vision_module
         .as_ref()
         .and_then(|p| p.to_str().map(str::to_string));
@@ -338,6 +341,80 @@ mod tests {
         }
         let catalog = Catalog::from_layers(&Map::new(), &catalog, &settings).unwrap();
         LlamaLauncher::new(catalog, "1.2.1", dir.join("home"), 24)
+    }
+
+    fn mainline_help(_binary: &std::path::Path, _timeout: std::time::Duration) -> Option<String> {
+        Some(
+            "-lm,   --load-mode MODE                 model loading mode (default: auto)
+"
+            .into(),
+        )
+    }
+
+    fn fork_help(_binary: &std::path::Path, _timeout: std::time::Duration) -> Option<String> {
+        Some(
+            "--mmap, --no-mmap                       whether to memory-map model.
+"
+            .into(),
+        )
+    }
+
+    fn silent_help(_binary: &std::path::Path, _timeout: std::time::Duration) -> Option<String> {
+        None
+    }
+
+    /// A launcher whose native build is "installed" (an empty file is enough:
+    /// only its help is read, through `reader`).
+    fn launcher_with_native_build(
+        dir: &std::path::Path,
+        reader: crate::launcher::HelpReader,
+    ) -> LlamaLauncher {
+        use localx_llama_core::Launcher;
+        let launcher = launcher(dir).with_help_reader(reader);
+        let root = launcher.install_root(Mode::Native);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(localx_llama_runtime::server::server_exe_name()),
+            b"",
+        )
+        .unwrap();
+        launcher
+    }
+
+    fn plan_without_mmap(launcher: &LlamaLauncher) -> Vec<String> {
+        let mut request = LaunchRequest::new("q36apex", "64k", Mode::Native);
+        request.params.no_mmap = Some(true);
+        plan_launch(launcher, &request).expect("plan").argv
+    }
+
+    #[test]
+    fn a_build_with_load_mode_gets_load_mode_instead_of_no_mmap() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = plan_without_mmap(&launcher_with_native_build(dir.path(), mainline_help));
+        let joined = argv.join(" ");
+        assert!(joined.contains("--load-mode none"), "{joined}");
+        assert!(!argv.iter().any(|a| a == "--no-mmap"), "{joined}");
+    }
+
+    #[test]
+    fn a_build_without_load_mode_keeps_the_legacy_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = plan_without_mmap(&launcher_with_native_build(dir.path(), fork_help));
+        assert!(argv.iter().any(|a| a == "--no-mmap"));
+        assert!(!argv.iter().any(|a| a == "--load-mode"));
+    }
+
+    #[test]
+    fn an_unreadable_or_missing_build_keeps_the_legacy_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = plan_without_mmap(&launcher_with_native_build(dir.path(), silent_help));
+        assert!(argv.iter().any(|a| a == "--no-mmap"));
+        let dir = tempfile::tempdir().unwrap();
+        let argv = plan_without_mmap(&launcher(dir.path()).with_help_reader(mainline_help));
+        assert!(
+            argv.iter().any(|a| a == "--no-mmap"),
+            "nothing installed: nothing to ask"
+        );
     }
 
     #[test]

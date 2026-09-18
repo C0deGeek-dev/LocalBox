@@ -17,8 +17,8 @@ keys (`Models`, `CommandAliases`) can never be overridden from settings.
   "VRAMGB": 32,                          // override nvidia-smi auto-detect
   "LlamaCppGgufRoot": "~/.local-llm/gguf",   // where model weights live (~ and %VAR% ok)
   "LlamaCppNCpuMoe": 35,                 // MoE expert CPU offload (0 disables)
-  "LlamaCppMlock": true,                 // RAM locking
-  "LlamaCppNoMmap": true,
+  "LlamaCppMlock": true,                 // lock the model in RAM
+  "LlamaCppNoMmap": true,                // load into RAM instead of memory-mapping
   "LlamaCppAgentParallel": 1,            // server slots, every launch incl. serve
                                           // (unset = 1; 0 or -1 = llama.cpp auto —
                                           // auto allocates the FULL context per slot,
@@ -30,6 +30,15 @@ keys (`Models`, `CommandAliases`) can never be overridden from settings.
   "NoThinkProxyPort": 11435
 }
 ```
+
+`LlamaCppMlock` and `LlamaCppNoMmap` (and the `Mlock` / `NoMmap` catalog and
+tune fields) state an intent; LocalBox spells it the way the installed
+`llama-server` accepts. It reads the binary's `--help` once per build: builds
+that list `--load-mode` (current mainline, the prism fork) get `--load-mode none`
+for no mmap, `mmap+mlock` for locking alone, and `mlock` for both; builds without
+it (the turboquant fork) keep `--no-mmap` / `--mlock`. Current mainline rejects
+the old flags outright, so this is what lets those settings work on the native
+engine. `localbox launch --dry-run` shows the spelling a launch will use.
 
 The guided launcher's Customize → save-as-default flow persists its own
 `DefaultLaunch` recipe through the same store, including target, engine,
