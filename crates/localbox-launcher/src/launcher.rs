@@ -13,6 +13,7 @@ use localx_llama_core::{
     BackendSession, KvTypes, Launcher, LauncherError, LauncherVersion, Mode, ModelDef,
     ServerCapabilities, RUNTIME_LLAMACPP, TARGET_LOCALBOX,
 };
+use localx_llama_runtime::fit::fit_params_beside;
 use localx_llama_runtime::help::read_help_output;
 use localx_llama_runtime::is_port_free;
 use localx_llama_runtime::server::server_exe_name;
@@ -532,6 +533,14 @@ impl Launcher for LlamaLauncher {
         found
     }
 
+    fn fit_params_binary(&self, mode: Mode) -> Option<PathBuf> {
+        // The fitter ships in the same release archive as the server, so it
+        // matches that build's allocator.
+        self.server_binary(mode, true)
+            .ok()
+            .and_then(|server| fit_params_beside(&server))
+    }
+
     fn bench_binary(&self, _non_interactive: bool) -> Option<PathBuf> {
         let exe = if cfg!(windows) {
             "llama-bench.exe"
@@ -676,6 +685,30 @@ mod tests {
 
     fn launcher(dir: &Path) -> LlamaLauncher {
         LlamaLauncher::new(catalog_with_root(dir), "1.2.1", dir.join("home"), 24)
+    }
+
+    #[test]
+    fn the_fitter_is_the_one_beside_the_installed_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let models: Map<String, Value> = serde_json::from_str(r#"{ "Models": {} }"#).unwrap();
+        let cat = Catalog::from_layers(&Map::new(), &models, &Map::new()).unwrap();
+        let launcher = LlamaLauncher::new(cat, "1.2.1", dir.path(), 24);
+        assert_eq!(
+            launcher.fit_params_binary(Mode::Native),
+            None,
+            "nothing installed"
+        );
+        let root = launcher.install_root(Mode::Native);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(server_exe_name()), b"").unwrap();
+        assert_eq!(
+            launcher.fit_params_binary(Mode::Native),
+            None,
+            "server without a fitter"
+        );
+        let fitter = root.join(localx_llama_runtime::fit::fit_params_exe_name());
+        std::fs::write(&fitter, b"").unwrap();
+        assert_eq!(launcher.fit_params_binary(Mode::Native), Some(fitter));
     }
 
     #[test]

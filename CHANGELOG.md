@@ -4,6 +4,11 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The launcher library exposes each build's `llama-fit-params`.** LocalBench's
+  tuner asks llama.cpp's own memory fitter where a model fits instead of finding
+  out by starting servers; the fitter is the one shipped beside the resolved
+  `llama-server`, so it matches that build's allocator.
+
 - **`NoMmap` and `Mlock` work on the native engine again.** Current mainline
   llama.cpp replaced `--no-mmap` / `--mlock` with `--load-mode` and rejects the
   old flags with `invalid argument`, so a native launch or tune carrying either
