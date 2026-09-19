@@ -241,7 +241,13 @@ pub fn plan_launch(
         launcher.fit_target_mib_setting(),
         [vision_module.as_deref(), draft_module.as_deref()],
     );
-    let argv = build_llama_server_args(
+    if request.keep_thinking {
+        params.thinking_policy = Some("keep".to_string());
+    }
+    let omit_default_gpu_layers = params.n_gpu_layers.is_none()
+        && def.n_gpu_layers.is_none()
+        && fit_is_enabled(&def.extra_args, &params.extra_args);
+    let mut argv = build_llama_server_args(
         &def,
         &context_key,
         request.mode,
@@ -250,6 +256,11 @@ pub fn plan_launch(
         &params,
     )
     .map_err(|e| LauncherError::Unavailable(e.to_string()))?;
+    if omit_default_gpu_layers {
+        if let Some(index) = argv.iter().position(|arg| arg == "-ngl") {
+            argv.drain(index..index + 2);
+        }
+    }
 
     // `--keep-thinking` routes the agent straight at the server: the no-think
     // proxy strips `<think>` unconditionally, so keeping thinking means bypassing
@@ -267,8 +278,13 @@ pub fn plan_launch(
     let proxy = EnsureProxyConfig::new(proxy_port, server_port);
 
     let max_output_tokens = launcher.max_output_tokens();
+    let provider_kind = if request.keep_thinking {
+        ProviderKind::OpenaiCompatible
+    } else {
+        ProviderKind::Anthropic
+    };
     let provider_toml = localpilot_config_toml(&LocalPilotConfigInputs {
-        provider_kind: ProviderKind::Anthropic,
+        provider_kind,
         base_url: base_url.clone(),
         model: request.key.clone(),
         // Vision is declared to the agent only when the projector resolved.
@@ -302,6 +318,19 @@ pub fn plan_launch(
         env_plan,
         notes,
     })
+}
+
+fn fit_is_enabled(model_args: &[String], call_args: &[String]) -> bool {
+    let mut enabled = false;
+    let mut args = model_args.iter().chain(call_args);
+    while let Some(arg) = args.next() {
+        if matches!(arg.as_str(), "-fit" | "--fit") {
+            enabled = args
+                .next()
+                .is_some_and(|value| value.eq_ignore_ascii_case("on"));
+        }
+    }
+    enabled
 }
 
 /// What to do after a failed smoke test: a non-native mode retries the whole
@@ -355,6 +384,13 @@ mod tests {
                     "VisionModule": "mmproj-Q8_0.gguf",
                     "DraftModule": "bonsai-dspark-Q4_1.gguf",
                     "Contexts": { "": 65536 }
+                },
+                "fit": {
+                    "Root": "fit",
+                    "Repo": "owner/fit",
+                    "File": "fit.gguf",
+                    "Contexts": { "": 65536 },
+                    "ExtraArgs": ["-fit", "on", "-fitt", "1536"]
                 }
             }
         }"#,
@@ -514,6 +550,21 @@ mod tests {
     }
 
     #[test]
+    fn fit_can_adjust_the_synthetic_gpu_layer_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher(dir.path());
+        let request = LaunchRequest::new("fit", "", Mode::Native);
+        let plan = plan_launch(&launcher, &request).expect("fit plan");
+        assert!(plan.argv.windows(2).any(|args| args == ["-fit", "on"]));
+        assert!(!plan.argv.iter().any(|arg| arg == "-ngl"));
+
+        let mut explicit = LaunchRequest::new("fit", "", Mode::Native);
+        explicit.params.n_gpu_layers = Some(40);
+        let plan = plan_launch(&launcher, &explicit).expect("explicit GPU layers");
+        assert!(plan.argv.windows(2).any(|args| args == ["-ngl", "40"]));
+    }
+
+    #[test]
     fn planning_uses_the_configured_proxy_port_or_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let configured = launcher_with_proxy_port(dir.path(), Some(11_500));
@@ -636,6 +687,9 @@ mod tests {
         assert!(proxied
             .base_url
             .ends_with(&format!(":{}", proxied.proxy.listen_port)));
+        let reasoning_idx = proxied.argv.iter().position(|a| a == "--reasoning").unwrap();
+        assert_eq!(proxied.argv[reasoning_idx + 1], "off");
+        assert!(proxied.provider_toml.contains("kind = \"anthropic\""));
 
         // keep_thinking: the endpoint is the server port, so the stripping proxy
         // is bypassed (uses_proxy will be false at launch).
@@ -649,6 +703,9 @@ mod tests {
         assert!(!direct
             .base_url
             .ends_with(&format!(":{}", direct.proxy.listen_port)));
+        let reasoning_idx = direct.argv.iter().position(|a| a == "--reasoning").unwrap();
+        assert_eq!(direct.argv[reasoning_idx + 1], "on");
+        assert!(direct.provider_toml.contains("kind = \"openai-compatible\""));
     }
 
     #[test]
