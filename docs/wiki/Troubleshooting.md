@@ -25,7 +25,22 @@ Install the CLI: `cargo install localpilot`.
 
 Check the guided launcher — quants are tagged fits / tight / over against
 your VRAM. Pick a smaller quant or a smaller context, or override detection
-with the `VRAMGB` key in `~/.local-llm/settings.json`.
+with the `VRAMGB` key in `~/.local-llm/settings.json`. On an engine build with
+`--fit`, a model without its own placement is placed by llama.cpp itself;
+`LlamaCppFitTargetMiB` sets how much VRAM it leaves free. `localbench findbest`
+finds the fastest placement that fits and saves it for the next launch.
+
+## A model starts but runs far slower than it should (Windows)
+
+The GPU driver ran out of VRAM and moved part of it into system memory instead
+of failing. Put more of the model on the CPU (a higher `NCpuMoe`, a lower
+`NGpuLayers`), use a smaller context, or raise `LlamaCppFitTargetMiB`.
+
+## `CUDA error: shared object initialization failed` at startup
+
+The host ran out of commit (RAM plus page file), usually with `NoMmap` on a
+large MoE model or while another model loads on the same GPU. Enlarge the
+Windows page file, stop the other model, or drop `NoMmap` for that model.
 
 ## Roll back to the Ollama era
 

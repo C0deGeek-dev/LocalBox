@@ -25,6 +25,19 @@ Part of the [LocalBox documentation](README.md).
   `cargo install localpilot`.
 - **Start over on model files** → `localbox purge` stops servers and deletes
   downloaded GGUFs; they download again on the next launch.
+- **A model starts but runs far slower than it should (Windows)** → the GPU
+  driver ran out of VRAM and quietly moved part of it into system memory
+  instead of failing; the server works at a fraction of its speed. Put more of
+  the model on the CPU (a higher `NCpuMoe`, a lower `NGpuLayers`), use a
+  smaller context or KV cache type, or raise `LlamaCppFitTargetMiB` so
+  llama.cpp's own placement keeps more VRAM free. `localbench findbest` finds
+  the fastest placement that fits and saves it as the model's AutoBest profile.
+- **`CUDA error: shared object initialization failed` at startup** → the host
+  ran out of *commit* (RAM plus page file), not VRAM. It happens most with
+  `NoMmap` (`--load-mode none`) on a large MoE model, whose CPU-side experts
+  are copied into RAM, and when another model is loading on the same GPU.
+  Enlarge the Windows page file (a fixed size of 32 GB or more on a 64 GB
+  machine), stop the other model, or drop `NoMmap` for that model.
 - **Local model replies stop mid-sentence or mid-word, with no error** → the
   agent's completion hit `LocalModelMaxOutputTokens` (default 16384), a
   client-side output cap, not a crash. Raise it in `~/.local-llm/settings.json`
