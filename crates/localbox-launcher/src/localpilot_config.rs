@@ -105,6 +105,9 @@ pub fn localpilot_config_toml(inputs: &LocalPilotConfigInputs) -> String {
         // The provider window, on the provider — not a harness key.
         toml.push_str(&format!("context_window = {}\n", inputs.context_tokens));
     }
+    if inputs.provider_kind == ProviderKind::OpenaiCompatible {
+        toml.push_str("constrained_decoding = false\n");
+    }
     if inputs.bypass {
         toml.push_str("\n[permissions]\nprofile = \"bypass\"\n");
     }
