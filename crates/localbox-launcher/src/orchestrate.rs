@@ -687,7 +687,11 @@ mod tests {
         assert!(proxied
             .base_url
             .ends_with(&format!(":{}", proxied.proxy.listen_port)));
-        let reasoning_idx = proxied.argv.iter().position(|a| a == "--reasoning").unwrap();
+        let reasoning_idx = proxied
+            .argv
+            .iter()
+            .position(|a| a == "--reasoning")
+            .unwrap();
         assert_eq!(proxied.argv[reasoning_idx + 1], "off");
         assert!(proxied.provider_toml.contains("kind = \"anthropic\""));
 
@@ -705,7 +709,9 @@ mod tests {
             .ends_with(&format!(":{}", direct.proxy.listen_port)));
         let reasoning_idx = direct.argv.iter().position(|a| a == "--reasoning").unwrap();
         assert_eq!(direct.argv[reasoning_idx + 1], "on");
-        assert!(direct.provider_toml.contains("kind = \"openai-compatible\""));
+        assert!(direct
+            .provider_toml
+            .contains("kind = \"openai-compatible\""));
     }
 
     #[test]
