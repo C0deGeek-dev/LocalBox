@@ -551,30 +551,6 @@ impl Launcher for LlamaLauncher {
             .and_then(|server| fit_params_beside(&server))
     }
 
-    fn bench_binary(&self, _non_interactive: bool) -> Option<PathBuf> {
-        let exe = if cfg!(windows) {
-            "llama-bench.exe"
-        } else {
-            "llama-bench"
-        };
-        let root = self.install_root(Mode::Native);
-        [root.join(exe), root.join("bin").join(exe)]
-            .into_iter()
-            .find(|p| p.is_file())
-    }
-
-    fn perplexity_binary(&self, _non_interactive: bool, mode: Mode) -> Option<PathBuf> {
-        let exe = if cfg!(windows) {
-            "llama-perplexity.exe"
-        } else {
-            "llama-perplexity"
-        };
-        let root = self.install_root(mode);
-        [root.join(exe), root.join("bin").join(exe)]
-            .into_iter()
-            .find(|p| p.is_file())
-    }
-
     fn install_root(&self, mode: Mode) -> PathBuf {
         let dir = match mode {
             Mode::Native => "llama-cpp",
@@ -638,10 +614,6 @@ impl Launcher for LlamaLauncher {
         if let Ok(mut slot) = self.session.lock() {
             *slot = Some(session.clone());
         }
-    }
-
-    fn expand_path(&self, path: &str) -> PathBuf {
-        expand_path_with_home(path, &self.home)
     }
 }
 
