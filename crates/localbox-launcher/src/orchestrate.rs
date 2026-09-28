@@ -127,8 +127,8 @@ pub struct LaunchPlan {
     pub context_tokens: u32,
     /// The GGUF's expected on-disk path (no download happened).
     pub gguf_path: PathBuf,
-    /// Whether the GGUF is already on disk (a live launch downloads first
-    /// when false; DryRun just reports it).
+    /// Whether the GGUF — every shard of a split one — is already on disk (a
+    /// live launch downloads first when false; DryRun just reports it).
     pub gguf_downloaded: bool,
     /// The resolved or planned projector when vision was requested.
     pub vision_module: Option<PathBuf>,
@@ -188,7 +188,13 @@ pub fn plan_launch(
     let context_tokens = launcher.context_value(&def, &context_key).unwrap_or(0);
 
     let gguf_path = launcher.expected_gguf_path(&def, request.quant.as_deref())?;
-    let gguf_downloaded = gguf_path.is_file();
+    // The server opens every shard of a split GGUF from the primary, so the
+    // model is on disk only when all of them are: a finished first shard with
+    // the rest missing would otherwise launch straight into a load error.
+    let gguf_downloaded =
+        localx_llama_core::quant::shard_files_from_primary(&gguf_path.to_string_lossy())
+            .iter()
+            .all(|shard| std::path::Path::new(shard).is_file());
 
     let mut notes = Vec::new();
     let vision_module = if request.use_vision {
@@ -391,6 +397,13 @@ mod tests {
                     "File": "fit.gguf",
                     "Contexts": { "": 65536 },
                     "ExtraArgs": ["-fit", "on", "-fitt", "1536"]
+                },
+                "split": {
+                    "Root": "split",
+                    "Repo": "owner/split",
+                    "Quants": { "iq1m": "IQ1_M/Split-IQ1_M-00001-of-00002.gguf" },
+                    "Quant": "iq1m",
+                    "Contexts": { "": 32768 }
                 }
             }
         }"#,
@@ -518,6 +531,26 @@ mod tests {
             argv.iter().any(|a| a == "--no-mmap"),
             "nothing installed: nothing to ask"
         );
+    }
+
+    #[test]
+    fn a_split_gguf_counts_as_downloaded_only_with_every_shard_on_disk() {
+        // The first shard finished and the second never started: the plan
+        // must ask for a download instead of launching into a load error.
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher(dir.path());
+        let request = LaunchRequest::new("split", "", Mode::Native);
+        let folder = dir.path().join("split").join("IQ1_M");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("Split-IQ1_M-00001-of-00002.gguf"), b"one").unwrap();
+
+        let plan = plan_launch(&launcher, &request).expect("plan");
+        assert!(plan.gguf_path.ends_with("Split-IQ1_M-00001-of-00002.gguf"));
+        assert!(!plan.gguf_downloaded, "one of two shards is not the model");
+
+        std::fs::write(folder.join("Split-IQ1_M-00002-of-00002.gguf"), b"two").unwrap();
+        let plan = plan_launch(&launcher, &request).expect("plan");
+        assert!(plan.gguf_downloaded);
     }
 
     #[test]

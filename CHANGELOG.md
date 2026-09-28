@@ -4,6 +4,12 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **A split model with a missing shard is downloaded before it launches.**
+  A launch counted a split GGUF as on disk once its first shard was, so a
+  model whose later shard never finished started straight into a
+  `failed to load GGUF split` error. The launch plan now checks every shard,
+  and a missing one is fetched first like any missing GGUF.
+
 - **An untuned launch no longer overflows VRAM: llama.cpp places it.** Every
   launch passed `-ngl 999`, which switched off llama.cpp's own `--fit` — so a
   model larger than the card, launched without a tune, simply ran out of
