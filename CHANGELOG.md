@@ -10,6 +10,14 @@ Past-tense record of shipped changes.
   `failed to load GGUF split` error. The launch plan now checks every shard,
   and a missing one is fetched first like any missing GGUF.
 
+- **Hugging Face imports discover vision projectors.** A root-level
+  `mmproj*.gguf` is registered automatically when there is one; multiple
+  projectors get a guided chooser or an explicit `--mmproj <filename>` CLI
+  selection. Existing selections survive re-import, and older quant entries
+  gain a missing `VisionModule`. Vision stays opt-in: the projector downloads
+  and loads only when enabled. Repository downloads now honor `--vision` and
+  `--draft`, using the same downloader as catalog-key downloads.
+
 - **An untuned launch no longer overflows VRAM: llama.cpp places it.** Every
   launch passed `-ngl 999`, which switched off llama.cpp's own `--fit` — so a
   model larger than the card, launched without a tune, simply ran out of

@@ -834,19 +834,69 @@ fn add_hf_model_flow(chooser: &mut dyn Chooser, home: &Path, vram: i64) -> bool 
     let selected_key =
         (choice < discovery.candidates.len()).then(|| discovery.candidates[choice].key.clone());
     let default_key = selected_key.as_deref().unwrap_or(&recommended_key);
-    let outcome = match discovery.register(&catalog_dir(home), default_key) {
-        Ok(outcome) => outcome,
+    let directory = catalog_dir(home);
+    let configured = match discovery.configured_projector(&directory) {
+        Ok(projector) => projector,
         Err(error) => {
             chooser.announce_error(&plain_warning("add model", &error));
             return false;
         }
     };
+    let projector = if let Some(configured) = configured {
+        Some(configured)
+    } else if discovery.projectors.len() > 1 {
+        let mut projector_rows: Vec<MenuRow> = discovery
+            .projectors
+            .iter()
+            .map(|file| {
+                let size = file
+                    .size
+                    .map(|bytes| {
+                        format!(" ({:.2} GiB)", localbox_launcher::catalog_entry::gib(bytes))
+                    })
+                    .unwrap_or_default();
+                MenuRow::plain(format!("{}{size}", file.rfilename))
+            })
+            .collect();
+        projector_rows.push(MenuRow::plain("[Skip vision]"));
+        projector_rows.push(MenuRow::plain("[Cancel — make no changes]"));
+        chooser.set_panel(Some(("Vision projector".to_string(),
+            "Choose the projector for this model. It is saved now and downloaded from this Hugging Face repo only when Images (vision) is enabled.".to_string())));
+        match chooser.choose("Choose a vision projector", &projector_rows, 0) {
+            Some(index) if index < discovery.projectors.len() => {
+                Some(discovery.projectors[index].rfilename.clone())
+            }
+            Some(index) if index == discovery.projectors.len() => None,
+            _ => return false,
+        }
+    } else {
+        discovery
+            .projectors
+            .first()
+            .map(|file| file.rfilename.clone())
+    };
+    if let Some(projector) = &projector {
+        chooser.notice(&format!(
+            "Vision projector: {projector} (downloads when vision is enabled)."
+        ));
+    }
+    let outcome =
+        match discovery.register_with_projector(&directory, default_key, projector.as_deref()) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                chooser.announce_error(&plain_warning("add model", &error));
+                return false;
+            }
+        };
     let key = outcome.key().to_string();
     let catalog_message = match &outcome {
         CatalogInsert::Inserted(_) => format!(
             "Registered '{key}' with all {} quant variants.",
             discovery.candidates.len()
         ),
+        CatalogInsert::Updated { added_quants, .. } if added_quants.is_empty() => {
+            format!("Updated vision projector for '{key}'.")
+        }
         CatalogInsert::Updated { added_quants, .. } => format!(
             "Updated '{key}' with {} missing quant variants.",
             added_quants.len()
@@ -1991,7 +2041,7 @@ pub enum CatalogInsert {
     /// A new entry was written under this key.
     Inserted(String),
     /// An existing same-repository entry gained these previously missing
-    /// quant keys; every pre-existing value was preserved.
+    /// quant keys and/or a missing vision projector; existing values are preserved.
     Updated {
         key: String,
         added_quants: Vec<String>,
@@ -2026,8 +2076,8 @@ fn unique_model_key(models: &serde_json::Map<String, serde_json::Value>, hint: &
 
 /// Install a synthesised catalog entry into the user's `llm-models.json` under
 /// `catalog_dir`, additively. An entry whose `Repo` is already present is left
-/// enriched with quant keys it does not yet contain; otherwise the entry is
-/// written under a collision-free key, with its `Root` rewritten to match.
+/// enriched with quant keys and a vision projector it does not yet contain;
+/// otherwise the entry is written under a collision-free key, with its `Root` rewritten to match.
 /// Same-repository enrichment preserves every existing field and quant value
 /// verbatim and writes only when a key is missing. A valid legacy `File`-only
 /// entry remains untouched rather than silently changing its resolution
@@ -2097,7 +2147,14 @@ pub fn install_catalog_model(
                     added_quants.push(quant);
                 }
             }
-            if added_quants.is_empty() {
+            // Backfill discovery for older imports without replacing a user's
+            // existing selection (including an explicit empty/null value).
+            let added_projector = !existing_object.contains_key("VisionModule")
+                && entry.get("VisionModule").is_some();
+            if added_projector {
+                existing_object.insert("VisionModule".to_string(), entry["VisionModule"].clone());
+            }
+            if added_quants.is_empty() && !added_projector {
                 return Ok(CatalogInsert::AlreadyPresent(existing_key));
             }
 

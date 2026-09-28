@@ -44,6 +44,7 @@ Usage:
   localbox info [model]               list the configured models, or one in detail
   localbox models [--json]            list launchable models and tuned-profile state
   localbox download <model|hf-repo> [--quant <key>] [--vision] [--draft]
+                    [--mmproj <filename>]
                                       fetch a model's files without starting it
                                       (the GGUF; --vision/--draft add the
                                       catalog's projector/draft model); resumable.
@@ -608,8 +609,11 @@ fn cmd_download(args: &[String]) -> Result<(), String> {
     // A name the catalog does not know may still be a Hugging Face repo id: fetch
     // its listing, write a catalog entry, and download — the from-HF install path.
     let Some(key) = launcher.resolve_model_key(model) else {
-        return download_from_hf(model, quant, &home);
+        return download_from_hf(model, quant, &home, args);
     };
+    if has_flag(args, "--mmproj") {
+        return Err("--mmproj selects a projector during Hugging Face import; for a catalog key edit VisionModule instead".to_string());
+    }
     let kinds = download_kinds_for_flags(has_flag(args, "--vision"), has_flag(args, "--draft"));
 
     let targets = launcher
@@ -648,6 +652,7 @@ fn download_from_hf(
     model: &str,
     quant: Option<&str>,
     home: &std::path::Path,
+    args: &[String],
 ) -> Result<(), String> {
     use localbox::fetch::ProgressPrinter;
     use localbox::guided::CatalogInsert;
@@ -663,7 +668,26 @@ fn download_from_hf(
     })?;
     let discovery = discover_hf_repo(hf)?;
     let chosen = discovery.select(quant)?;
-    let outcome = discovery.register(&catalog_dir(home), &chosen.key)?;
+    let directory = catalog_dir(home);
+    let configured = discovery.configured_projector(&directory)?;
+    let requested = flag_value(args, "--mmproj").filter(|value| !value.starts_with("--"));
+    if has_flag(args, "--mmproj") && requested.is_none() {
+        return Err("--mmproj requires a projector filename".to_string());
+    }
+    if let (Some(existing), Some(requested)) = (configured.as_deref(), requested) {
+        if existing != requested {
+            return Err(format!("this repo already uses vision projector '{existing}'; change VisionModule in the catalog to replace it"));
+        }
+    }
+    let projector = match configured.as_deref() {
+        Some(existing) => Some(existing),
+        None => discovery.select_projector(requested)?,
+    };
+    if let Some(projector) = projector {
+        println!("Vision projector: {projector} (download with --vision).");
+    }
+    let outcome = discovery.register_with_projector(&directory, &chosen.key, projector)?;
+    let kinds = download_kinds_for_flags(has_flag(args, "--vision"), has_flag(args, "--draft"));
     match &outcome {
         CatalogInsert::Inserted(key) => {
             println!(
@@ -671,6 +695,9 @@ fn download_from_hf(
                 discovery.hf.repo_id(),
                 discovery.candidates.len()
             );
+        }
+        CatalogInsert::Updated { key, added_quants } if added_quants.is_empty() => {
+            println!("Updated vision projector for '{key}'.");
         }
         CatalogInsert::Updated { key, added_quants } => {
             println!(
@@ -710,12 +737,11 @@ fn download_from_hf(
     let mut printer = ProgressPrinter::default();
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let fetched = runtime
-        .block_on(launcher.fetch_model_files(
-            key,
-            Some(&chosen.key),
-            &[DownloadKind::Gguf],
-            &mut |progress| printer.report(progress),
-        ))
+        .block_on(
+            launcher.fetch_model_files(key, Some(&chosen.key), &kinds, &mut |progress| {
+                printer.report(progress)
+            }),
+        )
         .map_err(|e| e.to_string())?;
     for path in fetched {
         println!("ready: {}", path.display());

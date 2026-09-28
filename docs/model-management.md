@@ -102,8 +102,19 @@ smallest tight or over-budget option when necessary. You remain in control:
   the recommendation as a new entry's default, but downloads no model files;
 - cancelling or going back writes nothing and downloads nothing.
 
-For a repository already in the catalog, registration adds only missing quant
-keys and preserves its existing fields and default. After a successful add,
+Root-level `mmproj*.gguf` files are discovered separately from model quants.
+A single projector is registered automatically as `VisionModule`. With multiple
+projectors, choose a filename (and see its size), skip vision, or cancel before
+anything is registered. An existing configured projector is reused.
+
+Vision stays opt-in: adding a model downloads only its selected quant. Enable
+**Images (vision)** when launching to download the saved projector from the same
+Hugging Face repository and load it with the model. Register-only downloads
+neither model nor projector; a dry-run only previews the projector path.
+
+For a repository already in the catalog, registration adds missing quant keys
+and a missing `VisionModule`, preserving existing fields and the default.
+Legacy entries with only `File` remain unchanged. After a successful add,
 LocalBox returns to the all-tiers model list so the new experimental entry is
 visible.
 
@@ -127,6 +138,20 @@ sensible default (`q4km`, else the middle by size). It then:
    GGUF root, resumably, through the same path a later catalog-key download or
    launch uses. A selected multi-part quant downloads every one of its shards.
 
+A single root-level projector is saved automatically but fetched only with
+`--vision`. If several exist, the command lists their filenames and asks you to
+select one with `--mmproj <filename>` (or use the guided Add action). An ambiguous
+or invalid selection stops before catalog changes or model transfers:
+
+```text
+localbox download owner/Model-GGUF --mmproj mmproj-F16.gguf --vision
+```
+
+`--mmproj` selects during repository import; for an existing catalog key, edit
+`VisionModule` to change the selection. Re-import preserves the saved choice.
+The repository path now honors `--vision` and `--draft` just like catalog-key
+downloads; a draft still needs to be configured separately.
+
 This command is explicitly download intent, so it starts the selected transfer
 without a second prompt. Use the guided Add Model action when you want to inspect
 the choices or register the catalog entry without downloading weights.
@@ -137,7 +162,8 @@ is an ordinary catalog entry: launch it by its new key (shown in the output), an
 it appears in `localbox info` / `localbox models` like any other. To fetch another
 registered variant later, use `localbox download <catalog-key> --quant <key>`.
 Re-running the repo refreshes its listing and adds any newly discovered quant
-keys. Existing fields, quant mappings, and the default quant remain untouched;
+keys and a missing vision projector. Existing fields, quant mappings, and the
+default quant remain untouched;
 already-present files are skipped and partial downloads resume.
 
 Two limits today: a **gated or private** repo (one that needs a Hugging Face

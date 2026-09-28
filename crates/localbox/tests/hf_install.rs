@@ -421,3 +421,219 @@ fn an_unknown_name_that_is_not_a_repo_still_errors_clearly() {
         "expected the improved error: {err}"
     );
 }
+
+const VISION_SINGLE: &str = r#"{"siblings":[
+    {"rfilename":"tiny-Q4_K_M.gguf","size":8},
+    {"rfilename":"mmproj-F16.gguf","size":4}
+]}"#;
+const VISION_MULTIPLE: &str = r#"{"siblings":[
+    {"rfilename":"tiny-Q4_K_M.gguf","size":8},
+    {"rfilename":"mmproj-F16.gguf","size":4},
+    {"rfilename":"mmproj-Q8_0.gguf","size":2}
+]}"#;
+
+fn vision_files() -> Vec<(String, Vec<u8>)> {
+    vec![
+        ("tiny-Q4_K_M.gguf".to_string(), b"q4-tiny!".to_vec()),
+        ("mmproj-F16.gguf".to_string(), b"proj".to_vec()),
+        ("mmproj-Q8_0.gguf".to_string(), b"q8".to_vec()),
+    ]
+}
+
+fn read_catalog(directory: &Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(directory.join("llm-models.json")).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn a_single_projector_is_registered_but_downloads_only_with_vision() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let directory = configure_home(home);
+    seed_empty_catalog(&directory);
+    let hub = spawn_hub(VISION_SINGLE, vision_files());
+    let result = run_localbox(home, &hub, &["download", "owner/tiny"]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let catalog = read_catalog(&directory);
+    assert_eq!(catalog["Models"]["tiny"]["VisionModule"], "mmproj-F16.gguf");
+    assert_eq!(
+        catalog["Models"]["tiny"]["Quants"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(find_file(&home.join("gguf"), "mmproj-F16.gguf").is_none());
+
+    // Preview resolves the stored projector but does not acquire it.
+    let preview = run_localbox(
+        home,
+        &hub,
+        &["launch", "tiny", "--vision", "--dry-run", "--no-auto-best"],
+    );
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let output = String::from_utf8_lossy(&preview.stdout);
+    assert!(
+        output.contains("--mmproj") && output.contains("mmproj-F16.gguf"),
+        "{output}"
+    );
+    assert!(find_file(&home.join("gguf"), "mmproj-F16.gguf").is_none());
+    let text = run_localbox(
+        home,
+        &hub,
+        &["launch", "tiny", "--dry-run", "--no-auto-best"],
+    );
+    assert!(text.status.success());
+    assert!(!String::from_utf8_lossy(&text.stdout).contains("--mmproj"));
+
+    let enabled = run_localbox(home, &hub, &["download", "tiny", "--vision"]);
+    assert!(
+        enabled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enabled.stderr)
+    );
+    assert_eq!(
+        std::fs::read(find_file(&home.join("gguf"), "mmproj-F16.gguf").unwrap()).unwrap(),
+        b"proj"
+    );
+}
+
+#[test]
+fn cli_ambiguous_projectors_require_a_choice_before_any_write_or_transfer() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let directory = configure_home(home);
+    let original = seed_empty_catalog(&directory);
+    let hub = spawn_hub(VISION_MULTIPLE, vision_files());
+    for extra in [
+        vec![],
+        vec!["--mmproj", "missing.gguf"],
+        vec!["--mmproj", "--vision"],
+    ] {
+        let mut args = vec!["download", "owner/tiny"];
+        args.extend(extra);
+        let result = run_localbox(home, &hub, &args);
+        assert!(!result.status.success());
+        assert_eq!(
+            std::fs::read_to_string(directory.join("llm-models.json")).unwrap(),
+            original
+        );
+        assert!(!home.join("gguf").exists());
+    }
+    let selected = run_localbox(
+        home,
+        &hub,
+        &[
+            "download",
+            "owner/tiny",
+            "--mmproj",
+            "mmproj-Q8_0.gguf",
+            "--vision",
+        ],
+    );
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(
+        read_catalog(&directory)["Models"]["tiny"]["VisionModule"],
+        "mmproj-Q8_0.gguf"
+    );
+    assert_eq!(
+        std::fs::read(find_file(&home.join("gguf"), "mmproj-Q8_0.gguf").unwrap()).unwrap(),
+        b"q8"
+    );
+    assert!(find_file(&home.join("gguf"), "mmproj-F16.gguf").is_none());
+    // Re-import reuses the saved choice without requiring --mmproj again.
+    let repeat = run_localbox(home, &hub, &["download", "owner/tiny", "--vision"]);
+    assert!(
+        repeat.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repeat.stderr)
+    );
+    assert_eq!(
+        read_catalog(&directory)["Models"]["tiny"]["VisionModule"],
+        "mmproj-Q8_0.gguf"
+    );
+}
+
+#[test]
+fn guided_projector_choice_registers_without_transfer_and_cancel_is_non_committing() {
+    // One model quant: 2 = register only. Two sorted projectors: 2 = Q8.
+    for (input, expected) in [
+        ("1\nowner/tiny\n2\n2\n\n", Some("mmproj-Q8_0.gguf")),
+        ("1\nowner/tiny\n2\n3\n\n", None),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = configure_home(temp.path());
+        seed_empty_catalog(&directory);
+        let hub = spawn_hub(VISION_MULTIPLE, vision_files());
+        let result = run_guided(temp.path(), &hub, input);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(String::from_utf8_lossy(&result.stdout).contains("Choose a vision projector"));
+        let catalog = read_catalog(&directory);
+        assert_eq!(catalog["Models"]["tiny"]["VisionModule"].as_str(), expected);
+        assert_eq!(
+            catalog["Models"]["tiny"]["Quants"]
+                .as_object()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(!temp.path().join("gguf").exists());
+    }
+    for cancel in ["\n", "4\n"] {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = configure_home(temp.path());
+        let original = seed_empty_catalog(&directory);
+        let hub = spawn_hub(VISION_MULTIPLE, vision_files());
+        let result = run_guided(temp.path(), &hub, &format!("1\nowner/tiny\n1\n{cancel}"));
+        assert!(result.status.success());
+        assert_eq!(
+            std::fs::read_to_string(directory.join("llm-models.json")).unwrap(),
+            original
+        );
+        assert!(!temp.path().join("gguf").exists());
+    }
+}
+
+#[test]
+fn reimport_backfills_missing_vision_but_preserves_existing_settings() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let directory = configure_home(home);
+    let original = serde_json::json!({"Models": {"custom": {
+        "Repo": "owner/tiny", "Root": "custom-root", "Quant": "q4km",
+        "Quants": {"q4km": {"File": "tiny-Q4_K_M.gguf", "Note": "mine"}},
+        "Contexts": {"": 4096}, "Custom": true
+    }}});
+    std::fs::write(directory.join("llm-models.json"), original.to_string()).unwrap();
+    let hub = spawn_hub(VISION_SINGLE, vision_files());
+    let result = run_localbox(home, &hub, &["download", "owner/tiny"]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let mut expected = original;
+    expected["Models"]["custom"]["VisionModule"] = serde_json::json!("mmproj-F16.gguf");
+    assert_eq!(read_catalog(&directory), expected);
+    // A configured choice survives a changed repository listing.
+    let changed_hub = spawn_hub(VISION_MULTIPLE, vision_files());
+    let repeat = run_localbox(home, &changed_hub, &["download", "owner/tiny"]);
+    assert!(repeat.status.success());
+    assert_eq!(read_catalog(&directory), expected);
+}

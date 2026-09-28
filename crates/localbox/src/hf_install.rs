@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use localbox_launcher::hf_meta::{self, HfRef};
+use localbox_launcher::hf_meta::{self, HfGgufFile, HfRef};
 use localx_llama_core::quant::{self, QuantCandidate, QuantFile};
 use localx_llama_core::vram::{quant_fit_class, FitClass};
 
@@ -21,11 +21,70 @@ const GIB: f64 = 1_073_741_824.0;
 pub struct HfDiscovery {
     pub hf: HfRef,
     pub candidates: Vec<QuantCandidate>,
+    /// Root-level multimodal projectors, kept separate from model quants.
+    pub projectors: Vec<HfGgufFile>,
     /// Bounded plain text from remote metadata, when the Hub supplied one.
     pub description: Option<String>,
 }
 
 impl HfDiscovery {
+    /// Select the only projector automatically; ambiguous repositories require
+    /// an explicit filename rather than a guessed precision or model pairing.
+    ///
+    /// # Errors
+    /// An unknown filename or an ambiguous projector listing.
+    pub fn select_projector(&self, requested: Option<&str>) -> Result<Option<&str>, String> {
+        if let Some(requested) = requested {
+            return self
+                .projectors
+                .iter()
+                .find(|file| file.rfilename == requested)
+                .map(|file| Some(file.rfilename.as_str()))
+                .ok_or_else(|| {
+                    format!(
+                        "unknown vision projector '{requested}'; available: {}",
+                        self.projectors
+                            .iter()
+                            .map(|file| file.rfilename.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                });
+        }
+        match self.projectors.as_slice() {
+            [] => Ok(None),
+            [file] => Ok(Some(file.rfilename.as_str())),
+            files => Err(format!(
+                "multiple vision projectors available: {}. Choose one with --mmproj <filename>, or use Add a Hugging Face model",
+                files.iter().map(|file| file.rfilename.as_str()).collect::<Vec<_>>().join(", ")
+            )),
+        }
+    }
+
+    /// Reuse a user's configured projector when refreshing the same repository.
+    ///
+    /// # Errors
+    /// An unreadable or malformed catalog.
+    pub fn configured_projector(&self, catalog_dir: &Path) -> Result<Option<String>, String> {
+        let path = catalog_dir.join("llm-models.json");
+        let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let catalog: serde_json::Value =
+            serde_json::from_str(raw.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+        let repo_id = self.hf.repo_id();
+        Ok(catalog
+            .get("Models")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|models| {
+                models.values().find(|model| {
+                    model.get("Repo").and_then(serde_json::Value::as_str) == Some(repo_id.as_str())
+                })
+            })
+            .and_then(|model| model.get("VisionModule"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_string))
+    }
+
     /// Resolve an explicit quant spelling, or the established repository
     /// default when `requested` is absent.
     ///
@@ -49,15 +108,46 @@ impl HfDiscovery {
         catalog_dir: &Path,
         selected_key: &str,
     ) -> Result<CatalogInsert, String> {
+        let configured = self.configured_projector(catalog_dir)?;
+        let projector = match configured.as_deref() {
+            Some(projector) => Some(projector),
+            None => self.select_projector(None)?,
+        };
+        self.register_with_projector(catalog_dir, selected_key, projector)
+    }
+
+    /// Register the chosen projector together with the model, without downloads.
+    /// Existing catalog values always win.
+    ///
+    /// # Errors
+    /// A catalog error or an unknown quant key.
+    pub fn register_with_projector(
+        &self,
+        catalog_dir: &Path,
+        selected_key: &str,
+        projector: Option<&str>,
+    ) -> Result<CatalogInsert, String> {
         let selected = self.select(Some(selected_key))?;
-        let (key_hint, entry) = localbox_launcher::catalog_entry::synthesize_entry_with_description(
-            &self.hf,
-            &self.candidates,
-            &selected,
-            self.description.as_deref(),
-        );
+        let (key_hint, mut entry) =
+            localbox_launcher::catalog_entry::synthesize_entry_with_description(
+                &self.hf,
+                &self.candidates,
+                &selected,
+                self.description.as_deref(),
+            );
+        if let Some(projector) = projector {
+            entry["VisionModule"] = serde_json::json!(projector);
+        }
         install_catalog_model(catalog_dir, &key_hint, &entry)
     }
+}
+
+fn is_root_projector(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    !name.contains(['/', '\\', ':'])
+        && !name.chars().any(char::is_control)
+        && lower.starts_with("mmproj")
+        && lower.ends_with(".gguf")
 }
 
 /// Read and analyze every GGUF quant in one already-parsed Hugging Face repo.
@@ -71,6 +161,14 @@ pub fn discover_hf_repo(hf: HfRef) -> Result<HfDiscovery, String> {
     let info = runtime
         .block_on(hf_meta::inspect_hf_repo(&client, &hf))
         .map_err(|e| e.to_string())?;
+    let mut projectors: Vec<_> = info
+        .files
+        .iter()
+        .filter(|file| is_root_projector(&file.rfilename))
+        .cloned()
+        .collect();
+    projectors.sort_by(|a, b| a.rfilename.cmp(&b.rfilename));
+    projectors.dedup_by(|a, b| a.rfilename == b.rfilename);
     let files: Vec<QuantFile> = info
         .files
         .into_iter()
@@ -85,6 +183,7 @@ pub fn discover_hf_repo(hf: HfRef) -> Result<HfDiscovery, String> {
     Ok(HfDiscovery {
         hf,
         candidates,
+        projectors,
         description: info.description,
     })
 }
@@ -191,5 +290,51 @@ mod tests {
         let candidates = vec![candidate("q3km", None), candidate("q4km", None)];
         assert_eq!(recommend_quant(&candidates, 24).unwrap().key, "q4km");
         assert!(recommend_quant(&[], 24).is_none());
+    }
+    #[test]
+    fn root_projectors_are_safe_filenames_and_never_guessed_when_ambiguous() {
+        for name in ["mmproj.gguf", "mmproj-F16.gguf", "MMProj-Q8_0.GGUF"] {
+            assert!(is_root_projector(name));
+        }
+        for name in [
+            "sub/mmproj.gguf",
+            "../mmproj.gguf",
+            "mmproj.txt",
+            "model-Q4_K_M.gguf",
+            "mmproj:stream.gguf",
+            "mmproj\n.gguf",
+        ] {
+            assert!(!is_root_projector(name));
+        }
+        let mut discovery = HfDiscovery {
+            hf: hf_meta::parse_hf_ref("owner/tiny").unwrap(),
+            candidates: vec![candidate("q4km", Some(1.0))],
+            projectors: Vec::new(),
+            description: None,
+        };
+        assert_eq!(discovery.select_projector(None).unwrap(), None);
+        discovery.projectors.push(HfGgufFile {
+            rfilename: "mmproj-F16.gguf".to_string(),
+            size: Some(8),
+        });
+        assert_eq!(
+            discovery.select_projector(None).unwrap(),
+            Some("mmproj-F16.gguf")
+        );
+        discovery.projectors.push(HfGgufFile {
+            rfilename: "mmproj-Q8_0.gguf".to_string(),
+            size: Some(4),
+        });
+        assert!(discovery
+            .select_projector(None)
+            .unwrap_err()
+            .contains("--mmproj"));
+        assert_eq!(
+            discovery
+                .select_projector(Some("mmproj-Q8_0.gguf"))
+                .unwrap(),
+            Some("mmproj-Q8_0.gguf")
+        );
+        assert!(discovery.select_projector(Some("missing.gguf")).is_err());
     }
 }
