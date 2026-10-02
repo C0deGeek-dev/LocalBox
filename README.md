@@ -1,22 +1,9 @@
-```
-╔══════════════╗		██╗      ██████╗  ██████╗ █████╗ ██╗     ██████╗  ██████╗ ██╗  ██╗
-║ ╔═══╗        ║		██║     ██╔═══██╗██╔════╝██╔══██╗██║     ██╔══██╗██╔═══██╗╚██╗██╔╝
-║ ║███║  ████  ║║		██║     ██║   ██║██║     ███████║██║     ██████╔╝██║   ██║ ╚███╔╝
-║ ╚═══╝        ║║		██║     ██║   ██║██║     ██╔══██║██║     ██╔══██╗██║   ██║ ██╔██╗
-╚══════════════╝║		███████╗╚██████╔╝╚██████╗██║  ██║███████╗██████╔╝╚██████╔╝██╔╝ ██╗
- ╚══════════════╝		╚══════╝ ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-  Put a local LLM behind the Claude Code / LocalPilot harness
-```
+![LocalBox — Pick a model. Run it on your machine.](docs/assets/readme-banner.svg)
 
 <div align="center">
   <h1>LocalBox</h1>
-  <p><strong>Run local GGUF models through a real coding-agent harness.</strong></p>
-  <p>
-    <a href="docs/README.md">Documentation</a> ·
-    <a href="docs/install.md">Install</a> ·
-    <a href="docs/troubleshooting.md">Troubleshooting</a> ·
-    <a href="https://c0degeek-dev.github.io/LocalStack/">LocalX</a>
-  </p>
+  <p><strong>Run local AI models and connect them to your coding assistant.</strong></p>
+  <p><a href="#install-localx">Install</a> · <a href="#run-your-first-model">First use</a> · <a href="#updates-and-troubleshooting">Updates &amp; help</a> · <a href="docs/README.md">All guides</a></p>
   <p>
     <img alt="version 5.0.0" src="https://img.shields.io/badge/version-5.0.0-38bdae?style=flat-square">
     <img alt="Windows, Linux, macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-4d8df7?style=flat-square">
@@ -32,10 +19,123 @@ connects the result to Claude Code, Codex, or
 
 | At a glance | |
 |---|---|
-| **Use it when** | You have a GGUF model and want an agent-ready local runtime |
-| **It handles** | Server lifecycle, chat templates, parsers, sampling, context, KV cache, VRAM fit hints, and harness setup |
-| **You control** | Model, quant, context size, runtime mode, and target harness |
+| **Use it when** | You want to run an AI model on your own computer |
+| **It handles** | Model downloads, starting and stopping servers, hardware-fit hints, and agent setup |
+| **You control** | Which model runs, its settings, and which coding agent it connects to |
 | **Runs on** | Windows, Linux, and macOS — a single native binary, run from any shell |
+
+<a name="quick-start"></a>
+
+## Install LocalX
+
+**No programming tools or compilation required.** The installer downloads ready-to-run
+applications and checks their SHA-256 checksums. You get **LocalBox, LocalPilot,
+LocalMind, and LocalBench**, plus `localx` for managing them and the llama.cpp
+engine for running models. You do not need to clone this repository.
+
+### 1. Run the installer
+
+**Windows 10/11 (64-bit Intel or AMD):** open the Start menu, type **PowerShell**,
+and open it. Paste this command, then press **Enter**:
+
+```powershell
+irm https://raw.githubusercontent.com/C0deGeek-dev/LocalPilot/main/install/install.ps1 | iex
+```
+
+**Linux (x86-64 or ARM64) / macOS (Apple Silicon):** open **Terminal**, paste
+this command, then press **Enter**:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/C0deGeek-dev/LocalPilot/main/install/install.sh | sh
+```
+
+### 2. Let your terminal find the commands
+
+`PATH` is the list of folders your terminal searches for applications. Add the
+LocalX folder once so commands such as `localx update` work from any directory.
+
+<details>
+<summary><strong>Windows — paste this into the same PowerShell window</strong></summary>
+
+```powershell
+$localxBin = Join-Path $env:LOCALAPPDATA 'localx\bin'
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($userPath -split ';') -notcontains $localxBin) {
+    [Environment]::SetEnvironmentVariable('Path', "$localxBin;$userPath", 'User')
+}
+$env:Path = "$localxBin;$env:Path"
+```
+
+This enables the commands in this window and saves the setting for future
+terminals. If another open terminal cannot find them, close and reopen it.
+
+</details>
+
+<details>
+<summary><strong>Linux / macOS — add LocalX to your shell's PATH</strong></summary>
+
+Paste this into your terminal:
+
+```sh
+export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/localx/bin:$PATH"
+```
+
+To keep it for future terminals, add the same line to your shell configuration:
+`~/.bashrc` for Bash or `~/.zshrc` for Zsh. Use the directory printed by the
+installer if it differs.
+
+</details>
+
+### 3. Check the installation
+
+```sh
+localx status
+```
+
+You should see the installed tools and engine. **Installing the tools does not
+download an AI model**; choose one when you start using LocalBox.
+
+Want to read the installer before running it, check platform support, or install
+a specific version? See the [installation guide](https://github.com/C0deGeek-dev/LocalPilot/blob/main/docs/install.md).
+
+## Run your first model
+
+Open a terminal in the project folder you want to work on, then run:
+
+```sh
+localbox
+```
+
+The guided launcher lets you **pick or add a model → choose an agent → review
+settings → launch**. Choose **LocalPilot** for the coding agent included with
+LocalX, or select another supported agent you already have installed.
+
+Models are separate downloads and can take substantial disk space. Read the
+picker's hardware-fit hints before launching; model size and settings determine
+how much memory you need.
+
+Prefer simple text menus? Run `localbox --plain`.
+
+| The four LocalX tools | What you get |
+|---|---|
+| **LocalBox** | Download and run local models |
+| **LocalPilot** | Code with the model you choose |
+| **LocalMind** | Keep reviewed lessons from your work |
+| **LocalBench** | Measure and tune model performance |
+
+## Updates and troubleshooting
+
+| I want to… | Run |
+|---|---|
+| Update the whole stack and model engine | `localx update` |
+| See installed versions | `localx status` |
+| Diagnose installation problems | `localx doctor` |
+| Retry an incomplete installation | `localx install` |
+
+Ordinary installs use published releases; updates do not require Rust or Git.
+If a command is “not recognized” or “not found”, complete the PATH step above.
+If an older installation is taking precedence, `localx doctor` identifies it;
+review its findings before using `localx doctor --fix` to remove old copies.
 
 ## Privacy by design
 
@@ -56,44 +156,6 @@ path local.
 > LocalBox uses `llama-server`. Ollama support ended after the
 > [`ollama-classic`](https://github.com/C0deGeek-dev/LocalBox/tree/ollama-classic)
 > tag.
-
-## Quick start
-
-The quickest install is the LocalX one-liner, which installs `localbox`
-alongside the rest of the stack at one version — no Rust toolchain needed:
-
-```sh
-# Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/C0deGeek-dev/LocalPilot/main/install/install.sh | sh
-```
-
-```powershell
-# Windows
-irm https://raw.githubusercontent.com/C0deGeek-dev/LocalPilot/main/install/install.ps1 | iex
-```
-
-The tools are cut as a set and only tested together, so they are installed as a
-set; `localpilot update --all` re-runs it. Each release also publishes verified
-per-platform archives if you would rather install `localbox` on its own.
-
-LocalBox is a single native binary — no PowerShell, .NET, or Python needed.
-(On Windows, AMD GPU-name detection may call the vendor's `powershell.exe`
-as a last-resort probe; the NVIDIA path and everything else are pure native.)
-Build it from this repository (or use a release binary):
-
-```text
-cargo install --path crates/localbox --locked
-```
-
-Then launch the guided model picker (it can also add a Hugging Face model):
-
-```text
-localbox
-```
-
-That is the shortest path. The first run seeds `~/.local-llm` with the
-defaults and an editable model catalog, never overwriting anything you
-already have. See the [installation guide](docs/install.md) for details.
 
 ## Everyday commands
 
@@ -164,6 +226,19 @@ LocalBox is the runtime layer in the
 | [LocalMind](https://github.com/C0deGeek-dev/LocalMind) | Turn reviewed sessions into reusable project memory |
 
 Release history lives in [CHANGELOG.md](CHANGELOG.md).
+
+<details>
+<summary><strong>Build from source (developers only)</strong></summary>
+
+The ready-to-run installation above is sufficient for normal use. Building from
+source requires Rust and the platform build tools. Run these commands from the
+repository checkout unless a clone command is shown:
+
+```sh
+cargo install --path crates/localbox --locked
+```
+
+</details>
 
 ## License
 
