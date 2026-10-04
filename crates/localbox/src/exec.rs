@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use localbox_launcher::env::{EnvEnvelope, ProcessEnv};
 use localbox_launcher::proxy::{
-    parse_lsof_pids, parse_netstat_listeners, parse_proxy_health, posture_from_argv,
-    EnsureProxyConfig, ProxyHealth, ProxyOps, ProxyPosture,
+    is_proxy_argv_for_port, parse_lsof_pids, parse_netstat_listeners, parse_proxy_health,
+    posture_from_argv, EnsureProxyConfig, ProxyHealth, ProxyOps, ProxyPosture,
 };
 use localx_llama_runtime::net::is_port_listening;
 use localx_llama_runtime::probe::parse_nvidia_smi_vram_gb;
@@ -247,6 +247,38 @@ pub fn os_listener_pids(port: u16) -> Vec<u32> {
     }
 }
 
+/// The PIDs of LocalBox no-think proxies started to listen on `port`, read off
+/// the process table rather than the socket table. Some Windows builds drop a
+/// live listener from `netstat` for a moment, or label it with another state;
+/// the proxy's own command line is there for as long as the process is.
+#[must_use]
+pub fn proxy_process_pids(port: u16) -> Vec<u32> {
+    let mut system = sysinfo::System::new();
+    // The command line must be requested: a plain refresh leaves it empty.
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always),
+    );
+    let own = std::process::id();
+    let mut pids: Vec<u32> = system
+        .processes()
+        .values()
+        .filter(|process| process.pid().as_u32() != own)
+        .filter(|process| {
+            let argv: Vec<String> = process
+                .cmd()
+                .iter()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect();
+            is_proxy_argv_for_port(&argv, port)
+        })
+        .map(|process| process.pid().as_u32())
+        .collect();
+    pids.sort_unstable();
+    pids
+}
+
 /// Force-kill a process by PID.
 pub fn kill_pid(pid: u32) {
     let mut system = sysinfo::System::new();
@@ -343,10 +375,16 @@ impl ProxyOps for LiveProxyOps {
         // read off the live process's own command line (the `nothink-proxy`
         // argv carries `--listen-host`/`--api-key`). An unrecognizable
         // listener has no verifiable posture and is never reused.
-        let pid = os_listener_pids(listen_port).first().copied()?;
+        let pid = self.listener_pids(listen_port).first().copied()?;
         let target = sysinfo::Pid::from_u32(pid);
         let mut system = sysinfo::System::new();
-        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
+        // The command line must be requested: a plain refresh leaves it empty,
+        // and every listener would then read as unrecognizable.
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[target]),
+            true,
+            sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always),
+        );
         let argv: Vec<String> = system
             .process(target)?
             .cmd()
@@ -361,7 +399,13 @@ impl ProxyOps for LiveProxyOps {
     }
 
     fn listener_pids(&mut self, port: u16) -> Vec<u32> {
-        os_listener_pids(port)
+        // The socket table, plus our own proxy read off the process table: the
+        // socket table alone can miss a live proxy (see `proxy_process_pids`).
+        let mut pids = os_listener_pids(port);
+        pids.extend(proxy_process_pids(port));
+        pids.sort_unstable();
+        pids.dedup();
+        pids
     }
 
     fn kill(&mut self, pid: u32) {

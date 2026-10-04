@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`localbox stop` always stops the no-think proxy, and `serve` recognises its
+  own.** Some Windows builds report a live listening socket as `FIN_WAIT_1` or
+  `CLOSED`, or leave it out of `netstat` for a moment, once it has accepted a
+  connection. LocalBox found the proxy only through a `LISTENING` row, so
+  `stop` left it running and the next `serve` failed with "occupied by an
+  unrecognized process". The proxy is now also found by its own command line
+  in the process table, and a listener row is recognised by its unconnected
+  remote endpoint, which covers a localized Windows too. `serve` reads the
+  proxy's command line correctly, so a proxy LocalBox started is reused or
+  replaced instead of refused.
+
 - **A split model with a missing shard is downloaded before it launches.**
   A launch counted a split GGUF as on disk once its first shard was, so a
   model whose later shard never finished started straight into a

@@ -80,6 +80,19 @@ pub fn posture_from_argv(argv: &[String]) -> Option<ProxyPosture> {
     })
 }
 
+/// Whether `argv` is a LocalX no-think proxy started to listen on `port`
+/// (`… nothink-proxy --listen <port> …`). The process table says this even
+/// when the OS socket table does not show the listener.
+#[must_use]
+pub fn is_proxy_argv_for_port(argv: &[String], port: u16) -> bool {
+    argv.iter().any(|a| a == "nothink-proxy")
+        && argv
+            .iter()
+            .position(|a| a == "--listen")
+            .and_then(|i| argv.get(i + 1))
+            .is_some_and(|value| value.parse::<u16>() == Ok(port))
+}
+
 /// Everything `ensure_proxy` needs to know about the wanted proxy.
 #[derive(Debug, Clone)]
 pub struct EnsureProxyConfig {
@@ -325,6 +338,13 @@ pub fn stop_any_on_port(ops: &mut dyn ProxyOps, listen_port: u16) -> bool {
 }
 
 /// Parse the PIDs listening on `port` from `netstat -ano` output (Windows).
+///
+/// A listener row is one whose state reads `LISTENING`, or whose remote
+/// endpoint is the unconnected wildcard (`0.0.0.0:0`, `[::]:0`, `*:*`). The
+/// state column alone is not enough: some Windows builds label a live
+/// listening socket `FIN_WAIT_1` or `CLOSED` once it has accepted a
+/// connection, and a localized Windows does not print `LISTENING` at all. PID 0
+/// is skipped — Windows keeps such rows for a process that has already died.
 #[must_use]
 pub fn parse_netstat_listeners(output: &str, port: u16) -> Vec<u32> {
     let needle = format!(":{port}");
@@ -341,12 +361,14 @@ pub fn parse_netstat_listeners(output: &str, port: u16) -> Vec<u32> {
                 return None;
             }
             let rest: Vec<&str> = fields.collect();
-            // TCP <local> <remote> LISTENING <pid>
+            // TCP <local> <remote> <state> <pid>
+            let remote = rest.first()?;
             let state = rest.get(rest.len().checked_sub(2)?)?;
-            if !state.eq_ignore_ascii_case("listening") {
+            let unconnected = matches!(*remote, "0.0.0.0:0" | "[::]:0" | "*:*");
+            if !unconnected && !state.eq_ignore_ascii_case("listening") {
                 return None;
             }
-            rest.last()?.parse::<u32>().ok()
+            rest.last()?.parse::<u32>().ok().filter(|pid| *pid != 0)
         })
         .collect();
     pids.sort_unstable();
@@ -706,5 +728,97 @@ mod tests {
         assert!(parse_netstat_listeners(netstat, 9999).is_empty());
         assert_eq!(parse_lsof_pids("4242\n4242\n77\n"), vec![77, 4242]);
         assert!(parse_lsof_pids("garbage\n").is_empty());
+    }
+
+    #[test]
+    fn a_proxy_is_recognised_by_its_own_command_line() {
+        let argv = |parts: &[&str]| parts.iter().map(|p| (*p).to_string()).collect::<Vec<_>>();
+        let proxy = argv(&[
+            "localbox.exe",
+            "nothink-proxy",
+            "--listen",
+            "11435",
+            "--listen-host",
+            "127.0.0.1",
+            "--target-host",
+            "127.0.0.1",
+            "--target-port",
+            "8080",
+        ]);
+        assert!(is_proxy_argv_for_port(&proxy, 11435));
+        // Another port's proxy, the port it forwards to, and a `localbox stop`
+        // are not this port's proxy.
+        assert!(!is_proxy_argv_for_port(&proxy, 11436));
+        assert!(!is_proxy_argv_for_port(&proxy, 8080));
+        assert!(!is_proxy_argv_for_port(
+            &argv(&["localbox.exe", "stop"]),
+            11435
+        ));
+        assert!(!is_proxy_argv_for_port(
+            &argv(&["other.exe", "--listen", "11435"]),
+            11435
+        ));
+    }
+
+    /// Rows as Windows 10.0.26220 printed them for a live proxy on 11435 and a
+    /// stopped model server on 8080: the listener is labelled `FIN_WAIT_1` or
+    /// `CLOSED`, never `LISTENING`, and a dead process leaves PID 0 rows.
+    #[test]
+    fn a_listener_is_found_when_windows_mislabels_its_state() {
+        let netstat = "\
+  TCP    127.0.0.1:11435        0.0.0.0:0              FIN_WAIT_1      7912
+  TCP    127.0.0.1:58051        127.0.0.1:11435        FIN_WAIT_1      0
+  TCP    127.0.0.1:8080         127.0.0.1:0            LISTENING       0
+  TCP    127.0.0.1:8080         127.0.0.1:58050        ESTABLISHED     24836
+";
+        assert_eq!(parse_netstat_listeners(netstat, 11435), vec![7912]);
+        assert_eq!(
+            parse_netstat_listeners(
+                "  TCP    127.0.0.1:11435        0.0.0.0:0              CLOSED          7912\n",
+                11435
+            ),
+            vec![7912]
+        );
+        assert_eq!(
+            parse_netstat_listeners("  TCP    [::1]:11435   [::]:0   GESLOTEN   55\n", 11435),
+            vec![55]
+        );
+        // A connection to the port, and a dead process's PID 0 row, are not
+        // listeners to stop.
+        assert!(parse_netstat_listeners(netstat, 8080).is_empty());
+        assert!(parse_netstat_listeners(netstat, 58051).is_empty());
+    }
+
+    /// `localbox stop` reaps the proxy from exactly that mislabelled row.
+    #[test]
+    fn stop_reaps_a_proxy_whose_listener_row_is_mislabelled() {
+        struct Table(Vec<u32>);
+        impl ProxyOps for Table {
+            fn health(&mut self, _: u16) -> Option<ProxyHealth> {
+                None
+            }
+            fn posture(&mut self, _: u16) -> Option<ProxyPosture> {
+                None
+            }
+            fn port_listening(&mut self, _: u16) -> bool {
+                true
+            }
+            fn listener_pids(&mut self, port: u16) -> Vec<u32> {
+                parse_netstat_listeners(
+                    "  TCP    127.0.0.1:11435        0.0.0.0:0              FIN_WAIT_1      7912\n",
+                    port,
+                )
+            }
+            fn kill(&mut self, pid: u32) {
+                self.0.push(pid);
+            }
+            fn start(&mut self, _: &EnsureProxyConfig) -> Result<u32, String> {
+                Err("not started in this test".to_string())
+            }
+            fn sleep_ms(&mut self, _: u64) {}
+        }
+        let mut ops = Table(Vec::new());
+        assert!(stop_any_on_port(&mut ops, 11435));
+        assert_eq!(ops.0, vec![7912]);
     }
 }
