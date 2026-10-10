@@ -4,6 +4,11 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Guided launch defaults are remembered per model.** Saving another model's
+  recipe no longer discards earlier choices for quant, context, vision, engine,
+  target, or tuning. Existing single-model recipes are preserved on first save;
+  explicit choices for a launch still take precedence.
+
 - **`localbox stop` always stops the no-think proxy, and `serve` recognises its
   own.** Some Windows builds report a live listening socket as `FIN_WAIT_1` or
   `CLOSED`, or leave it out of `netstat` for a moment, once it has accepted a

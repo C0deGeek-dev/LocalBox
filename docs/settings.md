@@ -52,11 +52,17 @@ it (the turboquant fork) keep `--no-mmap` / `--mlock`. Current mainline rejects
 the old flags outright, so this is what lets those settings work on the native
 engine. `localbox launch --dry-run` shows the spelling a launch will use.
 
-The guided launcher's Customize → save-as-default flow persists its own
-`DefaultLaunch` recipe through the same store, including target, engine,
-Auto-tune, quant, context, KV cache, strict output, and vision. Model-specific
-recipe choices, including vision, replay only for the saved model; catalog-only
-keys are refused on every write path.
+The guided launcher's Customize → save-as-default flow persists a recipe for
+**each model** in `DefaultLaunchByModel`, keyed by the catalog model key. Each
+recipe includes target, engine, Auto-tune, quant, context, KV cache, strict output,
+and vision. Saving another model or updating one recipe leaves the others intact.
+Explicit choices for the current launch take precedence over its saved recipe.
+
+Existing `DefaultLaunch` settings remain readable. On the first save, that legacy
+recipe is retained under its model key. `DefaultLaunch` also keeps the most recent
+recipe for older builds and the existing target/engine/Auto-tune/KV fallback for
+models without saved recipes; quant, context, strict output and vision never leak
+onto another model. Catalog-only keys are refused on every write path.
 
 ### Launch permission and bypass decisions
 

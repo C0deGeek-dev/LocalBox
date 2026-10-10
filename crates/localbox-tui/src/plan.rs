@@ -1,10 +1,10 @@
 //! The guided launch plan and its resolution precedence.
 //!
-//! One resolver, no I/O: **explicit overrides > the saved DefaultLaunch's
-//! cross-model preferences (target/mode/auto-tune) > the per-model definition
-//! (quant/context/strict) > hard defaults**. Quant and context seed from the
-//! DefaultLaunch only when the selected model IS the saved default model — a
-//! recipe tuned for one model must never leak its quant onto another.
+//! One resolver, no I/O: **explicit overrides > the selected saved recipe >
+//! per-model catalog defaults > hard defaults**. The host selects the model's
+//! recipe from DefaultLaunchByModel, falling back to legacy DefaultLaunch.
+//! Quant, context, strict and vision apply only when the recipe's model key
+//! matches; target/mode/auto-tune/KV retain the existing cross-model fallback.
 //! A returning user's plan therefore IS their last-good plan, and "Launch
 //! now" replays it.
 
@@ -51,7 +51,7 @@ where
     }))
 }
 
-/// The saved last-good launch recipe (`DefaultLaunch` in settings).
+/// One saved launch recipe (`DefaultLaunchByModel`, or legacy `DefaultLaunch`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DefaultLaunch {

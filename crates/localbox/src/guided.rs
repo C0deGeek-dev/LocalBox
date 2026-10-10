@@ -278,13 +278,44 @@ fn quant_menu_row_at_width(
     row
 }
 
-/// The saved recipe from settings, when any.
+/// Prefer this model's recipe; older settings retain their original fallback.
 #[must_use]
-pub fn load_default_launch(catalog: &Catalog) -> DefaultLaunch {
+pub fn load_default_launch(catalog: &Catalog, model_key: &str) -> DefaultLaunch {
+    let saved = catalog
+        .setting("DefaultLaunchByModel")
+        .and_then(|recipes| recipes.get(model_key))
+        .and_then(|value| serde_json::from_value::<DefaultLaunch>(value.clone()).ok());
+    if let Some(mut saved) = saved {
+        saved.model_key = Some(model_key.to_string());
+        return saved;
+    }
     catalog
         .setting("DefaultLaunch")
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
+}
+
+/// Update only this model's recipe, retaining the legacy recipe on first save.
+fn save_default_launch(store: &mut JsonSettingsStore, plan: &GuidedPlan) -> Result<(), String> {
+    let mut recipes = match store.get_value("DefaultLaunchByModel") {
+        Some(serde_json::Value::Object(recipes)) => recipes.clone(),
+        None => serde_json::Map::new(),
+        Some(_) => return Err("DefaultLaunchByModel must be an object".to_string()),
+    };
+    if let Some(legacy) = store.get_value("DefaultLaunch") {
+        if let Some(key) = legacy.get("ModelKey").and_then(serde_json::Value::as_str) {
+            recipes
+                .entry(key.to_string())
+                .or_insert_with(|| legacy.clone());
+        }
+    }
+    let value = serde_json::to_value(default_launch_from_plan(plan)).map_err(|e| e.to_string())?;
+    recipes.insert(plan.model_key.clone(), value.clone());
+    store.persist_value("DefaultLaunchByModel", serde_json::Value::Object(recipes));
+    // Keep the most recent target/engine preferences for models with no recipe,
+    // and keep settings readable by older LocalBox versions.
+    store.persist_value("DefaultLaunch", value);
+    Ok(())
 }
 
 /// The recipe a "save as default" writes for the current plan.
@@ -978,7 +1009,7 @@ fn confirm_flow(
     vram: i64,
     running_policy: crate::live::RunningModelPolicy,
 ) {
-    let defaults = load_default_launch(catalog);
+    let defaults = load_default_launch(catalog, key);
     let required_mode = catalog.required_mode(key);
     let mut overrides = PlanOverrides::default();
     let gguf_root = catalog.gguf_root().map(|root| {
@@ -1198,16 +1229,15 @@ fn customize_flow(
                 Ok(()) => {
                     let settings_path = home.join(".local-llm").join("settings.json");
                     match JsonSettingsStore::open(&settings_path) {
-                        Ok(mut store) => {
-                            if let Ok(value) = serde_json::to_value(default_launch_from_plan(&plan))
-                            {
-                                store.persist_value("DefaultLaunch", value);
-                                chooser.notice("Saved. Launch now replays these settings.");
-                                // Saving is a finishing move: hand back to
-                                // the Ready-to-launch menu.
+                        Ok(mut store) => match save_default_launch(&mut store, &plan) {
+                            Ok(()) => {
+                                chooser.notice(
+                                    "Saved for this model. Launch now replays these settings.",
+                                );
                                 return;
                             }
-                        }
+                            Err(e) => chooser.notice(&plain_warning("save", &e)),
+                        },
                         Err(e) => chooser.notice(&plain_warning("save", &e.to_string())),
                     }
                 }
@@ -2798,6 +2828,119 @@ mod tests {
         assert_eq!(agent, AgentKind::Claude);
         assert_eq!(request.quant, None);
         assert_eq!(request.params.strict, Some(false));
+    }
+
+    fn saved_catalog(path: &Path) -> Catalog {
+        let settings: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        Catalog::from_layers(&Default::default(), &Default::default(), &settings).unwrap()
+    }
+
+    #[test]
+    fn defaults_survive_saving_switching_and_updating_multiple_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut first = guided("q4", "256k", Mode::Native);
+        first.vision = true;
+        first.target = "localpilot".to_string();
+        first.kv_cache_k = Some("q8_0".to_string());
+        let mut second = guided("q8", "64k", Mode::Turboquant);
+        second.model_key = "other".to_string();
+        second.strict = true;
+        for plan in [&first, &second] {
+            let mut store = JsonSettingsStore::open(&path).unwrap();
+            save_default_launch(&mut store, plan).unwrap();
+        }
+        let catalog = saved_catalog(&path);
+        for plan in [&first, &second] {
+            let saved = load_default_launch(&catalog, &plan.model_key);
+            assert_eq!(saved, default_launch_from_plan(plan));
+            let resolved = resolve_launch_plan_with_required_mode(
+                &plan.model_key,
+                &ModelDef::default(),
+                &saved,
+                &PlanOverrides::default(),
+                None,
+            );
+            assert_eq!(&resolved, plan);
+        }
+        first.context_key = "128k".to_string();
+        save_default_launch(&mut JsonSettingsStore::open(&path).unwrap(), &first).unwrap();
+        let catalog = saved_catalog(&path);
+        assert_eq!(
+            load_default_launch(&catalog, "m"),
+            default_launch_from_plan(&first)
+        );
+        assert_eq!(
+            load_default_launch(&catalog, "other"),
+            default_launch_from_plan(&second)
+        );
+        let saved = load_default_launch(&catalog, "m");
+        let explicit = resolve_launch_plan_with_required_mode(
+            "m",
+            &ModelDef::default(),
+            &saved,
+            &PlanOverrides {
+                context_key: Some("32k".to_string()),
+                vision: Some(false),
+                ..Default::default()
+            },
+            None,
+        );
+        assert_eq!(explicit.context_key, "32k");
+        assert!(!explicit.vision);
+        let unsaved = resolve_launch_plan_with_required_mode(
+            "unsaved",
+            &ModelDef::default(),
+            &load_default_launch(&catalog, "unsaved"),
+            &PlanOverrides::default(),
+            None,
+        );
+        assert!(!unsaved.vision);
+        assert!(unsaved.context_key.is_empty());
+    }
+
+    #[test]
+    fn first_per_model_save_preserves_the_legacy_recipe_and_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut legacy = guided("q4", "256k", Mode::Native);
+        legacy.vision = true;
+        std::fs::write(
+            &path,
+            serde_json::to_string(&serde_json::json!({
+                "DefaultLaunch": default_launch_from_plan(&legacy),
+                "VRAMGB": 32,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_default_launch(&saved_catalog(&path), "m"),
+            default_launch_from_plan(&legacy)
+        );
+        let mut other = guided("q8", "64k", Mode::Turboquant);
+        other.model_key = "other".to_string();
+        save_default_launch(&mut JsonSettingsStore::open(&path).unwrap(), &other).unwrap();
+        let catalog = saved_catalog(&path);
+        assert_eq!(catalog.setting("VRAMGB"), Some(&serde_json::json!(32)));
+        assert_eq!(
+            load_default_launch(&catalog, "m"),
+            default_launch_from_plan(&legacy)
+        );
+        assert_eq!(
+            load_default_launch(&catalog, "other"),
+            default_launch_from_plan(&other)
+        );
+        // A malformed sibling does not discard another model's valid recipe.
+        let mut store = JsonSettingsStore::open(&path).unwrap();
+        let mut recipes = store.get_value("DefaultLaunchByModel").unwrap().clone();
+        recipes["broken"] = serde_json::json!("invalid");
+        store.persist_value("DefaultLaunchByModel", recipes);
+        assert_eq!(
+            load_default_launch(&saved_catalog(&path), "m"),
+            default_launch_from_plan(&legacy)
+        );
     }
 
     #[test]
