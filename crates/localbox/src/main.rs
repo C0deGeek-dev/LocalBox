@@ -55,6 +55,8 @@ Usage:
                                       To register without downloading, use the
                                       guided launcher's Add Model action.
   localbox purge                      stop servers and delete downloaded model files
+  localbox clean --partials [--check] remove partial downloads LocalBox will not
+                                      continue (--check previews, removes nothing)
   localbox log [--lines <n>]          tail the most recent server log
   localbox embed-serve [--port <p>]   start the CPU-only embedding server
   localbox embed-stop                 stop the embedding server
@@ -132,6 +134,7 @@ fn run() -> ExitCode {
         "models" => cmd_models(&args[1..]),
         "download" => cmd_download(&args[1..]),
         "purge" => cmd_purge(),
+        "clean" => cmd_clean(&args[1..]),
         "log" => cmd_log(&args[1..]),
         "embed-serve" => cmd_embed_serve(&args[1..]),
         "embed-stop" => cmd_embed_stop(),
@@ -571,7 +574,20 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
     let home = home_dir().ok_or("could not determine the user home directory")?;
     let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
     match args.first().filter(|a| !a.starts_with("--")) {
-        Some(name) => print!("{}", render_model_detail(&catalog, name)?),
+        Some(name) => {
+            print!("{}", render_model_detail(&catalog, name)?);
+            let key = localbox::manage::resolve_model_key(&catalog, name);
+            if let Some((root, entries)) = partial_downloads(&catalog, &home) {
+                let own: Vec<_> = entries
+                    .into_iter()
+                    .filter(|entry| entry.model.is_some() && entry.model == key)
+                    .collect();
+                if !own.is_empty() {
+                    println!("  Partial downloads:");
+                    print!("{}", localbox::partials::render(&own, &root));
+                }
+            }
+        }
         None => print!("{}", render_model_overview(&catalog)),
     }
     Ok(())
@@ -590,6 +606,15 @@ fn cmd_models(args: &[String]) -> Result<(), String> {
         );
     } else {
         print!("{}", render_models_catalog(&contract));
+        if let Some((root, entries)) = partial_downloads(&catalog, &home) {
+            if !entries.is_empty() {
+                println!("\nPartial downloads under {}:", root.display());
+                print!("{}", localbox::partials::render(&entries, &root));
+                if let Some(hint) = localbox::partials::hint(&entries) {
+                    println!("{hint}");
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -641,6 +666,7 @@ fn cmd_download(args: &[String]) -> Result<(), String> {
     for path in &fetched {
         println!("ready: {}", path.display());
     }
+    print_partials_hint(&home);
     Ok(())
 }
 
@@ -746,6 +772,7 @@ fn download_from_hf(
     for path in fetched {
         println!("ready: {}", path.display());
     }
+    print_partials_hint(home);
     Ok(())
 }
 
@@ -800,6 +827,116 @@ fn cmd_purge() -> Result<(), String> {
         println!("Done. Models download again on the next launch.");
     }
     Ok(())
+}
+
+/// The partial downloads under the GGUF root, classified; `None` when no
+/// root is configured.
+fn partial_downloads(
+    catalog: &Catalog,
+    home: &std::path::Path,
+) -> Option<(std::path::PathBuf, Vec<localbox::partials::PartialEntry>)> {
+    use localbox::partials::{classify, quants_in_use, scan};
+    use localbox_launcher::launcher::expand_path_with_home;
+    let root = catalog.gguf_root()?;
+    let root = expand_path_with_home(&root.to_string_lossy(), home);
+    let entries = classify(
+        catalog,
+        &root,
+        scan(&root),
+        &quants_in_use(catalog),
+        &|path| {
+            std::fs::metadata(path)
+                .ok()
+                .filter(std::fs::Metadata::is_file)
+                .map(|meta| meta.len())
+        },
+        std::time::SystemTime::now(),
+    );
+    Some((root, entries))
+}
+
+/// After a download: one line pointing at `clean --partials` when partial
+/// downloads LocalBox will not continue are taking space.
+fn print_partials_hint(home: &std::path::Path) {
+    let Ok(catalog) = Catalog::load(&catalog_dir(home)) else {
+        return;
+    };
+    if let Some(hint) = partial_downloads(&catalog, home)
+        .and_then(|(_, entries)| localbox::partials::hint(&entries))
+    {
+        println!("{hint}");
+    }
+}
+
+/// Remove the partial downloads LocalBox will not continue: superseded,
+/// unresumable, other-quant and orphaned ones. `--check` lists what would go
+/// and removes nothing. Active partials are never touched.
+fn cmd_clean(args: &[String]) -> Result<(), String> {
+    use localbox::partials::{render, CleanPlan, IN_FLIGHT};
+    use localbox_launcher::fetch::human_bytes;
+    if !has_flag(args, "--partials") {
+        return Err(
+            "nothing selected to clean: use `localbox clean --partials [--check]`".to_string(),
+        );
+    }
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
+    let (root, entries) = partial_downloads(&catalog, &home)
+        .ok_or("LlamaCppGgufRoot is not configured; set it in settings.json")?;
+    let candidates: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| entry.state.is_candidate())
+        .collect();
+    if candidates.is_empty() {
+        println!("No partial downloads to clean under {}.", root.display());
+        return Ok(());
+    }
+    print!("{}", render(&candidates, &root));
+    let plan = CleanPlan::from_entries(&candidates);
+    if has_flag(args, "--check") {
+        println!(
+            "\nWould remove {} file(s), {}:",
+            plan.files.len(),
+            human_bytes(plan.bytes())
+        );
+        for (path, size) in &plan.files {
+            println!("  {} ({})", path.display(), human_bytes(*size));
+        }
+        println!("Nothing was removed (--check). Run `localbox clean --partials` to remove them.");
+        return Ok(());
+    }
+    let mut freed = 0;
+    let mut failed = Vec::new();
+    for (path, size) in &plan.files {
+        // A download may have picked the partial up since the scan: leave it.
+        let written_now = path.to_string_lossy().ends_with(".partial")
+            && std::fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|idle| idle < IN_FLIGHT);
+        if written_now {
+            println!("Skipped {} (being written)", path.display());
+            continue;
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {
+                println!("Removed {}", path.display());
+                freed += size;
+            }
+            Err(e) => failed.push(format!("{}: {e}", path.display())),
+        }
+    }
+    println!("Freed {}.", human_bytes(freed));
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "could not remove {} file(s):\n  {}",
+            failed.len(),
+            failed.join("\n  ")
+        ))
+    }
 }
 
 fn cmd_log(args: &[String]) -> Result<(), String> {

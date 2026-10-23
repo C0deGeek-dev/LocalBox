@@ -4,6 +4,16 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Partial downloads are listed, and the ones LocalBox will not continue can
+  be cleaned.** A stopped download left its `.partial` in the model folder with
+  no trace in any output, and once another quant was chosen it was never
+  resumed. `localbox models` and `localbox info <model>` now list partials with
+  their progress, idle time and state, a download points at cleanup when there
+  is space to reclaim, and `localbox clean --partials [--check]` removes the
+  superseded, unresumable, other-quant and orphaned ones. Partials of a quant
+  in use, or that grew in the last 24 hours, are never removed; an abandoned
+  quant takes the finished shards of its incomplete set with it.
+
 - **A resumed download only continues the file it was started from.** An
   interrupted download resumed with a plain `Range` request, so a file
   replaced on Hugging Face in the meantime had its new bytes appended to the

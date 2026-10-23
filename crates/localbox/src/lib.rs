@@ -19,6 +19,7 @@ pub mod hf_install;
 pub mod live;
 pub mod manage;
 pub mod migrate;
+pub mod partials;
 pub mod update;
 
 /// The product version shipped with this build (the repo `VERSION` file).

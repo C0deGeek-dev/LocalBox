@@ -17,6 +17,8 @@ localbox info [model]               list the configured models, or one in detail
 localbox download <model> [--quant <key>] [--vision] [--draft]
                                     fetch a model's files without starting it
 localbox purge                      stop servers and delete downloaded model files
+localbox clean --partials [--check] remove partial downloads LocalBox will not
+                                    continue (--check previews, removes nothing)
 localbox log [--lines <n>]          tail the most recent server log
 localbox embed-serve [--port <p>]   start the CPU-only embedding server
 localbox embed-stop                 stop the embedding server

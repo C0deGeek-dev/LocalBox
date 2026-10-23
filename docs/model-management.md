@@ -91,6 +91,33 @@ old prefix. A finished transfer whose size differs from the size the server
 declared is not put in place: a short one stays as a partial to continue, a
 long one is discarded.
 
+### Partial downloads and cleanup
+
+`localbox models` lists every partial download under the GGUF root, and
+`localbox info <model>` lists that model's: how far it got, how long since it
+last grew, and what it is to LocalBox. A download prints one line when some of
+them are taking space for nothing. They are decided in this order:
+
+| State | When | Cleaned |
+|---|---|---|
+| superseded | the finished file with the same name is already there | yes, unless written to in the last 10 minutes |
+| active | grew in the last 24 hours, or belongs to a quant in use, the projector or the drafter | never |
+| cannot resume safely | no `.partial.json` record, so a download starts it over | yes |
+| other quant | a quant of the model that is not in use | yes |
+| orphan | no catalog model uses the file, including folders no entry points at | yes |
+
+The quants in use for a model are its catalog `Quant` — what
+`localbox download <key>`, a launch without saved defaults, and LocalBench
+`findbest` without `--quant` fetch — plus the quant in its saved launch
+defaults. A model with no catalog `Quant` keeps every quant.
+
+Nothing is removed on its own. `localbox clean --partials --check` lists what
+would go and how much space it frees; `localbox clean --partials` removes it.
+An abandoned quant takes the finished shards of its incomplete set with it,
+since they cannot load without the missing shard; the finished shards of a
+quant in use stay. A candidate idle for 14 days or more is marked stale, but
+age alone never makes a partial a candidate.
+
 ## Adding a Hugging Face model interactively
 
 Run `localbox` and choose **[Add a Hugging Face model]**. Paste an
@@ -197,7 +224,8 @@ name, so a catalog key always wins.
 
 Removing a model is editing it out of the catalog; `localbox purge` stops
 servers and deletes every downloaded model folder under the GGUF root (models
-download again on the next launch).
+download again on the next launch). To reclaim only the space of partial
+downloads LocalBox will not continue, use `localbox clean --partials` (above).
 
 ---
 
