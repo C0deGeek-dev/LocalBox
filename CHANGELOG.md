@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Update the shared async runtime to Tokio1.51.6 and the TLS security fixes
+  while preserving Rust1.82 and existing runtime features. Guard the audit
+  exceptions for unbuilt optional QUIC dependencies against activation.
+
 - **Guided launch defaults are remembered per model.** Saving another model's
   recipe no longer discards earlier choices for quant, context, vision, engine,
   target, or tuning. Existing single-model recipes are preserved on first save;
