@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **A resumed download only continues the file it was started from.** An
+  interrupted download resumed with a plain `Range` request, so a file
+  replaced on Hugging Face in the meantime had its new bytes appended to the
+  old prefix and was installed as a corrupt GGUF. Hugging Face's CDN ignores
+  `If-Range`, so each `.partial` now has a `.partial.json` record of the
+  remote file's strong `ETag` and size, and a range is only appended when the
+  server reports the same identity; otherwise the file downloads again from
+  zero. Partials from earlier builds have no record and restart once. A
+  finished transfer whose size differs from the declared size is no longer
+  put in place.
+
 - Update the shared async runtime to Tokio1.51.6 and the TLS security fixes
   while preserving Rust1.82 and existing runtime features. Guard the audit
   exceptions for unbuilt optional QUIC dependencies against activation.

@@ -78,6 +78,19 @@ LocalBench tuner fetches a missing GGUF through it before its first trial, so
 tuning no longer needs a prior launch). `localbox info <model>` shows the entry
 as LocalBox resolved it; unknown names list the known keys.
 
+### Interrupted downloads
+
+A download writes to `<file>.partial` and takes its real name only once every
+byte is there. Beside it, `<file>.partial.json` records which remote file the
+bytes came from: the server's strong `ETag` (a content hash on Hugging Face's
+CDN) and the file size. A later download of the same file continues the
+partial only when the server reports that same identity for the range;
+otherwise — the file was replaced upstream, or the partial predates the record
+— it starts again from zero rather than append a different file's bytes to an
+old prefix. A finished transfer whose size differs from the size the server
+declared is not put in place: a short one stays as a partial to continue, a
+long one is discarded.
+
 ## Adding a Hugging Face model interactively
 
 Run `localbox` and choose **[Add a Hugging Face model]**. Paste an
