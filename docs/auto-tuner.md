@@ -73,6 +73,10 @@ cache types are only runtime encodings.
 The guided launcher (`localbox`) replays a saved profile automatically when
 auto-tune is on: the entry is matched on quant, context key, and mode, with
 the wanted profile first, then the nearest measured VRAM, then score. An
+unspecified guided quant or context does not restrict the lookup: the selected
+entry supplies that launch value. Explicit quant/context choices still require
+a match. A successful saved guided tune updates the next launch choices to the
+settings measured; a preview or failed tune does not change them. An
 unsupported store schema or measurement version fails closed to the recommended
 defaults, and manual KV choices only fill gaps the profile left. Current
 LocalBox accepts tuner version 5. A matching older entry can be re-tuned, used

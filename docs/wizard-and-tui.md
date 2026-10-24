@@ -26,6 +26,10 @@ pick a model  →  read the summary  →  confirm  →  launch  →  return
   replays the best saved `localbench findbest` result and owns the
   engine/KV choices while on; manual KV settings only fill gaps the profile
   left.
+  When quant or context is unspecified, the saved profile supplies it; explicitly
+  selected values must still match. After a successful saved auto-tune, Launch now
+  uses the quant, context, engine and profile just tuned. Preview and failed runs
+  leave the launch choices unchanged; catalog engine locks remain in force.
   A catalog `RequiredMode` locks the engine row with an explanation, which
   prevents low-bit models such as Ternary Bonsai from starting on an
   incompatible llama.cpp build.

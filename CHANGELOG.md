@@ -4,6 +4,11 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Guided launches replay the tune they selected.** Unspecified quant/context
+  inherit the saved profile's values, and a successful saved auto-tune updates
+  Launch now to its measured choices. Explicit choices, engine locks, and the
+  preference after tuning both profiles are preserved.
+
 - **Partial downloads are listed, and the ones LocalBox will not continue can
   be cleaned.** A stopped download left its `.partial` in the model folder with
   no trace in any output, and once another quant was chosen it was never

@@ -87,10 +87,22 @@ pub fn request_from_guided(
     plan: &GuidedPlan,
     auto_best: Option<&TunerEntry>,
 ) -> (LaunchRequest, AgentKind) {
-    let mut request =
-        LaunchRequest::new(plan.model_key.clone(), plan.context_key.clone(), plan.mode);
+    // A plan field the user never pinned adopts the tuned entry's own value,
+    // the same way the CLI replays a profile: a tune measured at 256k must not
+    // be replayed at whatever context the catalog happens to default to.
+    let context_key = if plan.context_key.trim().is_empty() {
+        auto_best.map_or_else(
+            || plan.context_key.clone(),
+            |entry| entry.context_key.clone(),
+        )
+    } else {
+        plan.context_key.clone()
+    };
+    let mut request = LaunchRequest::new(plan.model_key.clone(), context_key, plan.mode);
     if !plan.quant.trim().is_empty() {
         request.quant = Some(plan.quant.clone());
+    } else if let Some(entry) = auto_best {
+        request.quant = Some(entry.quant.clone());
     }
     request.use_vision = plan.vision;
     if let Some(entry) = auto_best {
@@ -1058,6 +1070,7 @@ fn confirm_flow(
                     key,
                     def,
                     &plan,
+                    &mut overrides,
                     vram,
                     gguf_root.as_deref(),
                     required_mode,
@@ -1425,16 +1438,43 @@ Auto-tune settings:
 KV-cache variants and GPU offload are explored automatically inside the\n\
 tune. Images/vision do not affect it.";
 
+/// Carry the settings a saved tune was measured at into the launch plan, so
+/// "Launch now" asks for the entry `localbench` just wrote. A `both`-profile
+/// run writes one winner per profile, so it leaves the preference alone, and a
+/// catalog-locked engine is never overridden.
+fn adopt_tuned_choices(
+    overrides: &mut PlanOverrides,
+    choices: &TuneChoices,
+    quant: &str,
+    context: &str,
+    mode: Mode,
+    required_mode: Option<Mode>,
+) {
+    if !quant.trim().is_empty() {
+        overrides.quant = Some(quant.to_string());
+    }
+    overrides.context_key = Some(context.to_string());
+    if required_mode.is_none() {
+        overrides.mode = Some(mode);
+    }
+    let profile = TUNE_PROFILES[choices.profile].1;
+    if !profile.eq_ignore_ascii_case("both") {
+        overrides.auto_best_profile = Some(profile.to_string());
+    }
+}
+
 /// The Auto-tune sub-menu: every `findbest` knob with a plain value on the
 /// row; Enter opens that setting's option list (default and current
 /// selection marked; picking returns here). Quant/context start at the
 /// CURRENT launch settings so the winner is one that "Launch now" actually
 /// replays.
+#[allow(clippy::too_many_arguments)]
 fn auto_tune_flow(
     chooser: &mut dyn Chooser,
     key: &str,
     def: &ModelDef,
     plan: &GuidedPlan,
+    overrides: &mut PlanOverrides,
     vram: i64,
     gguf_root: Option<&Path>,
     required_mode: Option<Mode>,
@@ -1681,11 +1721,11 @@ fn auto_tune_flow(
     ];
     if !context.trim().is_empty() {
         args.push("--context".to_string());
-        args.push(context);
+        args.push(context.clone());
     }
     if !quant.trim().is_empty() {
         args.push("--quant".to_string());
-        args.push(quant);
+        args.push(quant.clone());
     }
     if choices.fresh {
         args.push("--no-cache".to_string());
@@ -1695,11 +1735,20 @@ fn auto_tune_flow(
     }
 
     match crate::exec::run_interactive("localbench", &args) {
-        Ok(status) if status.success() => chooser.announce(if choices.save {
-            "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings."
-        } else {
-            "Auto-tune preview finished; nothing was saved."
-        }),
+        Ok(status) if status.success() => {
+            if choices.save {
+                // The winner is stored under the quant/context/engine it was
+                // measured at, so the plan has to name them too — otherwise
+                // Launch now queries the tune it just ran with the previous
+                // settings and finds nothing.
+                adopt_tuned_choices(overrides, &choices, &quant, &context, mode, required_mode);
+            }
+            chooser.announce(if choices.save {
+                "Auto-tune finished. Launch now (with Auto-tune on) uses the saved settings."
+            } else {
+                "Auto-tune preview finished; nothing was saved."
+            });
+        }
         Ok(_) => {
             chooser.announce("Auto-tune did not finish; the recommended defaults still apply.");
         }
@@ -1707,6 +1756,25 @@ fn auto_tune_flow(
             "LocalBench is not installed, so Auto-tune cannot run.\n\
              Install it, then either pick this row again or run:\n  localbench findbest --model <model>",
         ),
+    }
+}
+
+/// The saved-profile lookup for one guided plan. Only fields the plan really
+/// pins constrain it, as on the CLI path: a blank quant or context means "the
+/// catalog default", a spelling no stored entry carries, so constraining on it
+/// rejected every saved tune and reported the model as untuned.
+#[must_use]
+fn profile_query_for_plan(plan: &GuidedPlan, vram: i64) -> RunProfileQuery<'_> {
+    RunProfileQuery {
+        quant: (!plan.quant.trim().is_empty()).then_some(plan.quant.as_str()),
+        context_key: (!plan.context_key.trim().is_empty()).then_some(plan.context_key.as_str()),
+        mode: Some(plan.mode),
+        preferred_profile: Some(if plan.auto_best_profile.eq_ignore_ascii_case("pure") {
+            Profile::Pure
+        } else {
+            Profile::Balanced
+        }),
+        vram_gb: Some(vram),
     }
 }
 
@@ -1727,23 +1795,9 @@ fn launch_guided(
         }
     };
     let vram = i64::from(localx_llama_core::Launcher::vram_gb(&launcher));
-    let mut profile = plan.use_auto_best.then(|| {
-        resolve_run_profile(
-            home,
-            &plan.model_key,
-            RunProfileQuery {
-                quant: Some(&plan.quant),
-                context_key: Some(&plan.context_key),
-                mode: Some(plan.mode),
-                preferred_profile: Some(if plan.auto_best_profile.eq_ignore_ascii_case("pure") {
-                    Profile::Pure
-                } else {
-                    Profile::Balanced
-                }),
-                vram_gb: Some(vram),
-            },
-        )
-    });
+    let mut profile = plan
+        .use_auto_best
+        .then(|| resolve_run_profile(home, &plan.model_key, profile_query_for_plan(plan, vram)));
     if let Some(unavailable) = profile.as_mut().filter(|profile| !profile.is_tuned()) {
         if !choose_unavailable_profile(chooser, &plan.model_key, unavailable) {
             return false;
@@ -2695,6 +2749,181 @@ mod tests {
             !labels[0].contains("stop"),
             "the highlighted default must not be the destructive answer: {labels:?}"
         );
+    }
+
+    fn tune_choices(profile: usize) -> TuneChoices {
+        TuneChoices {
+            profile,
+            workload: 0,
+            engine: 0,
+            quant: 0,
+            context: 0,
+            budget: 0,
+            runs: 0,
+            fresh: false,
+            save: true,
+        }
+    }
+
+    #[test]
+    fn an_unpinned_context_still_matches_the_tune_that_was_measured() {
+        let home = tempfile::tempdir().unwrap();
+        let store = TunerBestConfig {
+            schema: 1,
+            key: "m".to_string(),
+            vram_gb: Some(24),
+            entries: vec![entry(
+                "i1-q4km",
+                "256k",
+                Mode::Turboquant,
+                24,
+                Profile::Balanced,
+                603.26,
+            )],
+        };
+        write_profile_store(home.path(), &store);
+        // The catalog-default context: the plan pins nothing, which is what a
+        // model other than the saved recipe's own model resolves to.
+        let plan = guided("i1-q4km", "", Mode::Turboquant);
+
+        let resolved = resolve_run_profile(home.path(), "m", profile_query_for_plan(&plan, 24));
+
+        assert!(resolved.is_tuned(), "{:?}", resolved.unavailable);
+        assert_eq!(resolved.entry.unwrap().context_key, "256k");
+    }
+
+    #[test]
+    fn an_unpinned_plan_launches_at_the_context_the_tune_was_measured_at() {
+        let plan = guided("i1-q4km", "", Mode::Turboquant);
+        let tuned = entry(
+            "i1-q4km",
+            "256k",
+            Mode::Turboquant,
+            24,
+            Profile::Balanced,
+            603.26,
+        );
+
+        let (request, _) = request_from_guided(&plan, Some(&tuned));
+
+        assert_eq!(request.context_key, "256k");
+    }
+
+    #[test]
+    fn an_unpinned_balanced_tune_reaches_the_actual_launch_arguments() {
+        let home = tempfile::tempdir().unwrap();
+        let balanced = entry("q4", "256k", Mode::Native, 24, Profile::Balanced, 300.0);
+        let mut pure = entry("q8", "64k", Mode::Native, 24, Profile::Pure, 900.0);
+        pure.overrides.n_gpu_layers = Some(12);
+        write_profile_store(
+            home.path(),
+            &TunerBestConfig {
+                schema: 1,
+                key: "m".to_string(),
+                vram_gb: Some(24),
+                entries: vec![pure, balanced],
+            },
+        );
+        let plan = guided("", "", Mode::Native);
+        let resolved = resolve_run_profile(home.path(), "m", profile_query_for_plan(&plan, 24));
+        let selected = resolved.entry.as_ref().unwrap();
+        assert_eq!(selected.profile, Profile::Balanced);
+        let catalog_models = serde_json::from_value(serde_json::json!({"Models": {
+            "m": {"Root": "m", "Repo": "owner/m", "Quant": "q8",
+                "Quants": {"q4": {"File": "balanced.gguf"}, "q8": {"File": "pure.gguf"}},
+                "Contexts": {"64k": 65536, "256k": 262144}}
+        }}))
+        .unwrap();
+        let settings = serde_json::from_value(serde_json::json!({
+            "LlamaCppGgufRoot": home.path().to_str().unwrap()
+        }))
+        .unwrap();
+        let catalog =
+            Catalog::from_layers(&Default::default(), &catalog_models, &settings).unwrap();
+        let launcher = localbox_launcher::launcher::LlamaLauncher::new(
+            catalog,
+            "1.2.1",
+            home.path().to_path_buf(),
+            24,
+        )
+        .with_help_reader(|_, _| None);
+        let (mut request, _) = request_from_guided(&plan, Some(selected));
+        request.apply_session_defaults(&Default::default());
+        let launched = plan_launch(&launcher, &request).unwrap();
+        let argv = launched.argv.join(" ");
+        assert!(argv.contains("balanced.gguf"), "{argv}");
+        assert!(!argv.contains("pure.gguf"), "{argv}");
+        assert!(argv.contains("-c 262144"), "{argv}");
+        assert!(argv.contains("-ngl 99"), "{argv}");
+        assert!(argv.contains("--parallel 1"), "{argv}");
+    }
+
+    #[test]
+    fn a_pinned_context_that_was_never_tuned_still_reports_no_match() {
+        let home = tempfile::tempdir().unwrap();
+        let store = TunerBestConfig {
+            schema: 1,
+            key: "m".to_string(),
+            vram_gb: Some(24),
+            entries: vec![entry(
+                "i1-q4km",
+                "256k",
+                Mode::Turboquant,
+                24,
+                Profile::Balanced,
+                603.26,
+            )],
+        };
+        write_profile_store(home.path(), &store);
+        let plan = guided("i1-q4km", "32k", Mode::Turboquant);
+
+        let resolved = resolve_run_profile(home.path(), "m", profile_query_for_plan(&plan, 24));
+
+        assert!(!resolved.is_tuned());
+        assert_eq!(
+            resolved.unavailable,
+            Some(localbox_launcher::profile::UnavailableReason::NoMatch)
+        );
+    }
+
+    #[test]
+    fn a_saved_tune_becomes_the_settings_the_next_launch_asks_for() {
+        let mut overrides = PlanOverrides::default();
+
+        adopt_tuned_choices(
+            &mut overrides,
+            &tune_choices(1),
+            "i1-q4km",
+            "256k",
+            Mode::Turboquant,
+            None,
+        );
+
+        assert_eq!(overrides.quant.as_deref(), Some("i1-q4km"));
+        assert_eq!(overrides.context_key.as_deref(), Some("256k"));
+        assert_eq!(overrides.mode, Some(Mode::Turboquant));
+        assert_eq!(overrides.auto_best_profile.as_deref(), Some("pure"));
+    }
+
+    #[test]
+    fn adopting_a_tune_keeps_a_locked_engine_and_a_both_profile_run_unpinned() {
+        let mut overrides = PlanOverrides::default();
+
+        adopt_tuned_choices(
+            &mut overrides,
+            &tune_choices(2),
+            "q2-0",
+            "64k",
+            Mode::Native,
+            Some(Mode::PrismMl),
+        );
+
+        assert_eq!(overrides.mode, None, "a catalog-locked engine is not moved");
+        assert_eq!(
+            overrides.auto_best_profile, None,
+            "a both-profile run states no preference"
+        );
+        assert_eq!(overrides.context_key.as_deref(), Some("64k"));
     }
 
     #[test]
