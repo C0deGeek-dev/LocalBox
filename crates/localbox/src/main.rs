@@ -11,7 +11,8 @@ use std::process::ExitCode;
 use localbox::exec::{build_launcher, home_dir};
 use localbox::guided::{catalog_dir, run_guided};
 use localbox::live::{
-    execute_launch, status_report, stop_all, AgentKind, LiveError, RunningModelPolicy,
+    describe_stop_remaining, execute_launch, status_report, stop_all_with, AgentKind, LiveError,
+    RunningModelPolicy, StopProgress, StopReport, StopTarget,
 };
 use localbox::product_envelope;
 use localbox_launcher::catalog::Catalog;
@@ -538,13 +539,46 @@ fn resolved_proxy_port(home: &std::path::Path) -> u16 {
 
 fn cmd_stop() -> Result<(), String> {
     let home = home_dir().ok_or("could not determine the user home directory")?;
-    let stopped = stop_all(&home, &[resolved_proxy_port(&home)]);
-    if stopped == 0 {
-        println!("Nothing was running.");
-    } else {
-        println!("Stopped {stopped} process(es).");
+    let report = stop_all_with(
+        &home,
+        &[resolved_proxy_port(&home)],
+        &mut print_stop_progress,
+    );
+    finish_stop(&report)
+}
+
+/// Show what a stop found, then a dot a second while it waits for the exits.
+fn print_stop_progress(step: StopProgress<'_>) {
+    use std::io::Write;
+    match step {
+        StopProgress::Found([]) => {}
+        StopProgress::Found(found) => {
+            let list: Vec<String> = found.iter().map(StopTarget::describe).collect();
+            println!("Found {} process(es): {}", found.len(), list.join(", "));
+            print!("Stopping ");
+            let _ = std::io::stdout().flush();
+        }
+        StopProgress::Waiting => {
+            print!(".");
+            let _ = std::io::stdout().flush();
+        }
     }
-    Ok(())
+}
+
+/// Close the line `print_stop_progress` left open and report the outcome.
+fn finish_stop(report: &StopReport) -> Result<(), String> {
+    if report.found.is_empty() {
+        println!("Nothing was running.");
+        return Ok(());
+    }
+    if report.remaining.is_empty() {
+        println!(" done");
+        println!("{0}/{0} processes stopped.", report.stopped);
+        Ok(())
+    } else {
+        println!();
+        Err(describe_stop_remaining(report))
+    }
 }
 
 fn cmd_status(args: &[String]) -> Result<(), String> {
@@ -804,10 +838,11 @@ fn cmd_purge() -> Result<(), String> {
     let root = expand_path_with_home(&root.to_string_lossy(), &home);
 
     let proxy_port = catalog.no_think_proxy_port().unwrap_or(DEFAULT_PROXY_PORT);
-    let stopped = stop_all(&home, &[proxy_port]);
-    if stopped > 0 {
-        println!("Stopped {stopped} running process(es).");
-    }
+    let report = stop_all_with(&home, &[proxy_port], &mut print_stop_progress);
+    // Deleting model files under a server that is still exiting would fail or
+    // leave it running on deleted weights, so a stop that did not finish ends
+    // the purge before it deletes anything.
+    finish_stop(&report)?;
     let mut removed = 0;
     for folder in purge_targets(&catalog, &root) {
         if !folder.is_dir() {

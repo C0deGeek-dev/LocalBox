@@ -1908,8 +1908,18 @@ fn choose_running_action(
                 .ok()
                 .and_then(|launcher| launcher.configured_no_think_proxy_port())
                 .unwrap_or(localbox_launcher::orchestrate::DEFAULT_PROXY_PORT);
-            let stopped = crate::live::stop_all(home, &[proxy_port]);
-            chooser.notice(&format!("Stopped {stopped} running model server(s)."));
+            let report = crate::live::stop_all(home, &[proxy_port]);
+            if !report.remaining.is_empty() {
+                chooser.announce(&format!(
+                    "Nothing was started: {}",
+                    crate::live::describe_stop_remaining(&report)
+                ));
+                return None;
+            }
+            chooser.notice(&format!(
+                "Stopped {} running model server(s).",
+                report.stopped
+            ));
             Some(crate::live::RunningModelPolicy::Continue)
         }
         _ => {

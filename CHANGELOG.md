@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`localbox stop` waits until the processes have exited.** It signalled each
+  llama-server and the no-think proxy, counted them as stopped and returned,
+  but a server holding tens of GB of weights and a CUDA context takes seconds
+  to go. The next `stop` found the same process and counted it again, and a
+  `purge` or a launch-time "stop first" could start the next server next to one
+  still exiting. It now lists what it found (with pid and port), waits until
+  every process is gone from the process table and its port no longer listens,
+  shows progress, and reports `n/m processes stopped`. After 30 s it names what
+  is still there and exits non-zero; `purge` then deletes nothing, and a launch
+  starts nothing. The recorded embedding server is still spared.
+
 - **Guided launches replay the tune they selected.** Unspecified quant/context
   inherit the saved profile's values, and a successful saved auto-tune updates
   Launch now to its measured choices. Explicit choices, engine locks, and the

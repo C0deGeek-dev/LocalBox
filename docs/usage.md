@@ -11,7 +11,7 @@ localbox                            open the guided launcher (pick a model)
 localbox --plain                    guided launcher with plain-text menus
 localbox launch <model> [options]   resolve, start, and hand off to an agent
 localbox serve <model> [options]    start the model (and proxy) headless
-localbox stop                       stop every model server and the proxy
+localbox stop                       stop every model server and the proxy, and wait for them to exit
 localbox status                     report serve health and the remedy
 localbox info [model]               list the configured models, or one in detail
 localbox download <model> [--quant <key>] [--vision] [--draft]

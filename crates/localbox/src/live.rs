@@ -15,7 +15,7 @@ use localbox_launcher::permissions::{
     claude_permission_args, codex_bypass_args, localpilot_bypass_toml, resolve_gate, AgentGate,
     GateSource, JsonSettingsStore, Prompter,
 };
-use localbox_launcher::proxy::{ensure_proxy, stop_any_on_port, ProxyLifecycleError};
+use localbox_launcher::proxy::{ensure_proxy, ProxyLifecycleError, ProxyOps};
 use localbox_launcher::smoke::{evaluate_smoke_reply, format_smoke_failure};
 use localx_llama_core::{BackendSession, Launcher, LauncherError};
 use localx_llama_runtime::health::{classify_health, health_description, remediation};
@@ -78,6 +78,10 @@ pub enum LiveError {
     /// and nothing was stopped.
     #[error("{0}")]
     Cancelled(String),
+    /// Processes that were told to stop were still present after the wait, so
+    /// nothing new was started next to them.
+    #[error("{0}")]
+    StopIncomplete(String),
 }
 
 /// What a live launch brought up.
@@ -354,9 +358,13 @@ fn settle_running(
     match choice {
         RunningModelChoice::Continue => Ok(()),
         RunningModelChoice::StopFirst => {
-            let stopped = stop_all(home, &[proxy_port]);
-            eprintln!("Stopped {stopped} running model server(s).");
-            Ok(())
+            let report = stop_all(home, &[proxy_port]);
+            eprintln!("Stopped {} running model server(s).", report.stopped);
+            if report.remaining.is_empty() {
+                Ok(())
+            } else {
+                Err(LiveError::StopIncomplete(describe_stop_remaining(&report)))
+            }
         }
         RunningModelChoice::Cancel => Err(LiveError::Cancelled(format!(
             concat!(
@@ -679,40 +687,218 @@ fn is_spared_embed_pid(pid: u32, embed_pid: Option<u32>) -> bool {
     embed_pid == Some(pid)
 }
 
-/// Stop every llama-server process — except the recorded embedding server — and
-/// reap whatever serves the given loopback ports (the no-think proxy). Returns
-/// how many processes were told to stop.
-#[must_use]
-pub fn stop_all(home: &Path, ports: &[u16]) -> usize {
-    let mut stopped = 0;
-    // Spare LocalMind's embedding server. It is a llama-server too, but stopping
-    // the chat model must not take it down — LocalMind depends on the embedding
-    // endpoint surviving `localbox stop`. Skip its recorded PID, and never reap
-    // its port even if a caller passes it.
-    let embed = crate::embed::read_embed_state(home);
-    let embed_pid = embed.as_ref().and_then(|s| s.pid);
-    let embed_port = embed.as_ref().map(|s| s.port);
-    let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    for process in system.processes().values() {
-        if is_server_process_name(&process.name().to_string_lossy()) {
-            if is_spared_embed_pid(process.pid().as_u32(), embed_pid) {
-                continue;
-            }
-            process.kill();
-            stopped += 1;
+/// What kind of process a stop is about to end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopKind {
+    /// A llama-server.
+    Server,
+    /// The no-think proxy (or whatever listens on its port).
+    Proxy,
+}
+
+/// One process [`stop_all`] ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopTarget {
+    pub pid: u32,
+    pub kind: StopKind,
+    /// The port it serves, when known.
+    pub port: Option<u16>,
+}
+
+impl StopTarget {
+    /// `llama-server (pid 30628, port 8080)`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let name = match self.kind {
+            StopKind::Server => "llama-server",
+            StopKind::Proxy => "no-think proxy",
+        };
+        match self.port {
+            Some(port) => format!("{name} (pid {}, port {port})", self.pid),
+            None => format!("{name} (pid {})", self.pid),
         }
     }
-    let mut ops = LiveProxyOps::new(home);
+}
+
+/// What a stop found and what became of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StopReport {
+    /// Everything that was running and told to stop.
+    pub found: Vec<StopTarget>,
+    /// How many of those actually exited.
+    pub stopped: usize,
+    /// What was still present (or still listening) when the wait ran out.
+    pub remaining: Vec<StopTarget>,
+}
+
+/// A step of a stop, for a caller that wants to show progress.
+#[derive(Debug, Clone, Copy)]
+pub enum StopProgress<'a> {
+    /// The processes about to be stopped (possibly none).
+    Found(&'a [StopTarget]),
+    /// Another poll found something still alive.
+    Waiting,
+}
+
+/// The process table, as a stop needs it. A seam so the waiting logic is tested
+/// without killing anything.
+trait StopHost {
+    /// Ask a process to end; whether the request was accepted.
+    fn terminate(&mut self, pid: u32) -> bool;
+    fn is_running(&mut self, pid: u32) -> bool;
+    fn is_listening(&mut self, port: u16) -> bool;
+    fn sleep_ms(&mut self, ms: u64);
+}
+
+/// How often a stop re-checks the process table.
+const STOP_POLL_MS: u64 = 250;
+/// How long a stop waits for the processes to exit. A llama-server holding
+/// tens of GB of weights and a CUDA context needs seconds, not milliseconds.
+const STOP_TIMEOUT_MS: u64 = 30_000;
+
+struct SystemStopHost;
+
+impl StopHost for SystemStopHost {
+    fn terminate(&mut self, pid: u32) -> bool {
+        let mut system = sysinfo::System::new();
+        let target = sysinfo::Pid::from_u32(pid);
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
+        system.process(target).is_some_and(sysinfo::Process::kill)
+    }
+
+    fn is_running(&mut self, pid: u32) -> bool {
+        let mut system = sysinfo::System::new();
+        let target = sysinfo::Pid::from_u32(pid);
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
+        // A zombie has exited; it only waits for its parent to collect it.
+        system
+            .process(target)
+            .is_some_and(|process| process.status() != sysinfo::ProcessStatus::Zombie)
+    }
+
+    fn is_listening(&mut self, port: u16) -> bool {
+        is_port_listening(port)
+    }
+
+    fn sleep_ms(&mut self, ms: u64) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
+/// Terminate `targets`, then poll until each has left the process table and its
+/// port no longer listens, or `timeout_ms` passes.
+fn stop_targets(
+    host: &mut dyn StopHost,
+    targets: Vec<StopTarget>,
+    timeout_ms: u64,
+    progress: &mut dyn FnMut(StopProgress<'_>),
+) -> StopReport {
+    progress(StopProgress::Found(&targets));
+    // A refused request needs no handling here: the process then stays in the
+    // table and is reported as remaining rather than counted as stopped.
+    for target in &targets {
+        host.terminate(target.pid);
+    }
+    let mut waited = 0;
+    loop {
+        let remaining: Vec<StopTarget> = targets
+            .iter()
+            .filter(|target| {
+                host.is_running(target.pid)
+                    || target.port.is_some_and(|port| host.is_listening(port))
+            })
+            .cloned()
+            .collect();
+        if remaining.is_empty() || waited >= timeout_ms {
+            return StopReport {
+                stopped: targets.len() - remaining.len(),
+                found: targets,
+                remaining,
+            };
+        }
+        progress(StopProgress::Waiting);
+        host.sleep_ms(STOP_POLL_MS);
+        waited += STOP_POLL_MS;
+    }
+}
+
+/// Every llama-server except the spared embedding server, plus the proxy's
+/// listeners, each once.
+fn stop_targets_among(
+    rows: &[ProcessRow],
+    embed_pid: Option<u32>,
+    embed_port: Option<u16>,
+    ports: &[u16],
+    mut listeners: impl FnMut(u16) -> Vec<u32>,
+) -> Vec<StopTarget> {
+    let mut targets: Vec<StopTarget> = rows
+        .iter()
+        .filter(|row| is_server_process_name(&row.name))
+        .filter(|row| !is_spared_embed_pid(row.pid, embed_pid))
+        .map(|row| StopTarget {
+            pid: row.pid,
+            kind: StopKind::Server,
+            port: port_from_argv(&row.argv),
+        })
+        .collect();
     for &port in ports {
         if Some(port) == embed_port {
             continue;
         }
-        if stop_any_on_port(&mut ops, port) {
-            stopped += 1;
+        for pid in listeners(port) {
+            if !targets.iter().any(|target| target.pid == pid) {
+                targets.push(StopTarget {
+                    pid,
+                    kind: StopKind::Proxy,
+                    port: Some(port),
+                });
+            }
         }
     }
-    stopped
+    targets.sort_by_key(|target| target.pid);
+    targets
+}
+
+/// Stop every llama-server process — except the recorded embedding server — and
+/// whatever serves the given loopback ports (the no-think proxy), then wait
+/// until they have actually exited. `progress` is told what was found and, on
+/// every poll that still finds something alive, that the wait continues.
+///
+/// Spares LocalMind's embedding server: it is a llama-server too, but stopping
+/// the chat model must not take it down. Its recorded PID is skipped and its
+/// port is never reaped, even if a caller passes it.
+pub fn stop_all_with(
+    home: &Path,
+    ports: &[u16],
+    progress: &mut dyn FnMut(StopProgress<'_>),
+) -> StopReport {
+    let embed = crate::embed::read_embed_state(home);
+    let embed_pid = embed.as_ref().and_then(|s| s.pid);
+    let embed_port = embed.as_ref().map(|s| s.port);
+    let mut ops = LiveProxyOps::new(home);
+    let targets = stop_targets_among(&host_processes(), embed_pid, embed_port, ports, |port| {
+        ops.listener_pids(port)
+    });
+    stop_targets(&mut SystemStopHost, targets, STOP_TIMEOUT_MS, progress)
+}
+
+/// [`stop_all_with`] without progress output.
+#[must_use]
+pub fn stop_all(home: &Path, ports: &[u16]) -> StopReport {
+    stop_all_with(home, ports, &mut |_| {})
+}
+
+/// Name what a stop could not end, for an error.
+#[must_use]
+pub fn describe_stop_remaining(report: &StopReport) -> String {
+    let still: Vec<String> = report.remaining.iter().map(StopTarget::describe).collect();
+    format!(
+        "{}/{} processes stopped; still present after {} s: {}",
+        report.stopped,
+        report.found.len(),
+        STOP_TIMEOUT_MS / 1000,
+        still.join(", ")
+    )
 }
 
 /// A one-line serve health report: state, ports, and the remedy when down.
@@ -964,6 +1150,171 @@ mod tests {
         assert!(!is_spared_embed_pid(4242, Some(9999)));
         // No embed server recorded → nothing is spared.
         assert!(!is_spared_embed_pid(4242, None));
+    }
+
+    /// A process table that lets a process outlive its `terminate` by a number
+    /// of polls, the way a llama-server unloading its weights does.
+    struct FakeHost {
+        /// pid → polls it stays alive after the request; `None` = never exits.
+        lingering: std::collections::BTreeMap<u32, Option<u32>>,
+        listening: std::collections::BTreeSet<u16>,
+        terminated: Vec<u32>,
+        slept: u64,
+    }
+
+    impl FakeHost {
+        fn new(lingering: &[(u32, Option<u32>)]) -> Self {
+            Self {
+                lingering: lingering.iter().copied().collect(),
+                listening: std::collections::BTreeSet::new(),
+                terminated: Vec::new(),
+                slept: 0,
+            }
+        }
+    }
+
+    impl StopHost for FakeHost {
+        fn terminate(&mut self, pid: u32) -> bool {
+            self.terminated.push(pid);
+            self.lingering.contains_key(&pid)
+        }
+
+        fn is_running(&mut self, pid: u32) -> bool {
+            match self.lingering.get_mut(&pid) {
+                Some(Some(0)) | None => false,
+                Some(Some(polls)) => {
+                    *polls -= 1;
+                    true
+                }
+                Some(None) => true,
+            }
+        }
+
+        fn is_listening(&mut self, port: u16) -> bool {
+            self.listening.contains(&port)
+        }
+
+        fn sleep_ms(&mut self, ms: u64) {
+            self.slept += ms;
+        }
+    }
+
+    fn server(pid: u32, port: u16) -> StopTarget {
+        StopTarget {
+            pid,
+            kind: StopKind::Server,
+            port: Some(port),
+        }
+    }
+
+    /// The reported bug: a stop returned while the server was still unloading,
+    /// so the next stop counted it again.
+    #[test]
+    fn a_stop_waits_until_the_slow_process_has_exited() {
+        let mut host = FakeHost::new(&[(30628, Some(12)), (4120, Some(0))]);
+        let mut waits = 0_u64;
+        let report = stop_targets(
+            &mut host,
+            vec![server(30628, 8080), server(4120, 11_435)],
+            STOP_TIMEOUT_MS,
+            &mut |step| {
+                if matches!(step, StopProgress::Waiting) {
+                    waits += 1;
+                }
+            },
+        );
+        assert_eq!(report.stopped, 2);
+        assert!(report.remaining.is_empty());
+        assert_eq!(host.terminated, vec![30628, 4120]);
+        assert!(waits >= 12, "it must have polled while the server lingered");
+        assert_eq!(host.slept, waits * STOP_POLL_MS);
+    }
+
+    #[test]
+    fn a_stop_that_runs_out_of_time_names_what_is_still_there() {
+        let mut host = FakeHost::new(&[(30628, None), (4120, Some(0))]);
+        let report = stop_targets(
+            &mut host,
+            vec![server(30628, 8080), server(4120, 11_435)],
+            1_000,
+            &mut |_| {},
+        );
+        assert_eq!(report.found.len(), 2);
+        assert_eq!(report.stopped, 1, "only the process that exited counts");
+        assert_eq!(report.remaining, vec![server(30628, 8080)]);
+        let text = describe_stop_remaining(&report);
+        assert!(text.starts_with("1/2 processes stopped"), "{text}");
+        assert!(
+            text.contains("llama-server (pid 30628, port 8080)"),
+            "{text}"
+        );
+        assert_eq!(host.slept, 1_000, "the wait is bounded by the timeout");
+    }
+
+    /// A gone process whose port still listens has not released its VRAM or
+    /// its socket, so a new server could not take its place yet.
+    #[test]
+    fn a_port_that_still_listens_keeps_the_stop_waiting() {
+        let mut host = FakeHost::new(&[(4120, Some(0))]);
+        host.listening.insert(11_435);
+        let proxy = StopTarget {
+            pid: 4120,
+            kind: StopKind::Proxy,
+            port: Some(11_435),
+        };
+        let report = stop_targets(&mut host, vec![proxy.clone()], 500, &mut |_| {});
+        assert_eq!(report.stopped, 0);
+        assert_eq!(report.remaining, vec![proxy]);
+    }
+
+    #[test]
+    fn nothing_to_stop_is_reported_as_nothing_found() {
+        let mut host = FakeHost::new(&[]);
+        let mut found = None;
+        let report = stop_targets(&mut host, Vec::new(), STOP_TIMEOUT_MS, &mut |step| {
+            if let StopProgress::Found(list) = step {
+                found = Some(list.len());
+            }
+        });
+        assert_eq!(found, Some(0));
+        assert_eq!(report, StopReport::default());
+        assert_eq!(host.slept, 0);
+    }
+
+    #[test]
+    fn the_targets_are_servers_and_proxy_listeners_without_the_spared_embed_server() {
+        let rows = vec![
+            row(
+                30628,
+                "llama-server.exe",
+                &["llama-server", "--port", "8080"],
+            ),
+            row(555, "llama-server.exe", &["llama-server", "--port", "8090"]),
+            row(1, "explorer.exe", &[]),
+        ];
+        // The embed server is spared by pid, and its port is never reaped.
+        let targets = stop_targets_among(&rows, Some(555), Some(8090), &[11_435, 8090], |port| {
+            match port {
+                // The proxy listener, plus a duplicate of a server pid.
+                11_435 => vec![4120, 30628],
+                _ => vec![555],
+            }
+        });
+        assert_eq!(
+            targets,
+            vec![
+                StopTarget {
+                    pid: 4120,
+                    kind: StopKind::Proxy,
+                    port: Some(11_435)
+                },
+                server(30628, 8080),
+            ]
+        );
+        assert_eq!(
+            targets[0].describe(),
+            "no-think proxy (pid 4120, port 11435)"
+        );
     }
 
     #[test]
