@@ -80,6 +80,15 @@ multiply its KV-cache across llama-server's auto slot count. To deliberately
 run with llama-server's own auto slots, set `LlamaCppAgentParallel` to `-1`
 in `settings.json`.
 
+`--cache-reuse` applies only to models whose memory can be shifted. Hybrid
+models (recurrent layers, for example Bonsai 27B) log `cache_reuse is not
+supported by this context, it will be disabled` and ignore it. Those models
+resume a cached prompt only from a context checkpoint, which llama-server stores
+near the end of each prompt; `--checkpoint-min-step` did not move them in a test
+on b11415; b11026 and prism b10754 behaved the same. A prompt that differs early
+(for example a changed tool list at the start of the system message) is
+therefore re-processed in full.
+
 `localbox status` reports the health tri-state (proxy and server up /
 proxy up but its upstream down / fully down) with the remedy; a bare `502`
 from the proxy means its upstream model server is down — run
