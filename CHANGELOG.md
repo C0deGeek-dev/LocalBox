@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+## v6.0.0 - 2026-10-26
+
+Coordinated LocalX release.
+
 - **`localbox stop` waits until the processes have exited.** It signalled each
   llama-server and the no-think proxy, counted them as stopped and returned,
   but a server holding tens of GB of weights and a CUDA context takes seconds
