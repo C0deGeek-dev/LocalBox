@@ -52,7 +52,9 @@ impl ProgressPrinter {
             .is_some_and(|total| progress.received >= total);
         let line = format_progress_line(progress.kind, &name, progress.received, progress.total);
         if terminal {
-            let mut out = vec![format!("\r{line}")];
+            // Erase to the end of the line: a shorter line must not keep the
+            // tail of a longer one (`(20%)8%)`, LocalHub#284).
+            let mut out = vec![format!("\r{line}\x1b[K")];
             if complete {
                 out.push("\n".to_string());
             }
@@ -161,7 +163,7 @@ mod tests {
         };
         assert_eq!(
             printer.lines(&mid, true),
-            vec!["\rDownloading model m.gguf … 5 B / 10 B (50%)".to_string()]
+            vec!["\rDownloading model m.gguf … 5 B / 10 B (50%)\x1b[K".to_string()]
         );
         let done = DownloadProgress {
             received: 10,
@@ -170,7 +172,7 @@ mod tests {
         assert_eq!(
             printer.lines(&done, true),
             vec![
-                "\rDownloading model m.gguf … 10 B / 10 B (100%)".to_string(),
+                "\rDownloading model m.gguf … 10 B / 10 B (100%)\x1b[K".to_string(),
                 "\n".to_string()
             ]
         );

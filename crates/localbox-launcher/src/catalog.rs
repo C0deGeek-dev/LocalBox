@@ -287,7 +287,7 @@ impl Catalog {
         let settings = read_layer(&local_llm_dir.join("settings.json"))?;
         let assembled = Self::from_layers(&defaults, &catalog, &settings)?;
         for warning in &assembled.warnings {
-            eprintln!("Warning: {warning}");
+            warn(warning);
         }
         Ok(assembled)
     }
@@ -770,5 +770,105 @@ mod tests {
         let catalog = obj(r#"{ "Models": { "broken": { "Repo": 42 } } }"#);
         let err = Catalog::from_layers(&Map::new(), &catalog, &Map::new()).unwrap_err();
         assert!(matches!(err, CatalogError::BadModel { ref key, .. } if key == "broken"));
+    }
+}
+
+/// Warnings held while a full-screen view owns the terminal (LocalHub#284).
+///
+/// Writing to stderr under a live inline viewport scrolls the screen behind
+/// the renderer's back and garbles every later frame. While capture is on,
+/// [`warn`] keeps each distinct warning once for the view to show through
+/// its own drawing; otherwise it prints, as before.
+#[derive(Default)]
+struct HeldWarnings {
+    capturing: bool,
+    seen: std::collections::HashSet<String>,
+    pending: Vec<String>,
+}
+
+static HELD_WARNINGS: std::sync::Mutex<Option<HeldWarnings>> = std::sync::Mutex::new(None);
+
+fn held() -> std::sync::MutexGuard<'static, Option<HeldWarnings>> {
+    HELD_WARNINGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Report a catalog warning: printed to stderr, or held while
+/// [`capture_warnings`] is on (each distinct text once per capture).
+pub fn warn(message: &str) {
+    let mut guard = held();
+    match guard.as_mut() {
+        Some(state) if state.capturing => {
+            if state.seen.insert(message.to_string()) {
+                state.pending.push(message.to_string());
+            }
+        }
+        _ => {
+            drop(guard);
+            eprintln!("Warning: {message}");
+        }
+    }
+}
+
+/// Hold warnings instead of printing them (`true`), or print them again
+/// (`false`; anything still held is printed first).
+pub fn capture_warnings(on: bool) {
+    let leftover = {
+        let mut guard = held();
+        if on {
+            *guard = Some(HeldWarnings {
+                capturing: true,
+                ..HeldWarnings::default()
+            });
+            Vec::new()
+        } else {
+            guard.take().map(|state| state.pending).unwrap_or_default()
+        }
+    };
+    for message in leftover {
+        eprintln!("Warning: {message}");
+    }
+}
+
+/// The warnings held since the last call, oldest first.
+#[must_use]
+pub fn take_warnings() -> Vec<String> {
+    held()
+        .as_mut()
+        .map(|state| std::mem::take(&mut state.pending))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod held_warning_tests {
+    use super::*;
+
+    #[test]
+    fn captured_warnings_are_held_once_each_and_released_on_take() {
+        // Other tests may load catalogs meanwhile; look only at this test's own texts.
+        let mine = |all: Vec<String>| -> Vec<String> {
+            all.into_iter()
+                .filter(|w| w.starts_with("held-test:"))
+                .collect()
+        };
+        capture_warnings(true);
+        warn("held-test: retired field");
+        warn("held-test: retired field");
+        warn("held-test: size drift");
+        assert_eq!(
+            mine(take_warnings()),
+            vec![
+                "held-test: retired field".to_string(),
+                "held-test: size drift".to_string()
+            ]
+        );
+        warn("held-test: size drift");
+        assert!(
+            mine(take_warnings()).is_empty(),
+            "a warning seen this session is not repeated"
+        );
+        capture_warnings(false);
+        assert!(take_warnings().is_empty());
     }
 }

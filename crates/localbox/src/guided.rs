@@ -163,9 +163,9 @@ fn validated_quant_size_gb(
 ) -> Option<f64> {
     if let (Some(catalog), Some(disk)) = (catalog_size_gb, disk_size_gb) {
         if (catalog - disk).abs() > 0.15 {
-            eprintln!(
-                "Warning: catalog size for {key}/{quant} is {catalog:.1}GB but the downloaded GGUF is {disk:.1}GB; using the on-disk size."
-            );
+            localbox_launcher::catalog::warn(&format!(
+                "catalog size for {key}/{quant} is {catalog:.1}GB but the downloaded GGUF is {disk:.1}GB; using the on-disk size."
+            ));
         }
     }
     disk_size_gb.or(catalog_size_gb)
@@ -456,6 +456,14 @@ struct TuiChooser {
 }
 
 impl TuiChooser {
+    /// Show warnings held while the band is live above it, through the
+    /// renderer, so they never write over the band (LocalHub#284).
+    fn show_held_warnings(&mut self) {
+        for warning in localbox_launcher::catalog::take_warnings() {
+            self.notice(&format!("Warning: {warning}"));
+        }
+    }
+
     fn ensure_terminal(&mut self) -> std::io::Result<&mut TuiTerminal> {
         if self.terminal.is_none() {
             let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
@@ -483,6 +491,9 @@ impl TuiChooser {
         let terminal = self.ensure_terminal()?;
         crossterm::terminal::enable_raw_mode()?;
         let mut selected = start.min(rows.len().saturating_sub(1));
+        // Draw the whole band once: never trust a diff against cells that
+        // something else may have written over since the last frame.
+        terminal.clear()?;
         let result = loop {
             terminal.draw(|frame| {
                 render_guided_screen(
@@ -540,6 +551,7 @@ impl TuiChooser {
             return;
         }
         let mut quit = false;
+        let _ = terminal.clear();
         loop {
             let _ = terminal.draw(|frame| {
                 render_notice_screen(frame, &banner, title, text, border);
@@ -578,6 +590,7 @@ impl Chooser for TuiChooser {
     }
 
     fn choose(&mut self, title: &str, rows: &[MenuRow], start: usize) -> Option<usize> {
+        self.show_held_warnings();
         match self.run_list(title, rows, start) {
             Ok(choice) => choice,
             Err(e) => {
@@ -630,6 +643,23 @@ impl Chooser for TuiChooser {
     }
 }
 
+/// Holds catalog warnings for the band while the guided launcher runs, and
+/// prints whatever is left when it ends.
+struct HeldWarningsGuard;
+
+impl HeldWarningsGuard {
+    fn start() -> Self {
+        localbox_launcher::catalog::capture_warnings(true);
+        Self
+    }
+}
+
+impl Drop for HeldWarningsGuard {
+    fn drop(&mut self) {
+        localbox_launcher::catalog::capture_warnings(false);
+    }
+}
+
 /// Run the guided launcher until the user cancels out of the model picker.
 ///
 /// # Errors
@@ -648,6 +678,8 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
     } else {
         Box::new(TuiChooser::default())
     };
+    // Under the live band, warnings are shown through the band, not printed.
+    let _held = (!degraded).then(HeldWarningsGuard::start);
     let gpu = probe_gpu();
     let probed_vram = i64::from(gpu.as_ref().map_or(0, |info| info.vram_gb));
     // Recommendations and all fit rows use the same shared ladder as launch:

@@ -4,6 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **Catalog warnings no longer garble the guided launcher.** Retired-field and
+  size-drift warnings were written straight to the terminal under the live menu,
+  which left old rows on screen and mixed warning text into later menus. While
+  the launcher's menu is shown they now appear once each above it, each menu
+  draws its whole screen when it opens, and the download progress line erases
+  what a longer earlier line left behind (LocalHub#284).
+
 ## v6.0.0 - 2026-10-26
 
 Coordinated LocalX release.
