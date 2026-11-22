@@ -138,6 +138,8 @@ pub struct LaunchPlan {
     pub draft_module: Option<PathBuf>,
     /// Whether the planned drafter is already present locally.
     pub draft_module_downloaded: bool,
+    /// Dedicated Unsloth runtime for the original Inkling 2 GGUF layout.
+    pub inkling2_binary: Option<PathBuf>,
     /// The full llama-server argv.
     pub argv: Vec<String>,
     pub server_port: u16,
@@ -153,6 +155,29 @@ pub struct LaunchPlan {
     pub notes: Vec<String>,
 }
 
+/// Inkling's template takes an effort setting. Forcing a zero-token budget
+/// makes the runtime re-enter the thinking tags repeatedly.
+pub fn apply_inkling2_launch_defaults(
+    def: &mut localx_llama_core::ModelDef,
+    params: &mut localx_llama_core::args::LaunchParams,
+    keep_thinking: bool,
+) {
+    params.batch_size.get_or_insert(256);
+    params.ubatch_size.get_or_insert(256);
+    if !keep_thinking
+        && params
+            .thinking_policy
+            .as_deref()
+            .or(def.thinking_policy.as_deref())
+            != Some("keep")
+    {
+        def.thinking_policy = Some("keep".into());
+        params.thinking_policy = None;
+        def.extra_args
+            .splice(0..0, ["--reasoning-effort".into(), "none".into()]);
+    }
+}
+
 /// Resolve a launch request into a plan. Read-only: no download, no spawn, no
 /// session mutation — safe to call for DryRun and reused verbatim by the live
 /// path.
@@ -166,7 +191,10 @@ pub fn plan_launch(
 ) -> Result<LaunchPlan, LauncherError> {
     use localx_llama_core::Launcher;
 
-    let def = launcher.model_def(&request.key)?;
+    let mut def = launcher.model_def(&request.key)?;
+    let inkling2_binary = launcher
+        .inkling2_runtime_root(&request.key)
+        .map(|root| root.join(localx_llama_runtime::server::server_exe_name()));
     if let Some(required) = launcher.required_mode(&request.key) {
         if request.mode != required {
             let label = |mode: Mode| {
@@ -229,11 +257,28 @@ pub fn plan_launch(
 
     // --mmproj enters argv for an existing projector or one planned for download.
     let mut params = request.params.clone();
+    if inkling2_binary.is_some() {
+        apply_inkling2_launch_defaults(&mut def, &mut params, request.keep_thinking);
+    }
     // Memory-mapping flags are spelled the way the binary that will run
     // accepts them: mainline rejects `--no-mmap`/`--mlock`, the forks keep them.
     // A build with `--fit` places an unplaced model itself instead of the
     // `-ngl 999` that would overflow VRAM for anything larger than the card.
-    let capabilities = launcher.server_capabilities(request.mode);
+    let capabilities = inkling2_binary.as_ref().map_or_else(
+        || launcher.server_capabilities(request.mode),
+        |binary| {
+            if binary.is_file() {
+                launcher.capabilities_for_binary(binary)
+            } else {
+                // Matches the pinned Unsloth build on first launch or dry-run.
+                localx_llama_core::ServerCapabilities {
+                    fit: true,
+                    load_mode: true,
+                    lazy_mode: true,
+                }
+            }
+        },
+    );
     params.load_flags = capabilities.load_flags();
     params.auto_fit = capabilities.fit;
     params.vision_module_path = vision_module
@@ -243,6 +288,15 @@ pub fn plan_launch(
     params.draft_module_path = draft_module
         .as_ref()
         .and_then(|p| p.to_str().map(str::to_string));
+    let dspark = inkling2_binary.is_some()
+        && draft_module.as_ref().is_some_and(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(crate::catalog::is_dspark_gguf)
+        });
+    if dspark {
+        params.spec_draft_n_max.get_or_insert(3);
+    }
     params.fit_target_mib = fit_target_mib(
         launcher.fit_target_mib_setting(),
         [vision_module.as_deref(), draft_module.as_deref()],
@@ -262,6 +316,16 @@ pub fn plan_launch(
         &params,
     )
     .map_err(|e| LauncherError::Unavailable(e.to_string()))?;
+    if dspark {
+        // The shared builder treats external drafters as draft-simple.
+        // Replace its generated spec type before any raw argument overrides.
+        if let Some(i) = argv
+            .windows(2)
+            .position(|pair| pair == ["--spec-type", "draft-simple"])
+        {
+            argv[i + 1] = "draft-dspark".to_string();
+        }
+    }
     if omit_default_gpu_layers {
         if let Some(index) = argv.iter().position(|arg| arg == "-ngl") {
             argv.drain(index..index + 2);
@@ -316,6 +380,7 @@ pub fn plan_launch(
         vision_module_downloaded,
         draft_module,
         draft_module_downloaded,
+        inkling2_binary,
         argv,
         server_port,
         proxy,
@@ -404,6 +469,22 @@ mod tests {
                     "Quants": { "iq1m": "IQ1_M/Split-IQ1_M-00001-of-00002.gguf" },
                     "Quant": "iq1m",
                     "Contexts": { "": 32768 }
+                },
+                "inkling": {
+                    "Root": "inkling",
+                    "Repo": "JoaoZaokk/Inkling-2-Mini-Heretic-GGUF",
+                    "Quants": {
+                        "q4kxl": "Inkling-2-Mini-Heretic-UD-Q4_K_XL.gguf",
+                        "q80": "dspark-Inkling-2-Mini-Q8_0.gguf"
+                    },
+                    "Quant": "q4kxl",
+                    "Contexts": { "": 65536 }
+                },
+                "inkling-mainline": {
+                    "Root": "inkling-mainline",
+                    "Repo": "unsloth/Inkling-2-Mini-GGUF",
+                    "File": "Mainline_Support/Inkling-2-Mini-UD-Q4_K_XL.gguf",
+                    "Contexts": { "": 65536 }
                 }
             }
         }"#,
@@ -420,6 +501,66 @@ mod tests {
         }
         let catalog = Catalog::from_layers(&Map::new(), &catalog, &settings).unwrap();
         LlamaLauncher::new(catalog, "1.2.1", dir.join("home"), 24)
+    }
+
+    #[test]
+    fn inkling_uses_its_runtime_and_only_loads_dspark_on_request() {
+        use localx_llama_core::Launcher;
+
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = launcher(dir.path());
+        let mut request = LaunchRequest::new("inkling", "", Mode::Native);
+        let text = plan_launch(&launcher, &request).unwrap();
+        assert_eq!(
+            text.inkling2_binary,
+            Some(
+                dir.path()
+                    .join("home/.local-llm/llama-cpp-inkling2")
+                    .join(localx_llama_runtime::server::server_exe_name())
+            )
+        );
+        assert!(text.draft_module.is_none());
+        assert!(text
+            .argv
+            .windows(2)
+            .any(|args| args == ["--reasoning-effort", "none"]));
+        assert!(text
+            .argv
+            .windows(2)
+            .any(|args| args == ["--cache-type-k", "q4_0"]));
+        assert!(text
+            .argv
+            .windows(2)
+            .any(|args| args == ["--cache-type-v", "q4_0"]));
+        assert!(!launcher
+            .model_def("inkling")
+            .unwrap()
+            .quants
+            .contains_key("q80"));
+
+        request.use_draft = true;
+        request.params.batch_size = Some(128);
+        let draft = plan_launch(&launcher, &request).unwrap();
+        assert!(draft
+            .draft_module
+            .unwrap()
+            .ends_with("dspark-Inkling-2-Mini-Q8_0.gguf"));
+        assert!(draft
+            .argv
+            .windows(2)
+            .any(|args| args == ["--spec-type", "draft-dspark"]));
+        assert!(draft
+            .argv
+            .windows(2)
+            .any(|args| args == ["--batch-size", "128"]));
+
+        request.mode = Mode::Turboquant;
+        assert!(plan_launch(&launcher, &request).is_err());
+        let mainline = LaunchRequest::new("inkling-mainline", "", Mode::Native);
+        assert!(plan_launch(&launcher, &mainline)
+            .unwrap()
+            .inkling2_binary
+            .is_none());
     }
 
     fn mainline_help(_binary: &std::path::Path, _timeout: std::time::Duration) -> Option<String> {

@@ -509,6 +509,38 @@ fn cleanup_after_failed_smoke(
     kill_server();
 }
 
+/// Make the model-specific runtime available to both launches and benchmarks.
+pub fn ensure_inkling2_runtime(binary: &Path) -> Result<(), LiveError> {
+    if !binary.is_file() {
+        let root = binary.parent().ok_or_else(|| {
+            LiveError::Server(format!(
+                "invalid Inkling 2 runtime path {}",
+                binary.display()
+            ))
+        })?;
+        eprintln!("Installing the Inkling 2 CUDA runtime …");
+        block_on(crate::update::install_inkling2_runtime(root))?.map_err(LiveError::Server)?;
+    }
+    let devices = localx_llama_runtime::tool::run_tool(
+        binary,
+        &["--list-devices".into()],
+        std::time::Duration::from_secs(15),
+    );
+    if !devices.is_some_and(|output| {
+        output.success
+            && output
+                .stdout
+                .lines()
+                .any(|line| line.trim_start().starts_with("CUDA"))
+    }) {
+        return Err(LiveError::Server(format!(
+            "the Inkling 2 runtime at {} detected no CUDA device; check your NVIDIA driver and CUDA runtime libraries",
+            binary.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Execute a resolved launch plan: download the model when missing, spawn
 /// the server and wait for readiness, bring up the proxy when the plan
 /// routes through it, smoke-test the reply path, then hand off to the agent
@@ -546,7 +578,13 @@ pub fn execute_launch(
         ))??;
     }
 
-    let binary = launcher.server_binary(request.mode, true)?;
+    let binary = if let Some(binary) = &plan.inkling2_binary {
+        ensure_inkling2_runtime(binary)?;
+        eprintln!("Using the Inkling 2 runtime at {}.", binary.display());
+        binary.clone()
+    } else {
+        launcher.server_binary(request.mode, true)?
+    };
     let log = server_log_path(home, plan.server_port);
     eprintln!("Starting the model server — log: {}", log.display());
     let mut child = spawn_server(&binary, &plan.argv, &log)
@@ -1117,6 +1155,7 @@ mod tests {
 
     fn plan_with(base_url: &str, listen_port: u16) -> LaunchPlan {
         LaunchPlan {
+            inkling2_binary: None,
             key: "m".into(),
             context_key: String::new(),
             context_tokens: 65_536,

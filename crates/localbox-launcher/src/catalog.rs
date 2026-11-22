@@ -41,6 +41,47 @@ const MODEL_FIELDS: &[&str] = &[
     "RequiredMode",
 ];
 
+pub const INKLING2_HERETIC_REPO: &str = "JoaoZaokk/Inkling-2-Mini-Heretic-GGUF";
+const INKLING2_DRAFT_Q8: &str = "dspark-Inkling-2-Mini-Q8_0.gguf";
+
+/// DSpark files are speculative drafters and cannot serve as target models.
+pub fn is_dspark_gguf(path: &str) -> bool {
+    let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let lower = filename.to_ascii_lowercase();
+    lower.starts_with("dspark-") && lower.ends_with(".gguf")
+}
+
+/// The base and Heretic repositories publish the original looped GGUF layout
+/// at their roots. Unsloth's Mainline_Support directory uses a different layout.
+pub fn uses_inkling2_runtime(def: &ModelDef) -> bool {
+    let is_root_gguf = |file: &str| !file.contains(['/', '\\']);
+    def.repo.eq_ignore_ascii_case(INKLING2_HERETIC_REPO)
+        || (def.repo.eq_ignore_ascii_case("unsloth/Inkling-2-Mini-GGUF")
+            && def.file.as_deref().is_none_or(is_root_gguf)
+            && def.quants.values().all(|quant| is_root_gguf(&quant.file)))
+}
+
+fn apply_inkling2_defaults(def: &mut ModelDef) {
+    def.flash_attn.get_or_insert(true);
+    def.kv_cache_k.get_or_insert_with(|| "q4_0".into());
+    let removed_default = def.quant.as_ref().is_some_and(|key| {
+        def.quants
+            .get(key)
+            .is_some_and(|quant| is_dspark_gguf(&quant.file))
+    });
+    // The older HF importer listed these companions as standalone model quants.
+    def.quants.retain(|_, quant| !is_dspark_gguf(&quant.file));
+    if removed_default {
+        def.quant = ["q4km", "q4kxl", "q3kxl"]
+            .iter()
+            .find(|key| def.quants.contains_key(**key))
+            .map(|key| (*key).to_string())
+            .or_else(|| def.quants.keys().next().cloned());
+    }
+    def.draft_module
+        .get_or_insert_with(|| INKLING2_DRAFT_Q8.into());
+}
+
 /// Fields earlier versions of LocalBox wrote or read and this one does not.
 ///
 /// They are unknown fields like any other, but with a known history, so the
@@ -242,6 +283,9 @@ fn parse_required_mode(value: &Value, def: &ModelDef) -> Result<Option<Mode>, St
         }),
         Some(_) => return Err("RequiredMode must be a string".to_string()),
     };
+    if uses_inkling2_runtime(def) {
+        return Ok(Some(Mode::Native));
+    }
     Ok(parsed.or_else(|| {
         def.repo
             .eq_ignore_ascii_case("prism-ml/Ternary-Bonsai-27B-gguf")
@@ -318,11 +362,14 @@ impl Catalog {
                         .into_iter()
                         .map(|warning| format!("model '{key}': {warning}")),
                 );
-                let def: ModelDef =
+                let mut def: ModelDef =
                     serde_json::from_value(prepared).map_err(|e| CatalogError::BadModel {
                         key: key.clone(),
                         reason: e.to_string(),
                     })?;
+                if uses_inkling2_runtime(&def) {
+                    apply_inkling2_defaults(&mut def);
+                }
                 if let Err(error) = validate_model_def(key, &def) {
                     warnings.push(format!("model '{key}' is invalid and was skipped: {error}"));
                     continue;

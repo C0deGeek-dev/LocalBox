@@ -133,6 +133,7 @@ fn run() -> ExitCode {
         "status" => cmd_status(&args[1..]),
         "info" => cmd_info(&args[1..]),
         "models" => cmd_models(&args[1..]),
+        "bench-runtime" => cmd_bench_runtime(&args[1..]),
         "download" => cmd_download(&args[1..]),
         "purge" => cmd_purge(),
         "clean" => cmd_clean(&args[1..]),
@@ -158,6 +159,33 @@ fn run() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+// Versioned, machine-readable handoff to independently installed LocalBench.
+fn cmd_bench_runtime(args: &[String]) -> Result<(), String> {
+    let key = args.first().ok_or("bench-runtime needs a model key")?;
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let catalog = Catalog::load(&home.join(".local-llm")).map_err(|error| error.to_string())?;
+    let launcher = localbox::exec::build_launcher_with(catalog, &home);
+    let mut def = launcher.model_def(key).map_err(|error| error.to_string())?;
+    let root = launcher
+        .inkling2_runtime_root(key)
+        .ok_or_else(|| format!("{key} has no dedicated benchmark runtime"))?;
+    let server = root.join(localx_llama_runtime::server::server_exe_name());
+    localbox::live::ensure_inkling2_runtime(&server).map_err(|error| error.to_string())?;
+    let mut defaults = localx_llama_core::args::LaunchParams::default();
+    localbox_launcher::orchestrate::apply_inkling2_launch_defaults(&mut def, &mut defaults, false);
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": 1,
+            "server": server,
+            "model": def,
+            "batch_size": defaults.batch_size,
+            "ubatch_size": defaults.ubatch_size,
+        })
+    );
+    Ok(())
 }
 
 fn cmd_version() -> Result<(), String> {
@@ -278,6 +306,9 @@ fn build_request(
                 quant: explicit_quant.then_some(request.quant.as_deref()).flatten(),
                 context_key: explicit_context.then_some(request.context_key.as_str()),
                 mode: (explicit_mode || required_mode.is_some()).then_some(request.mode),
+                preferred_profile: launcher
+                    .inkling2_runtime_root(&request.key)
+                    .map(|_| localx_llama_core::tuner::Profile::Balanced),
                 ..RunProfileQuery::default()
             },
         )
@@ -405,7 +436,8 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     confirm_profile_fallback(args, &request.key, profile.as_ref())?;
     if let Some(entry) = profile.as_ref().and_then(|profile| profile.entry.as_ref()) {
         eprintln!(
-            "Run profile: tuned · {} · {} · {} (score {:.0} {}) · {}",
+            "Run profile: tuned · {:?} · {} · {} · {} (score {:.0} {}) · {}",
+            entry.profile,
             entry.quant,
             entry.context_key,
             entry.mode.as_str(),
@@ -510,6 +542,9 @@ fn print_plan(plan: &localbox_launcher::orchestrate::LaunchPlan) {
         );
     }
     println!("Server:    127.0.0.1:{}", plan.server_port);
+    if let Some(binary) = &plan.inkling2_binary {
+        println!("Runtime:   {}", binary.display());
+    }
     println!("Endpoint:  {}", plan.base_url);
     println!("Command:   {}", plan.argv.join(" "));
     if !plan.env_plan.is_empty() {
@@ -1525,6 +1560,7 @@ mod tests {
 
     fn plan(base_url: &str) -> LaunchPlan {
         LaunchPlan {
+            inkling2_binary: None,
             key: "m".into(),
             context_key: String::new(),
             context_tokens: 0,

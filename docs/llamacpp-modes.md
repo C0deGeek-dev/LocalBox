@@ -36,6 +36,34 @@ The launcher supports three flavors of `llama-server`:
   garbage output; the launch smoke test is the backstop. Not installed on
   Windows CPU/Vulkan/HIP or Intel macOS.
 
+### Inkling 2 Mini GGUFs
+
+LocalBox recognizes the original looped GGUF layout from
+[Inkling 2 Mini Heretic](https://huggingface.co/JoaoZaokk/Inkling-2-Mini-Heretic-GGUF)
+and the root of [Unsloth's Inkling 2 Mini repository](https://huggingface.co/unsloth/Inkling-2-Mini-GGUF).
+Select the model normally or use `localbox serve inkling-2-mini-heretic-gguf`.
+On Windows x64 with NVIDIA CUDA 13, first launch installs a SHA-256-pinned
+[Unsloth build](https://github.com/unslothai/llama.cpp/releases/tag/b12588-mix-c0c3de8)
+and its CUDA runtime libraries into `~/.local-llm/llama-cpp-inkling2/`.
+An installed compatible CUDA build can also be supplied in that directory.
+For Unsloth GGUFs cataloged under `Mainline_Support/`, use an updated
+mainline llama.cpp with the [NVFP4 scale fix](https://github.com/ggml-org/llama.cpp/pull/32704).
+
+The launch defaults use Flash Attention, Q4_0 KV cache, and batch and
+microbatch sizes of 256. A saved tune or explicit settings can override those
+defaults. Heretic supports `--draft` to fetch and use its DSpark companion
+with a default draft length of three, and `--vision` to use the configured
+projector. Start with a shorter context if you run out of memory.
+LocalBox Auto-tune and `localbench findbest` use the same dedicated runtime.
+LocalBench measures text generation and saves the balanced profile by default
+for these GGUFs. LocalPilot's `/localbox <model> benchmark` action uses the
+same LocalBench path.
+The author reports that Q3_K_XL saves 3.72 GiB on disk relative to Q4_K_XL
+with similar perplexity. Their long-context and throughput figures use a
+custom Ampere build on an RTX 3090. See the
+[model card](https://huggingface.co/JoaoZaokk/Inkling-2-Mini-Heretic-GGUF#7-quickstart-usage)
+for the tested quant, context, and draft combinations.
+
 ### Retired: `mtpturbo`
 
 `mtpturbo` was a fourth mode — a combined build offering MTP spec-decode and the

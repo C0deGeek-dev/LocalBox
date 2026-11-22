@@ -163,6 +163,35 @@ impl LlamaLauncher {
         self.catalog.required_mode(key)
     }
 
+    /// Engine directory for catalog entries using Unsloth's looped layout.
+    #[must_use]
+    pub fn inkling2_runtime_root(&self, key: &str) -> Option<PathBuf> {
+        self.catalog
+            .model(key)
+            .filter(|def| crate::catalog::uses_inkling2_runtime(def))
+            .map(|_| self.home.join(".local-llm").join("llama-cpp-inkling2"))
+    }
+
+    pub(crate) fn capabilities_for_binary(&self, binary: &Path) -> ServerCapabilities {
+        let identity = BinaryIdentity::of(binary);
+        if let Some(known) = identity.as_ref().and_then(|id| {
+            self.capabilities
+                .lock()
+                .ok()
+                .and_then(|cache| cache.get(id).copied())
+        }) {
+            return known;
+        }
+        let Some(help) = (self.help_reader)(binary, HELP_TIMEOUT) else {
+            return ServerCapabilities::default();
+        };
+        let found = ServerCapabilities::from_help(&help);
+        if let (Some(id), Ok(mut cache)) = (identity, self.capabilities.lock()) {
+            cache.insert(id, found);
+        }
+        found
+    }
+
     /// Resolve a catalog key, advertised command alias, or model folder name.
     #[must_use]
     pub fn resolve_model_key(&self, name: &str) -> Option<String> {
@@ -522,25 +551,7 @@ impl Launcher for LlamaLauncher {
             // Nothing installed yet: plan with the long-standing flags.
             return ServerCapabilities::default();
         };
-        let identity = BinaryIdentity::of(&binary);
-        if let Some(known) = identity.as_ref().and_then(|id| {
-            self.capabilities
-                .lock()
-                .ok()
-                .and_then(|cache| cache.get(id).copied())
-        }) {
-            return known;
-        }
-        // A binary that cannot answer gets the long-standing flags, and the
-        // miss is not cached: the next launch asks again.
-        let Some(help) = (self.help_reader)(&binary, HELP_TIMEOUT) else {
-            return ServerCapabilities::default();
-        };
-        let found = ServerCapabilities::from_help(&help);
-        if let (Some(id), Ok(mut cache)) = (identity, self.capabilities.lock()) {
-            cache.insert(id, found);
-        }
-        found
+        self.capabilities_for_binary(&binary)
     }
 
     fn fit_params_binary(&self, mode: Mode) -> Option<PathBuf> {

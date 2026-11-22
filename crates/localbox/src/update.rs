@@ -20,6 +20,40 @@ use localx_llama_runtime::download::{
 /// API page.
 const RELEASE_SCAN_DEPTH: u8 = 30;
 
+/// Install the CUDA build that can read Unsloth's original Inkling 2 layout.
+/// Windows needs the separately published CUDA runtime DLLs.
+pub async fn install_inkling2_runtime(root: &Path) -> Result<(), String> {
+    if !cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        return Err(format!(
+            "automatic Inkling 2 installation is available for Windows x64 with NVIDIA CUDA 13; put a compatible Unsloth llama-server in {} (see docs/llamacpp-modes.md)",
+            root.display()
+        ));
+    }
+    const TAG: &str = "b12588-mix-c0c3de8";
+    let bundle = format!("app-{TAG}-windows-x64-cuda13-portable.zip");
+    let cudart = "cudart-llama-bin-win-cuda-13.5-x64.zip";
+    let assets = [
+        Asset {
+            url: format!("https://github.com/unslothai/llama.cpp/releases/download/{TAG}/{bundle}"),
+            name: bundle,
+            size: Some(415_071_937),
+            digest: None,
+        },
+        Asset {
+            url: format!("https://github.com/ggml-org/llama.cpp/releases/download/b12556/{cudart}"),
+            name: cudart.into(),
+            size: Some(426_314_199),
+            digest: None,
+        },
+    ];
+    let pins = [
+        Some("7076ed2fae812287653c62a09522aa60af22c9e92ed407c1ca4e60cb2c037fc9".into()),
+        Some("c2bf4cc202bfbaaa7a0b75f5082457c3811326947bb216059b72839d844e9cba".into()),
+    ];
+    install_asset_set(&assets, &pins, root, true, TAG, "win-x64-cuda13", true).await?;
+    Ok(())
+}
+
 /// A named release asset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asset {
@@ -986,7 +1020,7 @@ pub async fn install_asset_set(
     // the working engine and its build stamp exactly where they were.
     if load_probe {
         match probe_staged_server(&server) {
-            Ok(version) => println!("Staged build reports: {version}."),
+            Ok(version) => eprintln!("Staged build reports: {version}."),
             Err(message) => {
                 return Err(format!(
                     concat!(

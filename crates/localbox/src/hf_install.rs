@@ -172,6 +172,7 @@ pub fn discover_hf_repo(hf: HfRef) -> Result<HfDiscovery, String> {
     let files: Vec<QuantFile> = info
         .files
         .into_iter()
+        .filter(|file| !localbox_launcher::catalog::is_dspark_gguf(&file.rfilename))
         .map(|file| QuantFile {
             name: file.rfilename,
             size: file.size,
