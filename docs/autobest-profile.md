@@ -63,6 +63,8 @@ server-argument builder's parameters. The currently accepted tuning override key
 - `Threads`
 - `ThreadsBatch`
 - `FlashAttn`
+- `NoOpOffload` (`--no-op-offload`: host tensor operations stay on the CPU;
+  keeps a long-context MoE launch inside VRAM)
 - `SplitMode`
 
 Tuner version 5 is the current launch-time profile generation. Version-5

@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **A saved tune can keep host operations off the GPU.** AutoBest profiles accept
+  the `NoOpOffload` override and replay it as `--no-op-offload`, which a
+  long-context MoE launch needs to stay inside VRAM (LocalHub#302).
+
 - **Catalog warnings no longer garble the guided launcher.** Retired-field and
   size-drift warnings were written straight to the terminal under the live menu,
   which left old rows on screen and mixed warning text into later menus. While

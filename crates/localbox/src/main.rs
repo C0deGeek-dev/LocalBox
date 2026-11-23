@@ -1821,6 +1821,45 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_no_op_offload_tune_replays_into_the_launch() {
+        let home = tempfile::tempdir().unwrap();
+        let tuner = home.path().join(".local-llm").join("tuner");
+        std::fs::create_dir_all(&tuner).unwrap();
+        std::fs::write(
+            tuner.join("best-model.json"),
+            r#"{
+                "schema":1,"key":"model","entries":[{
+                    "quant":"q4","contextKey":"256k","mode":"native","vramGB":24,
+                    "prompt_length":"short","profile":"balanced","score":42.0,
+                    "scoreUnit":"tok/s","args":[],
+                    "overrides":{"NCpuMoe":44,"UbatchSize":128,"BatchSize":128,"NoOpOffload":true},
+                    "measured_at":"2026-11-23T00:00:00Z","tuner_version":$CURRENT
+                }]
+            }"#
+            .replace(
+                "$CURRENT",
+                &localx_llama_core::CURRENT_TUNER_VERSION.to_string(),
+            ),
+        )
+        .unwrap();
+        let catalog = localbox_launcher::catalog::Catalog::from_layers(
+            &serde_json::Map::new(),
+            &serde_json::from_str(
+                r#"{"Models":{"model":{"Repo":"o/m"}},"CommandAliases":{"m":"model"}}"#,
+            )
+            .unwrap(),
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        let launcher = LlamaLauncher::new(catalog, "0.0.0", home.path(), 24);
+        let (request, profile) = build_request(&[], "m", home.path(), &launcher, false).unwrap();
+        assert!(profile.unwrap().is_tuned());
+        assert_eq!(request.params.n_cpu_moe, Some(44));
+        assert_eq!(request.params.ubatch_size, Some(128));
+        assert_eq!(request.params.no_op_offload, Some(true));
+    }
+
+    #[test]
     fn lan_with_keep_thinking_is_refused_not_announced() {
         // The gateway is the only LAN-bindable listener; keep-thinking
         // bypasses it. The old behaviour printed a "key required" banner for
