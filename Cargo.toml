@@ -55,6 +55,6 @@ reqwest = { version = "=0.12.11", features = ["json", "stream", "rustls-tls"], d
 # lifecycle normalization required by Prism's llama.cpp fork, the engine mode
 # set with mtpturbo retired, and HF quant discovery that keeps MTP patch sets
 # and projector/draft-head files out of the quant list.
-localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "bc4914b3253707fc9c8c10b22acc8c5858f9f1a0" }
-localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "bc4914b3253707fc9c8c10b22acc8c5858f9f1a0" }
+localx-llama-core = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "45e993fb9b1f086567bb2a9a7ce3eea61f1137aa" }
+localx-llama-runtime = { git = "https://github.com/C0deGeek-dev/localx-llama.git", rev = "45e993fb9b1f086567bb2a9a7ce3eea61f1137aa" }
 
