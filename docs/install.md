@@ -42,11 +42,20 @@ changing anything. GGUF weights download from Hugging Face on first launch.
 
 ## Per platform
 
-- **Windows** — CUDA or CPU `llama-server` builds download automatically,
-  matched to your driver's CUDA major version. A CUDA server and its separately
-  packaged `cudart` archive must come from the same release and match the OS,
-  architecture, and CUDA major; a missing companion aborts with a pin/release
-  remedy instead of installing only half the runtime.
+- **Windows** — CUDA or CPU `llama-server` builds download automatically.
+  The CUDA build is the newest one your driver and GPU can run. A build no
+  newer than the driver's CUDA version (`nvidia-smi`) always qualifies. A
+  newer one of the same major qualifies only when it carries precompiled code
+  for every GPU (compute capability 8.6/8.9, e.g. RTX 3000/4000, and
+  Blackwell); other GPUs, such as Turing (7.5), compile its PTX at load, which
+  an older driver refuses (a CUDA 13.5 build crashes on a CUDA 13.4 driver).
+  Those hosts get an older CUDA build and a warning to update the driver; with
+  no CUDA build left, Vulkan (else CPU). A CUDA server and its separately packaged `cudart` archive must come
+  from the same release and match the OS, architecture, and CUDA major, never
+  older than the server's toolkit and runnable under the same rule; a server
+  with no such companion yields to the next CUDA build. When the installed
+  CUDA build is not the one this host should run, `localbox update` installs
+  the right one again at the same release.
 - **Linux** — prebuilt llama.cpp release assets are downloaded when available
   (CUDA best-effort, CPU otherwise). If no asset fits your system, install
   your own `llama-server` into `~/.local-llm/llama-cpp/`.

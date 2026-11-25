@@ -183,7 +183,11 @@ fn asset_cuda_major(name: &str) -> Option<u32> {
     })
 }
 
-fn runtime_companion<'a>(names: &[&'a str], server: &str) -> Result<Option<&'a str>, String> {
+fn runtime_companion<'a>(
+    names: &[&'a str],
+    server: &str,
+    driver: Option<&CudaDriver>,
+) -> Result<Option<&'a str>, String> {
     let Some(cuda_major) = asset_cuda_major(server) else {
         return Ok(None);
     };
@@ -201,10 +205,37 @@ fn runtime_companion<'a>(names: &[&'a str], server: &str) -> Result<Option<&'a s
             && release_os(name) == Some(os)
             && release_arch(name) == arch
     };
-    let matching = names
+    let same_major = names
         .iter()
         .copied()
-        .find(|name| same_platform(name) && asset_cuda_major(name) == Some(cuda_major));
+        .filter(|name| same_platform(name) && asset_cuda_major(name) == Some(cuda_major));
+    let matching = match driver {
+        // Without driver context, any same-major runtime (the long-standing
+        // contract Prism and the fixture paths rely on).
+        None => same_major.clone().next(),
+        // With it: never older than the server was built against and never
+        // newer than the driver can load; the server's exact version first,
+        // else the closest newer one. An unknown minor compares by major only.
+        Some(driver) => {
+            let server_version = asset_cuda_version(server);
+            let mut candidates: Vec<(&str, Option<CudaVersion>)> = same_major
+                .clone()
+                .map(|name| (name, asset_cuda_version(name)))
+                .filter(|(_, version)| {
+                    let Some(version) = version else { return true };
+                    server_version.is_none_or(|server| server.runs_on(*version))
+                        && driver.can_run(*version)
+                })
+                .collect();
+            candidates.sort_by_key(|(_, version)| {
+                (
+                    *version != server_version,
+                    version.map(CudaVersion::order_key),
+                )
+            });
+            candidates.first().map(|(name, _)| *name)
+        }
+    };
     if matching.is_some() {
         return Ok(matching);
     }
@@ -235,49 +266,241 @@ fn runtime_companion<'a>(names: &[&'a str], server: &str) -> Result<Option<&'a s
 }
 
 fn with_runtime_companion<'a>(names: &[&'a str], server: &'a str) -> Result<Vec<&'a str>, String> {
+    with_runtime_companion_for(names, server, None)
+}
+
+/// [`with_runtime_companion`], refusing runtimes newer than the driver.
+fn with_runtime_companion_for<'a>(
+    names: &[&'a str],
+    server: &'a str,
+    driver: Option<&CudaDriver>,
+) -> Result<Vec<&'a str>, String> {
     let mut assets = vec![server];
-    if let Some(runtime) = runtime_companion(names, server)? {
+    if let Some(runtime) = runtime_companion(names, server, driver)? {
         assets.push(runtime);
     }
     Ok(assets)
 }
 
-/// Parse the driver's CUDA major from old and new `nvidia-smi` banners
-/// (`CUDA Version: 13.1` or `CUDA UMD Version: 13.3` → 13).
+/// A CUDA version as a driver reports it or a release asset names it. The
+/// minor is optional because some spellings (`cuda_13`, `cuda13`) carry
+/// only the major.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CudaVersion {
+    pub major: u32,
+    pub minor: Option<u32>,
+}
+
+impl CudaVersion {
+    /// Whether a build compiled against this toolkit version runs on a driver
+    /// that reports `driver`. Older toolkits run on newer drivers; a newer
+    /// toolkit on an older driver fails at kernel load ("the provided PTX was
+    /// compiled with an unsupported toolchain"), even within one major. An
+    /// unknown minor on either side compares by major only.
+    #[must_use]
+    pub fn runs_on(self, driver: Self) -> bool {
+        match self.major.cmp(&driver.major) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => match (self.minor, driver.minor) {
+                (Some(build), Some(driver)) => build <= driver,
+                _ => true,
+            },
+        }
+    }
+
+    fn order_key(self) -> (u32, u32) {
+        (self.major, self.minor.unwrap_or(0))
+    }
+}
+
+impl std::fmt::Display for CudaVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.minor {
+            Some(minor) => write!(f, "{}.{minor}", self.major),
+            None => write!(f, "{}", self.major),
+        }
+    }
+}
+
+/// A GPU's compute capability as `nvidia-smi --query-gpu=compute_cap`
+/// reports it (`8.9`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComputeCapability {
+    pub major: u32,
+    pub minor: u32,
+}
+
+/// The NVIDIA driver and the GPUs behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CudaDriver {
+    /// The CUDA version the driver reports.
+    pub version: CudaVersion,
+    /// Every GPU's compute capability. Empty when the probe failed or any
+    /// answer did not parse, which keeps the strict version rule.
+    pub gpus: Vec<ComputeCapability>,
+}
+
+impl CudaDriver {
+    /// Whether an upstream llama.cpp CUDA build (server or runtime) for
+    /// toolkit `build` runs here. A toolkit no newer than the driver always
+    /// does. A newer toolkit of the same major runs only under CUDA
+    /// minor-version compatibility, which needs precompiled device code for
+    /// every GPU: a GPU served by PTX alone JIT-compiles it at the first kernel
+    /// load, and a driver older than the toolkit refuses ("the provided PTX
+    /// was compiled with an unsupported toolchain").
+    #[must_use]
+    pub fn can_run(&self, build: CudaVersion) -> bool {
+        build.runs_on(self.version)
+            || (build.major == self.version.major
+                && !self.gpus.is_empty()
+                && self
+                    .gpus
+                    .iter()
+                    .all(|gpu| upstream_cuda_build_has_device_code(build, *gpu)))
+    }
+}
+
+/// Whether upstream llama.cpp's release CUDA build for toolkit `build`
+/// carries precompiled device code for `gpu`. The release workflow sets no
+/// architectures, so the build uses ggml-cuda's default list: 75, 80 and 90
+/// as PTX only, 86 and 89 (toolkit 11.8 and later) as device code, 120a from
+/// 12.8, and 103 and 121a from 12.9. Device code for a plain architecture runs
+/// on the same major at an equal or higher minor; an `a` architecture only on
+/// its exact capability.
+fn upstream_cuda_build_has_device_code(build: CudaVersion, gpu: ComputeCapability) -> bool {
+    // (major, minor, architecture-specific, first toolkit that ships it)
+    const DEVICE_CODE: [(u32, u32, bool, (u32, u32)); 5] = [
+        (8, 6, false, (0, 0)),
+        (8, 9, false, (11, 8)),
+        (12, 0, true, (12, 8)),
+        (10, 3, false, (12, 9)),
+        (12, 1, true, (12, 9)),
+    ];
+    DEVICE_CODE.iter().any(|&(major, minor, specific, since)| {
+        build.order_key() >= since
+            && gpu.major == major
+            && if specific {
+                gpu.minor == minor
+            } else {
+                gpu.minor >= minor
+            }
+    })
+}
+
+/// Parse `nvidia-smi --query-gpu=compute_cap --format=csv,noheader` output,
+/// one capability per GPU. Any line that does not parse empties the result,
+/// so an unclear probe keeps the strict version rule.
 #[must_use]
-pub fn parse_cuda_driver_major(output: &str) -> Option<u32> {
+pub fn parse_compute_capabilities(output: &str) -> Vec<ComputeCapability> {
+    let parsed: Option<Vec<ComputeCapability>> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let (major, minor) = line.split_once('.')?;
+            Some(ComputeCapability {
+                major: major.parse().ok()?,
+                minor: minor.parse().ok()?,
+            })
+        })
+        .collect();
+    parsed.unwrap_or_default()
+}
+
+/// Parse a `major[.minor]` CUDA version from the start of `text`.
+fn parse_cuda_version_prefix(text: &str) -> Option<CudaVersion> {
+    let digits = |s: &str| {
+        s.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+    };
+    let major = digits(text);
+    if major.is_empty() {
+        return None;
+    }
+    let minor = text[major.len()..]
+        .strip_prefix('.')
+        .map(digits)
+        .filter(|minor| !minor.is_empty())
+        .and_then(|minor| minor.parse().ok());
+    Some(CudaVersion {
+        major: major.parse().ok()?,
+        minor,
+    })
+}
+
+/// CUDA version encoded in a release asset name (`cuda-13.5`, `cuda12.4`,
+/// `cuda_13`); the `cudart` prefix is skipped like in [`asset_cuda_major`].
+fn asset_cuda_version(name: &str) -> Option<CudaVersion> {
+    let lower = name.to_ascii_lowercase();
+    lower.match_indices("cuda").find_map(|(start, _)| {
+        parse_cuda_version_prefix(lower[start + "cuda".len()..].trim_start_matches(['-', '_']))
+    })
+}
+
+/// Parse the driver's CUDA version from old and new `nvidia-smi` banners
+/// (`CUDA Version: 13.1` or `CUDA UMD Version: 13.4`).
+#[must_use]
+pub fn parse_cuda_driver_version(output: &str) -> Option<CudaVersion> {
     ["CUDA UMD Version:", "CUDA Version:"]
         .into_iter()
         .find_map(|label| {
             let start = output.find(label)?;
-            output[start + label.len()..]
-                .trim_start()
-                .split(['.', ' ', '\n', '\r'])
-                .next()?
-                .parse()
-                .ok()
+            parse_cuda_version_prefix(output[start + label.len()..].trim_start())
         })
 }
 
-/// Select the native llama.cpp asset for this OS and variant. CUDA tries the
-/// driver's major first (a mismatched-major build floods garbage instead of
-/// erroring), `cudart` runtime bundles are never the pick, and CPU accepts
-/// the upstream's evolving `-avx2-`/`-cpu-` spellings.
+/// The driver's CUDA major from an `nvidia-smi` banner (`13.4` → 13).
 #[must_use]
-pub fn select_native_asset<'a>(
-    names: &[&'a str],
-    variant: Variant,
-    driver_major: Option<u32>,
-) -> Option<&'a str> {
+pub fn parse_cuda_driver_major(output: &str) -> Option<u32> {
+    parse_cuda_driver_version(output).map(|version| version.major)
+}
+
+/// The native server archives this host could run: this OS and architecture,
+/// never a `cudart` runtime bundle.
+fn native_eligible<'a>(names: &[&'a str]) -> Vec<&'a str> {
     let os = os_asset_token();
-    let eligible: Vec<&str> = names
+    names
         .iter()
         .copied()
         .filter(|n| {
             let lower = n.to_ascii_lowercase();
             is_archive(n) && lower.contains(os) && arch_matches(n) && !lower.contains("cudart")
         })
+        .collect()
+}
+
+/// The native CUDA server archives in preference order. With a known driver
+/// version only builds that run on it qualify (see [`CudaVersion::runs_on`]),
+/// newest first, so the driver's own major wins when it has a build the
+/// driver can load and an older major is the fallback. Without one, every
+/// CUDA build qualifies, newest first.
+fn native_cuda_candidates<'a>(eligible: &[&'a str], driver: Option<&CudaDriver>) -> Vec<&'a str> {
+    let mut cuda: Vec<(&str, CudaVersion)> = eligible
+        .iter()
+        .copied()
+        .filter(|n| n.to_ascii_lowercase().contains("-cuda"))
+        .filter_map(|n| asset_cuda_version(n).map(|version| (n, version)))
+        .filter(|(_, version)| driver.is_none_or(|driver| driver.can_run(*version)))
         .collect();
+    cuda.sort_by_key(|(_, version)| std::cmp::Reverse(version.order_key()));
+    cuda.into_iter().map(|(name, _)| name).collect()
+}
+
+/// Select the native llama.cpp asset for this OS and variant. CUDA takes the
+/// newest build the driver can load (a newer toolkit than the driver crashes
+/// at kernel load, a mismatched major can flood garbage), `cudart` runtime
+/// bundles are never the pick, and CPU accepts the upstream's evolving
+/// `-avx2-`/`-cpu-` spellings.
+#[must_use]
+pub fn select_native_asset<'a>(
+    names: &[&'a str],
+    variant: Variant,
+    driver: Option<&CudaDriver>,
+) -> Option<&'a str> {
+    let os = os_asset_token();
+    let eligible = native_eligible(names);
     // macOS ships one Metal build per architecture — no CUDA/CPU split and no
     // `-avx2-`/`-cpu-` token — so the arch-filtered candidate is the pick.
     // Without this, the CPU token scan below finds nothing and the updater
@@ -286,22 +509,7 @@ pub fn select_native_asset<'a>(
         return eligible.first().copied();
     }
     match variant {
-        Variant::Cuda => {
-            let majors: Vec<u32> = [13, 12, 11].into();
-            for major in cuda_major_order(driver_major.unwrap_or(0), &majors) {
-                let token = format!("-cuda-{major}");
-                if let Some(hit) = eligible
-                    .iter()
-                    .find(|n| n.to_ascii_lowercase().contains(&token))
-                {
-                    return Some(hit);
-                }
-            }
-            eligible
-                .iter()
-                .find(|n| n.to_ascii_lowercase().contains("-cuda"))
-                .copied()
-        }
+        Variant::Cuda => native_cuda_candidates(&eligible, driver).first().copied(),
         Variant::Vulkan => eligible
             .iter()
             .find(|n| n.to_ascii_lowercase().contains("-vulkan"))
@@ -310,6 +518,84 @@ pub fn select_native_asset<'a>(
         // rather than assuming x64, so ARM no longer needs a local copy.
         Variant::Cpu => select_cpu_asset(&eligible, host_asset_arch()),
     }
+}
+
+/// The native install set (server archive plus any CUDA runtime companion)
+/// and a plain-language warning when the driver cannot run the release's
+/// newest CUDA build. CUDA candidates are tried newest-first as complete
+/// sets, so a candidate without a usable runtime companion yields to the next
+/// one; with none left, a Vulkan build keeps the NVIDIA GPU in use, else CPU.
+///
+/// # Errors
+/// A plain message when the release has no archive for this host at all.
+pub fn select_native_assets<'a>(
+    names: &[&'a str],
+    driver: Option<&CudaDriver>,
+    amd_gpu: bool,
+) -> Result<(Vec<&'a str>, Option<String>), String> {
+    let no_asset = || {
+        "this release has no prebuilt asset for this platform; provide your own llama-server \
+         (bring-your-own) or pin a different tag"
+            .to_string()
+    };
+    let variant = native_variant(driver.map(|d| d.version.major), amd_gpu);
+    if variant != Variant::Cuda {
+        let server = select_native_asset(names, variant, None)
+            .or_else(|| select_native_asset(names, Variant::Cpu, None))
+            .ok_or_else(no_asset)?;
+        return Ok((with_runtime_companion(names, server)?, None));
+    }
+    let eligible = native_eligible(names);
+    let chosen = native_cuda_candidates(&eligible, driver)
+        .into_iter()
+        .find_map(|server| with_runtime_companion_for(names, server, driver).ok());
+    let newest = native_cuda_candidates(&eligible, None).first().copied();
+    let newest_version = newest.and_then(asset_cuda_version);
+    if let Some(set) = chosen {
+        let warning = match (
+            driver,
+            newest_version,
+            set.first().and_then(|s| asset_cuda_version(s)),
+        ) {
+            (Some(driver), Some(newest), Some(picked))
+                if picked != newest && !driver.can_run(newest) =>
+            {
+                Some(format!(
+                    "the NVIDIA driver reports CUDA {}, older than this release's CUDA \
+                     {newest} build, which this GPU cannot run on it, so the CUDA {picked} build \
+                     was chosen; update the NVIDIA driver to use the CUDA {newest} build",
+                    driver.version
+                ))
+            }
+            _ => None,
+        };
+        return Ok((set, warning));
+    }
+    let (server, backend) = match select_native_asset(names, Variant::Vulkan, None) {
+        Some(vulkan) => (vulkan, "Vulkan"),
+        None => (
+            select_native_asset(names, Variant::Cpu, None).ok_or_else(no_asset)?,
+            "CPU",
+        ),
+    };
+    let runnable = !native_cuda_candidates(&eligible, driver).is_empty();
+    let warning = match (driver, newest_version) {
+        (Some(driver), _) if runnable => format!(
+            "this release has no complete CUDA build and runtime pair that the NVIDIA driver \
+             (CUDA {}) can run, so the {backend} build was chosen",
+            driver.version
+        ),
+        (Some(driver), Some(newest)) => format!(
+            "the NVIDIA driver reports CUDA {}, but this release's CUDA builds need CUDA \
+             {newest} on this GPU, so the {backend} build was chosen; update the NVIDIA driver \
+             for CUDA acceleration",
+            driver.version
+        ),
+        _ => format!(
+            "this release has no CUDA build this host can use, so the {backend} build was chosen"
+        ),
+    };
+    Ok((with_runtime_companion(names, server)?, Some(warning)))
 }
 
 /// Select the turboquant fork's Windows CUDA asset; also reports a
@@ -502,10 +788,10 @@ fn select_prism_linux_asset<'a>(
         .ok_or_else(|| format!("the Prism release has no Linux {arch} CPU archive"))
 }
 
-/// The `.build-stamp` variant line for an installed asset set. Prism derives
-/// it from the selected asset so the stamp says what was actually installed
-/// (cuda-12.4 vs cuda-12.8 vs vulkan vs cpu vs metal) instead of a per-OS
-/// hardcode; other modes keep their host-probe variant.
+/// The `.build-stamp` variant line for an installed asset set. Native and
+/// Prism derive it from the selected asset so the stamp says what was actually
+/// installed (cuda-12.4 vs cuda-13.5 vs vulkan vs cpu vs metal) instead of a
+/// host-probe guess; the turboquant fork keeps its host-probe variant.
 #[must_use]
 pub fn stamp_variant(
     mode: localx_llama_core::Mode,
@@ -513,15 +799,20 @@ pub fn stamp_variant(
     driver_major: Option<u32>,
     amd_gpu: bool,
 ) -> String {
-    if mode != localx_llama_core::Mode::PrismMl {
+    if mode == localx_llama_core::Mode::Turboquant {
         return native_variant(driver_major, amd_gpu).as_str().to_string();
     }
     let binary = asset_names
         .iter()
         .find(|n| !n.to_ascii_lowercase().starts_with("cudart-"))
         .copied()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+        .unwrap_or_default();
+    asset_stamp_variant(binary)
+}
+
+/// The stamp variant one server archive name stands for.
+fn asset_stamp_variant(binary: &str) -> String {
+    let binary = binary.to_ascii_lowercase();
     if binary.contains("-macos-") {
         return "metal".to_string();
     }
@@ -538,6 +829,36 @@ pub fn stamp_variant(
         return "vulkan".to_string();
     }
     "cpu".to_string()
+}
+
+/// When a server log shows the engine's CUDA build is newer than the NVIDIA
+/// driver can load, a plain-language remedy for the managed native engine.
+/// That pairing crashes at the first kernel load, before readiness, and even
+/// with `--n-gpu-layers 0`.
+#[must_use]
+pub fn cuda_driver_mismatch_hint(server_log: &str) -> Option<&'static str> {
+    const SIGNS: [&str; 2] = [
+        "the provided PTX was compiled with an unsupported toolchain",
+        "CUDA driver version is insufficient for CUDA runtime version",
+    ];
+    SIGNS
+        .iter()
+        .any(|sign| server_log.contains(sign))
+        .then_some(
+            "the installed engine's CUDA build is newer than this NVIDIA driver supports; run \
+         `localbox update --mode native` to install a build this driver can run (an older \
+         CUDA build, else Vulkan or CPU), or update the NVIDIA driver",
+        )
+}
+
+/// Read a build stamp's second line (the installed variant), when present.
+#[must_use]
+pub fn read_stamp_variant(root: &Path) -> Option<String> {
+    std::fs::read_to_string(root.join(".build-stamp"))
+        .ok()?
+        .lines()
+        .nth(1)
+        .map(|line| line.trim().to_string())
 }
 
 /// Read a build stamp's first line (the installed release tag), when present.
@@ -1185,6 +1506,10 @@ pub enum UpdatePlan {
     Install {
         release: Release,
         assets: Vec<Asset>,
+        /// Set when the wanted tag is already installed but as a build this
+        /// host cannot run (the stamp's variant line, e.g. `cuda` or
+        /// `cuda-13.5`), so the same tag is installed again.
+        replaces: Option<String>,
     },
     /// The resolved release is *older* than the installed build. Never applied
     /// implicitly: replacing a working engine with an earlier one means
@@ -1354,7 +1679,7 @@ pub async fn plan_binary_update(
     catalog: &Catalog,
     mode: localx_llama_core::Mode,
     root: &Path,
-    driver_major: Option<u32>,
+    driver: Option<&CudaDriver>,
     amd_gpu: bool,
     allow_downgrade: bool,
 ) -> Result<UpdatePlan, String> {
@@ -1365,7 +1690,7 @@ pub async fn plan_binary_update(
     // that flag says nothing about a release carrying binaries for this host.
     let releases = fetch_releases(&repo, RELEASE_SCAN_DEPTH).await?;
     let fits = |release: &Release| {
-        select_release_assets_reporting(release, mode, driver_major, amd_gpu)
+        select_release_assets_reporting(release, mode, driver, amd_gpu)
             .is_ok_and(|(assets, _)| !assets.is_empty())
     };
     let release = newest_installable(&releases, fits)
@@ -1379,6 +1704,24 @@ pub async fn plan_binary_update(
 
     if let Some(installed) = read_stamp_tag(root) {
         if !build_stamp_is_stale(&installed, &release.tag) {
+            if mode == localx_llama_core::Mode::Native {
+                let assets = select_release_assets(&release, mode, driver, amd_gpu)?;
+                let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
+                let wanted = stamp_variant(mode, &names, driver.map(|d| d.version.major), amd_gpu);
+                let stamped = read_stamp_variant(root).unwrap_or_default();
+                let installed = if stamped == "cuda" {
+                    legacy_native_variant(root, &release).unwrap_or(stamped)
+                } else {
+                    stamped
+                };
+                if native_build_needs_replacing(mode, &installed, &wanted) {
+                    return Ok(UpdatePlan::Install {
+                        release,
+                        assets,
+                        replaces: Some(installed),
+                    });
+                }
+            }
             return Ok(UpdatePlan::UpToDate { tag: release.tag });
         }
         // The stamp differing means "install", in both directions. Going
@@ -1393,8 +1736,69 @@ pub async fn plan_binary_update(
         }
     }
 
-    let assets = select_release_assets(&release, mode, driver_major, amd_gpu)?;
-    Ok(UpdatePlan::Install { release, assets })
+    let assets = select_release_assets(&release, mode, driver, amd_gpu)?;
+    Ok(UpdatePlan::Install {
+        release,
+        assets,
+        replaces: None,
+    })
+}
+
+/// Whether the native CUDA build already installed at the wanted tag is not
+/// the one this host should run, so the same tag must be installed again.
+///
+/// What a legacy `cuda` stamp (written before stamps carried the CUDA
+/// version) stands for, read from the install itself rather than guessed from
+/// today's driver, which may have changed since: the CUDA runtime DLL's major
+/// (`cudart64_13.dll`) names the one CUDA server archive of that major in the
+/// installed release. A release without CUDA builds left the old selector on
+/// its CPU build. `None` when the install does not settle it (no runtime DLL
+/// on a release with CUDA builds, or several builds within the major).
+fn legacy_native_variant(root: &Path, release: &Release) -> Option<String> {
+    let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
+    let eligible = native_eligible(&names);
+    let cuda = native_cuda_candidates(&eligible, None);
+    if cuda.is_empty() {
+        return select_native_asset(&names, Variant::Cpu, None).map(asset_stamp_variant);
+    }
+    let major = installed_cudart_major(root)?;
+    let mut same_major = cuda
+        .into_iter()
+        .filter(|name| asset_cuda_version(name).is_some_and(|v| v.major == major));
+    match (same_major.next(), same_major.next()) {
+        (Some(only), None) => Some(asset_stamp_variant(only)),
+        _ => None,
+    }
+}
+
+/// The major of the CUDA runtime DLL in an install (`cudart64_13.dll` → 13).
+fn installed_cudart_major(root: &Path) -> Option<u32> {
+    [root.to_path_buf(), root.join("bin")]
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            name.strip_prefix("cudart64_")?
+                .strip_suffix(".dll")?
+                .parse()
+                .ok()
+        })
+}
+
+/// Only native CUDA installs qualify: the installed variant (`cuda-13.5`, or
+/// a legacy `cuda` stamp resolved by [`legacy_native_variant`]) is replaced
+/// when the wanted build differs, e.g. after a driver change. A legacy stamp
+/// the install cannot resolve stays `cuda` and is replaced once.
+fn native_build_needs_replacing(
+    mode: localx_llama_core::Mode,
+    stamped: &str,
+    wanted: &str,
+) -> bool {
+    mode == localx_llama_core::Mode::Native
+        && stamped != wanted
+        && (stamped.starts_with("cuda") || wanted.starts_with("cuda"))
 }
 
 /// Select this host's install set from a resolved release (shared by the
@@ -1405,10 +1809,10 @@ pub async fn plan_binary_update(
 pub fn select_release_assets(
     release: &Release,
     mode: localx_llama_core::Mode,
-    driver_major: Option<u32>,
+    driver: Option<&CudaDriver>,
     amd_gpu: bool,
 ) -> Result<Vec<Asset>, String> {
-    let (assets, warning) = select_release_assets_reporting(release, mode, driver_major, amd_gpu)?;
+    let (assets, warning) = select_release_assets_reporting(release, mode, driver, amd_gpu)?;
     if let Some(warning) = warning {
         eprintln!("Warning: {warning}");
     }
@@ -1425,25 +1829,18 @@ pub fn select_release_assets(
 pub fn select_release_assets_reporting(
     release: &Release,
     mode: localx_llama_core::Mode,
-    driver_major: Option<u32>,
+    driver: Option<&CudaDriver>,
     amd_gpu: bool,
 ) -> Result<(Vec<Asset>, Option<String>), String> {
     use localx_llama_core::Mode;
-    let mut host_warning = None;
+    let driver_major = driver.map(|d| d.version.major);
+    let host_warning;
     let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
     let picked: Vec<&str> = match mode {
         Mode::Native => {
-            let variant = native_variant(driver_major, amd_gpu);
-            let server = select_native_asset(&names, variant, driver_major)
-                .or_else(|| select_native_asset(&names, Variant::Cpu, None))
-                .ok_or_else(|| {
-                    format!(
-                        "release {} has no prebuilt asset for this platform; provide your own \
-                         llama-server (bring-your-own) or pin a different tag",
-                        release.tag
-                    )
-                })?;
-            with_runtime_companion(&names, server)?
+            let (choice, warning) = select_native_assets(&names, driver, amd_gpu)?;
+            host_warning = warning;
+            choice
         }
         Mode::Turboquant => {
             let (choice, warning) = select_turbo_asset(&names, driver_major);
@@ -1543,7 +1940,10 @@ mod tests {
         ];
 
         for case in cases {
-            match (runtime_companion(case.names, case.server), case.expected) {
+            match (
+                runtime_companion(case.names, case.server, None),
+                case.expected,
+            ) {
                 (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
                 (Err(actual), Err(expected)) => assert!(actual.contains(expected), "{actual}"),
                 (actual, expected) => {
@@ -1560,6 +1960,313 @@ mod tests {
             size,
             digest: None,
         }
+    }
+
+    fn cuda_version(major: u32, minor: u32) -> CudaVersion {
+        CudaVersion {
+            major,
+            minor: Some(minor),
+        }
+    }
+
+    /// A driver at CUDA `major.minor` over GPUs of the given capabilities.
+    fn cuda_driver(major: u32, minor: u32, gpus: &[(u32, u32)]) -> CudaDriver {
+        CudaDriver {
+            version: cuda_version(major, minor),
+            gpus: gpus
+                .iter()
+                .map(|&(major, minor)| ComputeCapability { major, minor })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn cuda_driver_version_keeps_the_minor() {
+        let banner = "| NVIDIA-SMI 617.42  KMD Version: 617.42  CUDA UMD Version: 13.4 |";
+        assert_eq!(parse_cuda_driver_version(banner), Some(cuda_version(13, 4)));
+        assert_eq!(
+            parse_cuda_driver_version("CUDA Version: 13 "),
+            Some(CudaVersion {
+                major: 13,
+                minor: None
+            })
+        );
+        assert_eq!(
+            asset_cuda_version("llama-b1-bin-win-cuda-13.5-x64.zip"),
+            Some(cuda_version(13, 5))
+        );
+        assert_eq!(
+            asset_cuda_version("cudart-llama-linux-cuda_13-x86_64.tar.xz"),
+            Some(CudaVersion {
+                major: 13,
+                minor: None
+            })
+        );
+    }
+
+    #[test]
+    fn a_cuda_build_runs_only_on_a_driver_at_least_as_new() {
+        let driver = cuda_version(13, 4);
+        assert!(cuda_version(13, 4).runs_on(driver));
+        assert!(cuda_version(13, 1).runs_on(driver));
+        assert!(cuda_version(12, 9).runs_on(driver));
+        assert!(!cuda_version(13, 5).runs_on(driver));
+        assert!(!cuda_version(14, 0).runs_on(driver));
+        let major_only = CudaVersion {
+            major: 13,
+            minor: None,
+        };
+        assert!(cuda_version(13, 5).runs_on(major_only));
+        assert!(major_only.runs_on(driver));
+    }
+
+    #[test]
+    fn a_newer_toolkit_runs_only_on_gpus_with_device_code() {
+        let build = cuda_version(13, 5);
+        // No GPU answer: the strict version rule.
+        assert!(!cuda_driver(13, 4, &[]).can_run(build));
+        assert!(cuda_driver(13, 5, &[]).can_run(build));
+        // Device code: 8.6/8.9 (and 8.7 on the 8.6 code), 10.3, 12.0a, 12.1a.
+        for gpu in [(8, 6), (8, 7), (8, 9), (10, 3), (12, 0), (12, 1)] {
+            assert!(cuda_driver(13, 1, &[gpu]).can_run(build), "{gpu:?}");
+        }
+        // PTX only: 7.5, 8.0, 9.0; 12.2 has no exact 12.xa code.
+        for gpu in [(7, 5), (8, 0), (9, 0), (12, 2)] {
+            assert!(!cuda_driver(13, 1, &[gpu]).can_run(build), "{gpu:?}");
+        }
+        // Never across majors.
+        assert!(!cuda_driver(12, 9, &[(8, 9)]).can_run(build));
+        // 120a device code arrived with toolkit 12.8.
+        assert!(!cuda_driver(12, 4, &[(12, 0)]).can_run(cuda_version(12, 6)));
+        assert!(cuda_driver(12, 8, &[(12, 0)]).can_run(cuda_version(12, 9)));
+    }
+
+    #[test]
+    fn compute_capabilities_parse_strictly() {
+        assert_eq!(
+            parse_compute_capabilities("8.9\n7.5\n"),
+            [
+                ComputeCapability { major: 8, minor: 9 },
+                ComputeCapability { major: 7, minor: 5 }
+            ]
+        );
+        assert!(parse_compute_capabilities("8.9\n[N/A]\n").is_empty());
+        assert!(parse_compute_capabilities("").is_empty());
+    }
+
+    #[test]
+    fn runtime_companion_never_outruns_the_driver() {
+        let names = [
+            "cudart-llama-bin-win-cuda-12.1-x64.zip",
+            "cudart-llama-bin-win-cuda-12.4-x64.zip",
+            "cudart-llama-bin-win-cuda-12.8-x64.zip",
+        ];
+        let server = "llama-b1-bin-win-cuda-12.2-x64.zip";
+        assert_eq!(
+            runtime_companion(&names, server, Some(&cuda_driver(12, 6, &[]))),
+            Ok(Some("cudart-llama-bin-win-cuda-12.4-x64.zip"))
+        );
+        // The closest runtime at or above the server's toolkit, never 12.1.
+        assert_eq!(
+            runtime_companion(&names, server, Some(&cuda_driver(13, 0, &[]))),
+            Ok(Some("cudart-llama-bin-win-cuda-12.4-x64.zip"))
+        );
+        assert_eq!(
+            runtime_companion(&names[2..], server, Some(&cuda_driver(13, 0, &[]))),
+            Ok(Some("cudart-llama-bin-win-cuda-12.8-x64.zip"))
+        );
+        // The server's exact runtime wins over a newer one.
+        assert_eq!(
+            runtime_companion(
+                &names,
+                "llama-b1-bin-win-cuda-12.4-x64.zip",
+                Some(&cuda_driver(13, 0, &[]))
+            ),
+            Ok(Some("cudart-llama-bin-win-cuda-12.4-x64.zip"))
+        );
+        assert!(runtime_companion(&names, server, Some(&cuda_driver(12, 2, &[]))).is_err());
+        // With driver context a runtime older than the server's toolkit is
+        // not a companion; without it the legacy same-major pairing stands.
+        let older = ["cudart-llama-bin-win-cuda-12.1-x64.zip"];
+        assert!(runtime_companion(&older, server, Some(&cuda_driver(13, 0, &[]))).is_err());
+        assert_eq!(
+            runtime_companion(&older, server, None),
+            Ok(Some("cudart-llama-bin-win-cuda-12.1-x64.zip"))
+        );
+    }
+
+    /// The asset list llama.cpp publishes for Windows x64 (issue: b12374 /
+    /// b12484 carry CUDA 12.4 and CUDA 13.5 builds only).
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    const WIN_RELEASE: [&str; 6] = [
+        "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "cudart-llama-bin-win-cuda-13.5-x64.zip",
+        "llama-b12484-bin-win-cuda-12.4-x64.zip",
+        "llama-b12484-bin-win-cuda-13.5-x64.zip",
+        "llama-b12484-bin-win-vulkan-x64.zip",
+        "llama-b12484-bin-win-cpu-x64.zip",
+    ];
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn native_selection_skips_a_cuda_build_newer_than_the_driver() {
+        // Driver CUDA 13.4: the 13.5 build would crash at kernel load, so the
+        // 12.4 set is chosen and the warning names the driver update.
+        let turing = cuda_driver(13, 4, &[(7, 5)]);
+        let (set, warning) = select_native_assets(&WIN_RELEASE, Some(&turing), false).unwrap();
+        assert_eq!(
+            set,
+            [
+                "llama-b12484-bin-win-cuda-12.4-x64.zip",
+                "cudart-llama-bin-win-cuda-12.4-x64.zip"
+            ]
+        );
+        let warning = warning.expect("a driver older than the newest build is reported");
+        assert!(
+            warning.contains("CUDA 13.4") && warning.contains("13.5"),
+            "{warning}"
+        );
+
+        // An Ada GPU has device code in the 13.5 build, so minor-version
+        // compatibility runs it on a CUDA 13.1 driver: keep the newest build.
+        let ada = cuda_driver(13, 1, &[(8, 9)]);
+        let (set, warning) = select_native_assets(&WIN_RELEASE, Some(&ada), false).unwrap();
+        assert_eq!(
+            set,
+            [
+                "llama-b12484-bin-win-cuda-13.5-x64.zip",
+                "cudart-llama-bin-win-cuda-13.5-x64.zip"
+            ]
+        );
+        assert_eq!(warning, None);
+
+        // One PTX-only GPU beside it decides for the whole host.
+        let mixed = cuda_driver(13, 1, &[(8, 9), (7, 5)]);
+        let (set, _) = select_native_assets(&WIN_RELEASE, Some(&mixed), false).unwrap();
+        assert_eq!(set[0], "llama-b12484-bin-win-cuda-12.4-x64.zip");
+
+        // A driver that can run the newest build gets it, silently.
+        let (set, warning) =
+            select_native_assets(&WIN_RELEASE, Some(&cuda_driver(13, 5, &[])), false).unwrap();
+        assert_eq!(
+            set,
+            [
+                "llama-b12484-bin-win-cuda-13.5-x64.zip",
+                "cudart-llama-bin-win-cuda-13.5-x64.zip"
+            ]
+        );
+        assert_eq!(warning, None);
+
+        // No CUDA build fits → Vulkan keeps the GPU in use.
+        let (set, warning) =
+            select_native_assets(&WIN_RELEASE, Some(&cuda_driver(12, 2, &[])), false).unwrap();
+        assert_eq!(set, ["llama-b12484-bin-win-vulkan-x64.zip"]);
+        assert!(warning.unwrap().contains("Vulkan"));
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn native_selection_tries_complete_cuda_sets() {
+        // The 13.x server has no 13.x runtime in this release: it yields to
+        // the next complete set instead of failing the release.
+        let names = [
+            "cudart-llama-bin-win-cuda-12.4-x64.zip",
+            "llama-b1-bin-win-cuda-12.4-x64.zip",
+            "llama-b1-bin-win-cuda-13.1-x64.zip",
+            "llama-b1-bin-win-cpu-x64.zip",
+        ];
+        let (set, _) = select_native_assets(&names, Some(&cuda_driver(13, 4, &[])), false).unwrap();
+        assert_eq!(
+            set,
+            [
+                "llama-b1-bin-win-cuda-12.4-x64.zip",
+                "cudart-llama-bin-win-cuda-12.4-x64.zip"
+            ]
+        );
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn same_tag_native_cuda_build_is_replaced_when_the_pick_changed() {
+        use localx_llama_core::Mode;
+        // A legacy stamp the install could not resolve: replaced once.
+        assert!(native_build_needs_replacing(
+            Mode::Native,
+            "cuda",
+            "cuda-12.4"
+        ));
+        assert!(native_build_needs_replacing(
+            Mode::Native,
+            "cuda",
+            "cuda-13.5"
+        ));
+        // Versioned stamp after a driver update.
+        assert!(native_build_needs_replacing(
+            Mode::Native,
+            "cuda-12.4",
+            "cuda-13.5"
+        ));
+        assert!(!native_build_needs_replacing(
+            Mode::Native,
+            "cuda-13.5",
+            "cuda-13.5"
+        ));
+        // Non-CUDA installs and other engines are left alone.
+        assert!(!native_build_needs_replacing(Mode::Native, "cpu", "vulkan"));
+        assert!(!native_build_needs_replacing(
+            Mode::PrismMl,
+            "cuda",
+            "cuda-12.4"
+        ));
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn a_legacy_cuda_stamp_is_read_from_the_installed_runtime() {
+        let release = Release {
+            tag: "b12484".into(),
+            assets: WIN_RELEASE
+                .iter()
+                .map(|name| fixture_asset(name, "unused", None))
+                .collect(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // No runtime DLL: unresolved, so the caller reinstalls once.
+        assert_eq!(legacy_native_variant(dir.path(), &release), None);
+        std::fs::write(dir.path().join("cudart64_13.dll"), b"").unwrap();
+        assert_eq!(
+            legacy_native_variant(dir.path(), &release).as_deref(),
+            Some("cuda-13.5")
+        );
+        let nested = tempfile::tempdir().unwrap();
+        std::fs::create_dir(nested.path().join("bin")).unwrap();
+        std::fs::write(nested.path().join("bin").join("cudart64_12.dll"), b"").unwrap();
+        assert_eq!(
+            legacy_native_variant(nested.path(), &release).as_deref(),
+            Some("cuda-12.4")
+        );
+        // A release without CUDA builds left the old selector on CPU.
+        let cpu_only = Release {
+            tag: "b1".into(),
+            assets: vec![fixture_asset(
+                "llama-b1-bin-win-cpu-x64.zip",
+                "unused",
+                None,
+            )],
+        };
+        assert_eq!(
+            legacy_native_variant(dir.path(), &cpu_only).as_deref(),
+            Some("cpu")
+        );
+    }
+
+    #[test]
+    fn cuda_driver_mismatch_is_recognized_in_the_server_log() {
+        let log =
+            "ggml_cuda_init: found 1 CUDA devices\nCUDA error: the provided PTX was compiled \
+                   with an unsupported toolchain.\n";
+        assert!(cuda_driver_mismatch_hint(log).is_some());
+        assert!(cuda_driver_mismatch_hint("CUDA error: out of memory").is_none());
     }
 
     #[test]
@@ -1807,14 +2514,16 @@ mod tests {
             "llama-b100-bin-win-cuda-12.4-arm64.zip",
             "llama-b100-bin-ubuntu-cuda-13.1-x64.zip",
         ];
+        let issue_driver = cuda_driver(12, 9, &[]);
+        let current_driver = cuda_driver(13, 1, &[]);
         // Driver major 12 → the 12.x build wins even though 13 exists.
         assert_eq!(
-            select_native_asset(&names, Variant::Cuda, Some(12)),
+            select_native_asset(&names, Variant::Cuda, Some(&issue_driver)),
             Some("llama-b100-bin-win-cuda-12.4-x64.zip")
         );
         // Driver major 13 → the 13.x build; cudart and arm64 never match.
         assert_eq!(
-            select_native_asset(&names, Variant::Cuda, Some(13)),
+            select_native_asset(&names, Variant::Cuda, Some(&current_driver)),
             Some("llama-b100-bin-win-cuda-13.1-x64.zip")
         );
         assert_eq!(
@@ -2001,11 +2710,30 @@ mod tests {
             ),
             "cpu"
         );
-        // Non-prism modes keep the host-probe variant.
+        // Native derives the variant from the asset too; turboquant keeps the
+        // host-probe variant.
         assert_eq!(
             stamp_variant(
                 Mode::Native,
                 &["llama-b9596-bin-win-cuda-13.3-x64.zip"],
+                Some(13),
+                false
+            ),
+            "cuda-13.3"
+        );
+        assert_eq!(
+            stamp_variant(
+                Mode::Native,
+                &["llama-b9596-bin-win-vulkan-x64.zip"],
+                Some(13),
+                false
+            ),
+            "vulkan"
+        );
+        assert_eq!(
+            stamp_variant(
+                Mode::Turboquant,
+                &["turbo-windows-cuda-13.3.zip"],
                 Some(13),
                 false
             ),

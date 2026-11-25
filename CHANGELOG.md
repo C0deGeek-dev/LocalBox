@@ -4,6 +4,22 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The native updater checks CUDA compatibility against the driver and GPU.**
+  It matched CUDA builds to the driver by major version only, so a GTX 1650
+  SUPER on a driver reporting CUDA 13.4 got the CUDA 13.5 llama.cpp build,
+  which crashed loading its first kernel ("the provided PTX was compiled with
+  an unsupported toolchain"), even with `--n-gpu-layers 0`. That build has no
+  precompiled code for Turing GPUs, and an older driver cannot compile its PTX.
+  Selection now reads the driver's minor version and each GPU's compute
+  capability: a newer CUDA build is chosen only when every GPU has precompiled
+  code in it (RTX 3000/4000 and Blackwell keep the newest build), otherwise the
+  newest older CUDA build and runtime pair, then Vulkan, then CPU, with a
+  warning that names the driver update. Native builds are stamped with their
+  CUDA version; an older install is identified from its CUDA runtime DLL, and
+  `localbox update` reinstalls the same release only when the installed build
+  is not the one this host should run. A server that exits before readiness
+  with that CUDA error now says how to recover (LocalHub#301).
+
 - **A saved tune can keep host operations off the GPU.** AutoBest profiles accept
   the `NoOpOffload` override and replay it as `--no-op-offload`, which a
   long-context MoE launch needs to stay inside VRAM (LocalHub#302).

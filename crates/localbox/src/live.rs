@@ -603,8 +603,22 @@ pub fn execute_launch(
             break;
         }
         if let Ok(Some(status)) = child.try_wait() {
+            // Only the managed native engine is replaced by `localbox update
+            // --mode native`; a custom or Inkling 2 binary is not.
+            let managed_native = request.mode == localx_llama_core::Mode::Native
+                && plan.inkling2_binary.is_none()
+                && launcher
+                    .install_root(request.mode)
+                    .join(".build-stamp")
+                    .is_file();
+            let hint = managed_native
+                .then(|| std::fs::read_to_string(&log).ok())
+                .flatten()
+                .and_then(|server_log| crate::update::cuda_driver_mismatch_hint(&server_log))
+                .map(|hint| format!("; {hint}"))
+                .unwrap_or_default();
             return Err(LiveError::Server(format!(
-                "the model server exited before it was ready ({status}) — the server log is at {}",
+                "the model server exited before it was ready ({status}) — the server log is at {}{hint}",
                 log.display()
             )));
         }

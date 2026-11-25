@@ -1145,7 +1145,13 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
         Some(m) => vec![parse_mode(Some(m))?],
         None => vec![Mode::Native, Mode::Turboquant, Mode::PrismMl],
     };
-    let driver_major = localbox::update::parse_cuda_driver_major(&nvidia_smi_banner());
+    let driver = localbox::update::parse_cuda_driver_version(&nvidia_smi_banner()).map(|version| {
+        localbox::update::CudaDriver {
+            version,
+            gpus: localbox::update::parse_compute_capabilities(&nvidia_compute_caps()),
+        }
+    });
+    let driver_major = driver.as_ref().map(|d| d.version.major);
     // No NVIDIA driver but an AMD card present → the Vulkan build uses the GPU
     // instead of silently falling back to CPU.
     let amd_gpu = driver_major.is_none() && host_has_amd_gpu();
@@ -1158,7 +1164,7 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
             &catalog,
             mode,
             &root,
-            driver_major,
+            driver.as_ref(),
             amd_gpu,
             allow_downgrade,
         )) {
@@ -1175,10 +1181,30 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
                 ),
                 installed, resolved
             ),
-            Ok(UpdatePlan::Install { release, assets }) => {
+            Ok(UpdatePlan::Install {
+                release,
+                assets,
+                replaces,
+            }) => {
                 let summary = asset_set_summary(&assets);
+                if let Some(stamped) = &replaces {
+                    let stamped = if stamped.is_empty() {
+                        "unrecorded"
+                    } else {
+                        stamped
+                    };
+                    println!(
+                        "The installed {} build ({stamped}) is not the one this host should run.",
+                        release.tag
+                    );
+                }
                 if check_only {
-                    println!("Would update to {} (assets: {summary}).", release.tag);
+                    let verb = if replaces.is_some() {
+                        "reinstall"
+                    } else {
+                        "update to"
+                    };
+                    println!("Would {verb} {} (assets: {summary}).", release.tag);
                     continue;
                 }
                 println!("Installing {} (assets: {summary}).", release.tag);
@@ -1449,6 +1475,18 @@ fn apply_launch_posture(
         plan.env_plan = localbox_launcher::env::codex_env_plan(&plan.base_url, &auth);
     }
     Ok(())
+}
+
+/// One compute capability per GPU (`8.9`), empty when `nvidia-smi` cannot
+/// answer.
+fn nvidia_compute_caps() -> String {
+    std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+        .unwrap_or_default()
 }
 
 fn nvidia_smi_banner() -> String {
