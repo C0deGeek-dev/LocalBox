@@ -1955,6 +1955,8 @@ pub fn select_release_assets_reporting(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    // The chosen-build tests use the Windows release asset names.
+    #[cfg(windows)]
     fn chosen_driver() -> CudaDriver {
         CudaDriver {
             version: CudaVersion {
@@ -1966,6 +1968,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn a_chosen_cuda_build_is_cuda_or_an_error_never_a_substitute() {
         let no_cuda = [
             "llama-b1-bin-win-vulkan-x64.zip",
@@ -1983,6 +1986,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn a_cuda_server_without_its_runtime_is_not_a_chosen_cuda_build() {
         let incomplete = [
             "llama-b1-bin-win-cuda-13.1-x64.zip",
@@ -1996,6 +2000,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_has_no_vulkan_or_cpu_build_to_choose() {
+        let names = ["llama-b1-bin-macos-arm64.zip"];
+        let err = select_native_assets_for(&names, None, false, Some(Variant::Vulkan)).unwrap_err();
+        assert!(err.contains("Metal"), "{err}");
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn a_chosen_vulkan_or_cpu_build_is_that_build() {
         let names = [
             "llama-b1-bin-win-cuda-13.1-x64.zip",

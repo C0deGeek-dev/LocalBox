@@ -42,6 +42,9 @@ crates/
                         (update.rs), not the GGUF weights.
     embed.rs            CPU-only embedding server lifecycle
     update.rs           llama.cpp binary install/update per mode
+    fallback.rs         engine backend fallback: OS-held engine lock, journal
+                        and recovery, failure classification, CUDA → Vulkan →
+                        CPU ladder, driver-scoped fallback record
     manage.rs           info / purge / log conveniences
 
 local-llm/
