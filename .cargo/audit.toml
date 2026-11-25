@@ -10,4 +10,10 @@ ignore = [
     "RUSTSEC-2026-0340",
     "RUSTSEC-2026-0341",
     "RUSTSEC-2026-0342",
+    # Same optional HTTP/3 graph, published 2026-11: quinn-proto 0.11.19 and
+    # quinn-udp 0.5.16 carry the fixes but use edition-2024 manifests that
+    # Cargo 1.82 cannot parse (checked 2026-11-25). Not compiled here.
+    "RUSTSEC-2026-0523",
+    "RUSTSEC-2026-0524",
+    "RUSTSEC-2026-0538",
 ]
