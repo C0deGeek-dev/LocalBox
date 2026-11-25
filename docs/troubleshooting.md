@@ -21,6 +21,27 @@ Part of the [LocalBox documentation](README.md).
   rerun with `--skip-load-probe` if you are certain the probe is wrong;
   `localbox launch <model> --dry-run` prints the full plan (paths, argv,
   environment) without touching the system.
+- **The CUDA build fails to start or answer on this machine** → run
+  `localbox probe <model> --fallback`. It tries the Vulkan build, then the CPU
+  build, keeps the original until one passes, and restores it when none does.
+  `localbox status` then shows the verified backend and the fallback in use.
+  A driver update brings the CUDA build back on the next `localbox update`.
+- **The probe says the model does not fit, or cannot tell why it failed** →
+  the engine build was left alone on purpose. Try a smaller quant or context
+  (`localbox info <model>` lists them) or a smaller model. If the server log
+  shows the GPU backend itself failing, choose another build with
+  `localbox update --variant vulkan` (or `cpu`) and probe again.
+- **"an interrupted backend fallback left a state LocalBox cannot settle
+  safely"** → a fallback was stopped part way and the engine folder is not one
+  of the two builds it recorded, so nothing was deleted. The message names the
+  engine folder, the kept original (`llama-cpp.previous`) and the journal
+  (`.localbox-fallback.json`). Each build's `.build-stamp` names its release
+  and variant: keep the one you want as `llama-cpp`, remove the other and the
+  journal, then run the command again. An interruption LocalBox can settle is
+  undone (or finished) by itself on the next `update` or `probe`.
+- **"another LocalBox command is changing the engine right now"** → an
+  `update` or `probe` is already running; wait for it to finish. The lock is
+  released when that process ends, however it ends.
 - **`localpilot` not on PATH** → install the CLI with
   `cargo install localpilot`.
 - **Start over on model files** → `localbox purge` stops servers and deletes

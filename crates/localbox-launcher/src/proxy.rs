@@ -105,6 +105,10 @@ pub struct EnsureProxyConfig {
     /// Bearer key forwarding requests must carry (the LAN-gateway posture);
     /// `None` for the loopback agent proxy.
     pub api_key: Option<String>,
+    /// Only ever start a new proxy on an empty port: anything already
+    /// listening there is refused, never reused, repointed or killed. For a
+    /// disposable proxy whose port nobody else may share.
+    pub start_only: bool,
 }
 
 impl EnsureProxyConfig {
@@ -118,6 +122,7 @@ impl EnsureProxyConfig {
             target_port,
             ready_attempts: 66,
             api_key: None,
+            start_only: false,
         }
     }
 }
@@ -232,6 +237,20 @@ pub fn ensure_proxy(
 
     let listener_present = ops.port_listening(config.listen_port);
     let listener_pids = ops.listener_pids(config.listen_port);
+    if config.start_only && (listener_present || !listener_pids.is_empty()) {
+        return Err(ProxyLifecycleError::ForeignListener {
+            port: config.listen_port,
+            pids: if listener_pids.is_empty() {
+                "PID unavailable".to_string()
+            } else {
+                listener_pids
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        });
+    }
     let health = ops.health(config.listen_port);
     let posture = ops.posture(config.listen_port);
     let proxy_verified = health
@@ -534,6 +553,32 @@ mod tests {
         fn sleep_ms(&mut self, ms: u64) {
             self.slept_ms += ms;
         }
+    }
+
+    #[test]
+    fn a_start_only_proxy_never_touches_an_existing_listener() {
+        // Even a matching, healthy proxy is left alone: a disposable proxy
+        // only starts on an empty port.
+        let mut ops = MockOps::new()
+            .with_proxy(11435, 77, 8080)
+            .with_upstream(8080);
+        let mut config = EnsureProxyConfig::new(11435, 8080);
+        config.start_only = true;
+        let error = ensure_proxy(&mut ops, &config).unwrap_err();
+        assert!(matches!(
+            error,
+            ProxyLifecycleError::ForeignListener { port: 11435, .. }
+        ));
+        assert!(ops.killed.is_empty());
+        assert_eq!(ops.started, 0);
+        // On an empty port it starts as usual.
+        let mut empty = MockOps::new().with_upstream(8081);
+        let mut fresh = EnsureProxyConfig::new(11500, 8081);
+        fresh.start_only = true;
+        assert!(ensure_proxy(&mut empty, &fresh)
+            .unwrap()
+            .started_pid
+            .is_some());
     }
 
     #[test]

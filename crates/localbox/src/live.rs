@@ -587,9 +587,14 @@ pub fn execute_launch(
     };
     let log = server_log_path(home, plan.server_port);
     eprintln!("Starting the model server — log: {}", log.display());
-    let mut child = spawn_server(&binary, &plan.argv, &log)
+    let child = spawn_server(&binary, &plan.argv, &log)
         .map_err(|e| LiveError::Server(format!("{}: {e}", binary.display())))?;
     outcome.server_pid = Some(child.id());
+    // Until the reply check passes, the server this launch started is its own
+    // to clean up: every failure path below ends it and waits for it to exit,
+    // so a failed launch never leaves a half-loaded model holding GPU memory
+    // or the engine's files.
+    let mut child = OwnedServer::new(child);
 
     eprintln!("Loading the model into memory … (this can take a few minutes)");
     // Wait for /health readiness, but fail fast if the server process exits first
@@ -602,7 +607,7 @@ pub fn execute_launch(
         if launcher.wait_server(plan.server_port, 2).is_ok() {
             break;
         }
-        if let Ok(Some(status)) = child.try_wait() {
+        if let Some(status) = child.exited() {
             // Only the managed native engine is replaced by `localbox update
             // --mode native`; a custom or Inkling 2 binary is not.
             let managed_native = request.mode == localx_llama_core::Mode::Native
@@ -611,12 +616,19 @@ pub fn execute_launch(
                     .install_root(request.mode)
                     .join(".build-stamp")
                     .is_file();
-            let hint = managed_native
+            let server_log = managed_native
                 .then(|| std::fs::read_to_string(&log).ok())
                 .flatten()
-                .and_then(|server_log| crate::update::cuda_driver_mismatch_hint(&server_log))
+                .unwrap_or_default();
+            let mut hint = crate::update::cuda_driver_mismatch_hint(&server_log)
                 .map(|hint| format!("; {hint}"))
                 .unwrap_or_default();
+            hint.push_str(&probe_fallback_hint(
+                managed_native,
+                crate::update::read_stamp_variant(&launcher.install_root(request.mode)).as_deref(),
+                &server_log,
+                &plan.key,
+            ));
             return Err(LiveError::Server(format!(
                 "the model server exited before it was ready ({status}) — the server log is at {}{hint}",
                 log.display()
@@ -669,7 +681,7 @@ pub fn execute_launch(
             Ok(reply) => reply,
             Err(e) => {
                 cleanup_after_failed_smoke(&mut ops, ensured.started_pid, || {
-                    let _ = child.kill();
+                    child.terminate();
                 });
                 return Err(LiveError::Smoke(format!("the model did not answer: {e}")));
             }
@@ -677,13 +689,16 @@ pub fn execute_launch(
         let smoke = evaluate_smoke_reply(&reply);
         if !smoke.ok {
             cleanup_after_failed_smoke(&mut ops, ensured.started_pid, || {
-                let _ = child.kill();
+                child.terminate();
             });
             return Err(LiveError::Smoke(format_smoke_failure(&smoke)));
         }
         outcome.smoke_text = smoke.visible_text;
         eprintln!("Reply check passed.");
     }
+    // The model is up and answering: from here it keeps serving whatever
+    // happens to the agent.
+    child.release();
 
     // Resolve the permission gate once (may prompt): the decision feeds both the
     // LocalPilot config file and the Claude/Codex argv below.
@@ -719,6 +734,83 @@ pub fn execute_launch(
     }
 
     Ok(outcome)
+}
+
+/// End a process and wait (up to 15 s) until the process table no longer
+/// lists it, so its memory and files are free when this returns.
+pub fn stop_and_wait(pid: u32) {
+    crate::exec::kill_pid(pid);
+    let spid = sysinfo::Pid::from_u32(pid);
+    let mut system = sysinfo::System::new();
+    for _ in 0..60 {
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[spid]), true);
+        if system.process(spid).is_none() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+/// The exact command that tries another engine build, when a managed CUDA
+/// build failed for a reason the server log ties to the build itself (never
+/// for running out of memory, which another build would not fix).
+#[must_use]
+pub fn probe_fallback_hint(
+    managed_native: bool,
+    stamp_variant: Option<&str>,
+    server_log: &str,
+    model: &str,
+) -> String {
+    let cuda = stamp_variant.is_some_and(|v| v.starts_with("cuda"));
+    if managed_native
+        && cuda
+        && crate::fallback::classify_failure(server_log, "")
+            == crate::fallback::FailureCause::Backend
+    {
+        format!("; to try the Vulkan, then the CPU build: localbox probe {model} --fallback")
+    } else {
+        String::new()
+    }
+}
+
+/// A model server this process started and still answers for. Dropped before
+/// [`OwnedServer::release`], it is killed and waited for, so it has exited —
+/// and freed its memory and files — by the time the caller moves on.
+pub struct OwnedServer {
+    child: Option<std::process::Child>,
+}
+
+impl OwnedServer {
+    #[must_use]
+    pub fn new(child: std::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    /// The exit status, when the server has already exited on its own.
+    pub fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.child
+            .as_mut()
+            .and_then(|c| c.try_wait().ok().flatten())
+    }
+
+    /// End the server and wait for it to exit. Idempotent.
+    pub fn terminate(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    /// Let the server keep running after this value is gone.
+    pub fn release(&mut self) {
+        self.child = None;
+    }
+}
+
+impl Drop for OwnedServer {
+    fn drop(&mut self) {
+        self.terminate();
+    }
 }
 
 /// Whether a process name is a llama-server (any mode's fork included).
@@ -972,6 +1064,83 @@ pub fn status_report(proxy_port: u16, server_port: u16) -> String {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    #[test]
+    fn a_cuda_build_failure_names_the_exact_fallback_command() {
+        let log = "CUDA error: the provided PTX was compiled with an unsupported toolchain";
+        assert_eq!(
+            probe_fallback_hint(true, Some("cuda-13.5"), log, "qwen"),
+            "; to try the Vulkan, then the CPU build: localbox probe qwen --fallback"
+        );
+        assert!(probe_fallback_hint(true, Some("vulkan"), log, "qwen").is_empty());
+        assert!(probe_fallback_hint(false, Some("cuda-13.5"), log, "qwen").is_empty());
+        assert!(
+            probe_fallback_hint(
+                true,
+                Some("cuda-13.5"),
+                "cudaMalloc failed: out of memory",
+                "qwen"
+            )
+            .is_empty(),
+            "running out of memory never points at another build"
+        );
+    }
+
+    #[test]
+    fn a_failed_launch_ends_its_server_and_waits_for_it_before_returning() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "live::tests::sleeping_server_child", "--ignored"])
+            .env("LOCALBOX_TEST_SLEEPING_SERVER", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = sysinfo::Pid::from_u32(child.id());
+        let mut owned = OwnedServer::new(child);
+        assert!(
+            owned.exited().is_none(),
+            "the stand-in server is still running"
+        );
+        drop(owned);
+        let mut system = sysinfo::System::new();
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        assert!(
+            system.process(pid).is_none(),
+            "the server must be gone once a failed launch returns"
+        );
+    }
+
+    #[test]
+    fn a_released_server_keeps_running() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "live::tests::sleeping_server_child", "--ignored"])
+            .env("LOCALBOX_TEST_SLEEPING_SERVER", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let mut owned = OwnedServer::new(child);
+        owned.release();
+        drop(owned);
+        let mut system = sysinfo::System::new();
+        let spid = sysinfo::Pid::from_u32(pid);
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[spid]), true);
+        assert!(
+            system.process(spid).is_some(),
+            "a released server outlives its owner"
+        );
+        crate::exec::kill_pid(pid);
+    }
+
+    #[test]
+    #[ignore = "stand-in server process for the owned-server tests"]
+    fn sleeping_server_child() {
+        if std::env::var_os("LOCALBOX_TEST_SLEEPING_SERVER").is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
+
     use super::*;
     use localbox_launcher::proxy::EnsureProxyConfig;
 

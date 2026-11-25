@@ -13,6 +13,7 @@ use localx_llama_core::{LauncherVersion, RUNTIME_LLAMACPP, TARGET_LOCALBOX};
 
 pub mod embed;
 pub mod exec;
+pub mod fallback;
 pub mod fetch;
 pub mod guided;
 pub mod hf_install;

@@ -55,7 +55,10 @@ changing anything. GGUF weights download from Hugging Face on first launch.
   older than the server's toolkit and runnable under the same rule; a server
   with no such companion yields to the next CUDA build. When the installed
   CUDA build is not the one this host should run, `localbox update` installs
-  the right one again at the same release.
+  the right one again at the same release. If the chosen CUDA build still
+  cannot run a model, `localbox probe <model> --fallback` moves to the Vulkan,
+  then the CPU build, only after one of them answers (see
+  [usage.md](usage.md#checking-the-engine-on-this-machine)).
 - **Linux** — prebuilt llama.cpp release assets are downloaded when available
   (CUDA best-effort, CPU otherwise). If no asset fits your system, install
   your own `llama-server` into `~/.local-llm/llama-cpp/`.

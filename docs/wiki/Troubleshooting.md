@@ -17,6 +17,17 @@ behaviour at the current `VERSION`.
 `localbox --plain` uses numbered plain-text menus with no escape sequences;
 non-TTY sessions degrade to them automatically.
 
+## The CUDA build fails to start or answer on this machine
+
+Run `localbox probe <model> --fallback`. It tries the Vulkan build, then the
+CPU build, keeps the original until one of them answers, and restores it when
+none does. Out-of-memory and unexplained failures leave the engine alone, since
+every model shares it; try a smaller quant, context or model instead. A
+fallback build is kept only for the NVIDIA driver it was decided on: after a
+driver update, the next `localbox update` installs the CUDA build again.
+`localbox status` shows the verified backend and any fallback in use. See
+[usage](https://github.com/C0deGeek-dev/LocalBox/blob/main/docs/usage.md#checking-the-engine-on-this-machine).
+
 ## `localpilot` not on PATH
 
 Install the CLI: `cargo install localpilot`.

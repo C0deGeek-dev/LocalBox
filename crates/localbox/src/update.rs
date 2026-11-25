@@ -94,7 +94,28 @@ impl Variant {
             Self::Cpu => "cpu",
         }
     }
+
+    /// Parse the stamp spelling (case-insensitive). A CUDA stamp carries its
+    /// toolkit version (`cuda-13.5`), so any `cuda` prefix is CUDA.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim().to_ascii_lowercase();
+        if value.starts_with("cuda") {
+            Some(Self::Cuda)
+        } else if value == "vulkan" {
+            Some(Self::Vulkan)
+        } else if value == "cpu" {
+            Some(Self::Cpu)
+        } else {
+            None
+        }
+    }
 }
+
+/// The settings key that pins the native build variant. Absent means the
+/// host decides (driver and GPU probes); present, `localbox update` installs
+/// that variant until the user changes it back with `--variant auto`.
+pub const NATIVE_VARIANT_SETTING: &str = "LlamaCppNativeVariant";
 
 /// The OS token release asset names carry for this platform.
 #[must_use]
@@ -533,6 +554,46 @@ pub fn select_native_assets<'a>(
     driver: Option<&CudaDriver>,
     amd_gpu: bool,
 ) -> Result<(Vec<&'a str>, Option<String>), String> {
+    select_native_assets_for(names, driver, amd_gpu, None)
+}
+
+/// [`select_native_assets`] with an optional variant the user chose. A
+/// chosen Vulkan or CPU build is that build or an error, never a silent
+/// substitute; a chosen CUDA build follows the usual driver-aware CUDA rules
+/// and needs an NVIDIA driver.
+///
+/// # Errors
+/// A plain message when the chosen variant has no archive for this host, or
+/// the release has none at all.
+pub fn select_native_assets_for<'a>(
+    names: &[&'a str],
+    driver: Option<&CudaDriver>,
+    amd_gpu: bool,
+    forced: Option<Variant>,
+) -> Result<(Vec<&'a str>, Option<String>), String> {
+    match forced {
+        Some(Variant::Cuda) if driver.is_none() => {
+            return Err(
+                "the CUDA build was requested, but no NVIDIA driver was detected".to_string(),
+            );
+        }
+        Some(variant @ (Variant::Vulkan | Variant::Cpu)) => {
+            if os_asset_token() == "macos" {
+                return Err(format!(
+                    "macOS uses the Metal build; there is no {} build to choose",
+                    variant.as_str()
+                ));
+            }
+            let server = select_native_asset(names, variant, None).ok_or_else(|| {
+                format!(
+                    "this release has no {} build for this platform",
+                    variant.as_str()
+                )
+            })?;
+            return Ok((with_runtime_companion(names, server)?, None));
+        }
+        _ => {}
+    }
     let no_asset = || {
         "this release has no prebuilt asset for this platform; provide your own llama-server \
          (bring-your-own) or pin a different tag"
@@ -570,6 +631,14 @@ pub fn select_native_assets<'a>(
             _ => None,
         };
         return Ok((set, warning));
+    }
+    if forced == Some(Variant::Cuda) {
+        // Chosen by the user: a CUDA build or nothing, never a substitute.
+        return Err(
+            "the CUDA build was requested, but this release has no complete CUDA build and \
+             runtime pair that this NVIDIA driver and GPU can run"
+                .to_string(),
+        );
     }
     let (server, backend) = match select_native_asset(names, Variant::Vulkan, None) {
         Some(vulkan) => (vulkan, "Vulkan"),
@@ -1682,7 +1751,11 @@ pub async fn plan_binary_update(
     driver: Option<&CudaDriver>,
     amd_gpu: bool,
     allow_downgrade: bool,
+    forced: Option<Variant>,
 ) -> Result<UpdatePlan, String> {
+    // A chosen variant applies to the native engine only; the forks carry
+    // their own build rules.
+    let forced = forced.filter(|_| mode == localx_llama_core::Mode::Native);
     let (repo, _configured) = mode_release_source(catalog, mode);
     // Always the newest usable release, never the recorded tag: the tag in
     // `settings.json` records what was last installed and verified, not a
@@ -1690,7 +1763,7 @@ pub async fn plan_binary_update(
     // that flag says nothing about a release carrying binaries for this host.
     let releases = fetch_releases(&repo, RELEASE_SCAN_DEPTH).await?;
     let fits = |release: &Release| {
-        select_release_assets_reporting(release, mode, driver, amd_gpu)
+        select_release_assets_reporting(release, mode, driver, amd_gpu, forced)
             .is_ok_and(|(assets, _)| !assets.is_empty())
     };
     let release = newest_installable(&releases, fits)
@@ -1705,7 +1778,7 @@ pub async fn plan_binary_update(
     if let Some(installed) = read_stamp_tag(root) {
         if !build_stamp_is_stale(&installed, &release.tag) {
             if mode == localx_llama_core::Mode::Native {
-                let assets = select_release_assets(&release, mode, driver, amd_gpu)?;
+                let assets = select_release_assets(&release, mode, driver, amd_gpu, forced)?;
                 let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
                 let wanted = stamp_variant(mode, &names, driver.map(|d| d.version.major), amd_gpu);
                 let stamped = read_stamp_variant(root).unwrap_or_default();
@@ -1714,7 +1787,7 @@ pub async fn plan_binary_update(
                 } else {
                     stamped
                 };
-                if native_build_needs_replacing(mode, &installed, &wanted) {
+                if native_build_needs_replacing(mode, &installed, &wanted, forced.is_some()) {
                     return Ok(UpdatePlan::Install {
                         release,
                         assets,
@@ -1736,7 +1809,7 @@ pub async fn plan_binary_update(
         }
     }
 
-    let assets = select_release_assets(&release, mode, driver, amd_gpu)?;
+    let assets = select_release_assets(&release, mode, driver, amd_gpu, forced)?;
     Ok(UpdatePlan::Install {
         release,
         assets,
@@ -1790,15 +1863,17 @@ fn installed_cudart_major(root: &Path) -> Option<u32> {
 /// Only native CUDA installs qualify: the installed variant (`cuda-13.5`, or
 /// a legacy `cuda` stamp resolved by [`legacy_native_variant`]) is replaced
 /// when the wanted build differs, e.g. after a driver change. A legacy stamp
-/// the install cannot resolve stays `cuda` and is replaced once.
+/// the install cannot resolve stays `cuda` and is replaced once. A variant
+/// the user chose replaces any differing build (e.g. Vulkan with CPU).
 fn native_build_needs_replacing(
     mode: localx_llama_core::Mode,
     stamped: &str,
     wanted: &str,
+    chosen: bool,
 ) -> bool {
     mode == localx_llama_core::Mode::Native
         && stamped != wanted
-        && (stamped.starts_with("cuda") || wanted.starts_with("cuda"))
+        && (chosen || stamped.starts_with("cuda") || wanted.starts_with("cuda"))
 }
 
 /// Select this host's install set from a resolved release (shared by the
@@ -1811,8 +1886,10 @@ pub fn select_release_assets(
     mode: localx_llama_core::Mode,
     driver: Option<&CudaDriver>,
     amd_gpu: bool,
+    forced: Option<Variant>,
 ) -> Result<Vec<Asset>, String> {
-    let (assets, warning) = select_release_assets_reporting(release, mode, driver, amd_gpu)?;
+    let (assets, warning) =
+        select_release_assets_reporting(release, mode, driver, amd_gpu, forced)?;
     if let Some(warning) = warning {
         eprintln!("Warning: {warning}");
     }
@@ -1831,6 +1908,7 @@ pub fn select_release_assets_reporting(
     mode: localx_llama_core::Mode,
     driver: Option<&CudaDriver>,
     amd_gpu: bool,
+    forced: Option<Variant>,
 ) -> Result<(Vec<Asset>, Option<String>), String> {
     use localx_llama_core::Mode;
     let driver_major = driver.map(|d| d.version.major);
@@ -1838,7 +1916,7 @@ pub fn select_release_assets_reporting(
     let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
     let picked: Vec<&str> = match mode {
         Mode::Native => {
-            let (choice, warning) = select_native_assets(&names, driver, amd_gpu)?;
+            let (choice, warning) = select_native_assets_for(&names, driver, amd_gpu, forced)?;
             host_warning = warning;
             choice
         }
@@ -1877,6 +1955,63 @@ pub fn select_release_assets_reporting(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    fn chosen_driver() -> CudaDriver {
+        CudaDriver {
+            version: CudaVersion {
+                major: 13,
+                minor: Some(1),
+            },
+            gpus: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_chosen_cuda_build_is_cuda_or_an_error_never_a_substitute() {
+        let no_cuda = [
+            "llama-b1-bin-win-vulkan-x64.zip",
+            "llama-b1-bin-win-cpu-x64.zip",
+        ];
+        let driver = chosen_driver();
+        let err = select_native_assets_for(&no_cuda, Some(&driver), false, Some(Variant::Cuda))
+            .unwrap_err();
+        assert!(err.contains("CUDA build was requested"), "{err}");
+        let err = select_native_assets_for(&no_cuda, None, false, Some(Variant::Cuda)).unwrap_err();
+        assert!(err.contains("no NVIDIA driver"), "{err}");
+        // Automatic selection still falls back.
+        let (auto, _) = select_native_assets_for(&no_cuda, Some(&driver), false, None).unwrap();
+        assert!(auto.iter().any(|a| a.contains("vulkan")), "{auto:?}");
+    }
+
+    #[test]
+    fn a_cuda_server_without_its_runtime_is_not_a_chosen_cuda_build() {
+        let incomplete = [
+            "llama-b1-bin-win-cuda-13.1-x64.zip",
+            "llama-b1-bin-win-vulkan-x64.zip",
+        ];
+        let driver = chosen_driver();
+        assert!(
+            select_native_assets_for(&incomplete, Some(&driver), false, Some(Variant::Cuda))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_chosen_vulkan_or_cpu_build_is_that_build() {
+        let names = [
+            "llama-b1-bin-win-cuda-13.1-x64.zip",
+            "cudart-llama-bin-win-cuda-13.1-x64.zip",
+            "llama-b1-bin-win-vulkan-x64.zip",
+            "llama-b1-bin-win-cpu-x64.zip",
+        ];
+        let driver = chosen_driver();
+        let (v, _) =
+            select_native_assets_for(&names, Some(&driver), false, Some(Variant::Vulkan)).unwrap();
+        assert!(v.iter().all(|a| !a.contains("cuda")) && v.iter().any(|a| a.contains("vulkan")));
+        let (c, _) =
+            select_native_assets_for(&names, Some(&driver), false, Some(Variant::Cpu)).unwrap();
+        assert!(c.iter().any(|a| a.contains("cpu")));
+    }
+
     use super::*;
 
     fn legacy_cpu_asset<'a>(names: &[&'a str]) -> Option<&'a str> {
@@ -2193,30 +2328,40 @@ mod tests {
         assert!(native_build_needs_replacing(
             Mode::Native,
             "cuda",
-            "cuda-12.4"
+            "cuda-12.4",
+            false
         ));
         assert!(native_build_needs_replacing(
             Mode::Native,
             "cuda",
-            "cuda-13.5"
+            "cuda-13.5",
+            false
         ));
         // Versioned stamp after a driver update.
         assert!(native_build_needs_replacing(
             Mode::Native,
             "cuda-12.4",
-            "cuda-13.5"
+            "cuda-13.5",
+            false
         ));
         assert!(!native_build_needs_replacing(
             Mode::Native,
             "cuda-13.5",
-            "cuda-13.5"
+            "cuda-13.5",
+            false
         ));
         // Non-CUDA installs and other engines are left alone.
-        assert!(!native_build_needs_replacing(Mode::Native, "cpu", "vulkan"));
+        assert!(!native_build_needs_replacing(
+            Mode::Native,
+            "cpu",
+            "vulkan",
+            false
+        ));
         assert!(!native_build_needs_replacing(
             Mode::PrismMl,
             "cuda",
-            "cuda-12.4"
+            "cuda-12.4",
+            false
         ));
     }
 

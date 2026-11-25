@@ -26,8 +26,11 @@ localbox launch <model> [--if-running <ask|continue|stop|cancel>]
                                     warn when a model is already running
                                     (named with its port; an embedding
                                     server never counts)
-localbox update [--mode <m>] [--check]
+localbox update [--mode <m>] [--check] [--variant <cuda|vulkan|cpu|auto>]
                                     install and pin the latest llama.cpp releases
+localbox probe <model> [--fallback] [--keep-serving] [--json]
+                                    prove the engine can load the model and
+                                    answer; --fallback tries other builds
 localbox version                    print the launcher version envelope
 ```
 
@@ -62,6 +65,38 @@ localbox launch q36plus --mode turboquant --quant q6kp
 localbox serve q36plus --context 64k
 localbox launch ornith35hapex --context 16k --vision
 ```
+
+### Checking the engine on this machine
+
+`localbox probe <model>` starts the model with the installed llama.cpp build,
+checks a one-word reply through a no-think proxy, the same path agents use,
+and stops what it started. That proxy is the probe's own, on a free loopback
+port: a probe never starts, repoints or stops the shared proxy. A
+pass is recorded as the verified backend, which `localbox status` shows.
+It takes the same `--quant`, `--context`, `--mode` and run-profile flags as
+`serve`; `--keep-serving` leaves the model and the probe's proxy running
+(the endpoint is printed), and `--json` prints the result (backend, any fallbacks with their
+reasons, launch arguments) for scripts; a failure prints `ok: false` with
+the stage it stopped at, a reason class, the message and, when a server was
+started, its log. A probe needs the proxy and the GPU to itself, so it refuses to run
+while another model is serving unless you pass `--if-running stop`.
+
+When the CUDA build cannot run on this machine, `--fallback` tries the Vulkan
+build, then the CPU build. The build that was installed stays on disk until
+one of them passes, and comes back if none does. Only a failure the server
+log ties to the build itself (a driver or toolkit mismatch, a missing kernel
+or device, a crash while the GPU backend starts) starts the fallback. A model
+that does not fit in memory, or a failure the log does not explain, changes
+nothing and says what to try instead, because every model shares the one
+build and a slower build would slow all of them.
+
+A fallback build is kept only while the NVIDIA driver is the one it was
+decided on. After a driver update, the next `localbox update` installs the
+build the driver and GPU checks pick again and tells you to probe it.
+
+`localbox update --variant vulkan` (or `cuda`, `cpu`) installs that build
+on purpose and keeps it on later updates, whatever the driver;
+`--variant auto` hands the choice back to the driver and GPU checks.
 
 ### Large contexts on a 24 GB card
 

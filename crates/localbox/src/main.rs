@@ -40,6 +40,14 @@ Usage:
                                       <ask|continue|stop|cancel> for when a model
                                       is already running (default: ask on a
                                       terminal, cancel without one)
+  localbox probe <model> [options] [--fallback] [--keep-serving] [--json]
+                                      prove the installed engine can load the
+                                      model and answer (a short serve, a
+                                      one-word reply, then stop); --fallback
+                                      tries the Vulkan, then the CPU build when
+                                      the CUDA build fails, keeping the
+                                      original until one passes; the verified
+                                      backend is recorded and shown by status
   localbox stop                       stop every model server and the proxy
   localbox status                     report serve health and the remedy
   localbox info [model]               list the configured models, or one in detail
@@ -63,6 +71,7 @@ Usage:
   localbox embed-stop                 stop the embedding server
   localbox update [--mode <m>] [--check] [--allow-downgrade] [--merge-models]
                   [--skip-load-probe] [--prune-models]
+                  [--variant <cuda|vulkan|cpu|auto>]
                                       install or update the llama.cpp binaries
                                       to the newest upstream release, verified
                                       against the published release digest and
@@ -78,7 +87,10 @@ Usage:
                                       existing entries untouched);
                                       --prune-models removes retired fields
                                       from llm-models.json (the ones each load
-                                      warns about)
+                                      warns about); --variant installs that
+                                      native build and keeps it on later
+                                      updates (auto returns the choice to
+                                      the driver and GPU checks)
   localbox version                    print the launcher version envelope
   localbox nothink-proxy --listen <port> --target-port <port>
                                       host the no-think proxy (plumbing)
@@ -141,6 +153,7 @@ fn run() -> ExitCode {
         "embed-serve" => cmd_embed_serve(&args[1..]),
         "embed-stop" => cmd_embed_stop(),
         "update" => cmd_update(&args[1..]),
+        "probe" => cmd_probe(&args[1..]),
         "version" => cmd_version(),
         "nothink-proxy" => cmd_nothink_proxy(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -434,7 +447,26 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     let launcher = build_launcher(&home)?;
     let (request, profile) = build_request(args, model, &home, &launcher, false)?;
     confirm_profile_fallback(args, &request.key, profile.as_ref())?;
-    if let Some(entry) = profile.as_ref().and_then(|profile| profile.entry.as_ref()) {
+    print_run_profile(args, profile.as_ref());
+
+    let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
+    apply_launch_posture(&mut plan, args, agent)?;
+    launch_after_plan(
+        args,
+        model,
+        &home,
+        &launcher,
+        &request,
+        plan,
+        agent,
+        running_policy,
+    )
+}
+
+/// Say which run profile a launch uses: the saved tune (its identity and
+/// score) or the catalog defaults.
+fn print_run_profile(args: &[String], profile: Option<&RunProfileResolution>) {
+    if let Some(entry) = profile.and_then(|profile| profile.entry.as_ref()) {
         eprintln!(
             "Run profile: tuned · {:?} · {} · {} · {} (score {:.0} {}) · {}",
             entry.profile,
@@ -452,10 +484,21 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     } else {
         eprintln!("Run profile: LocalBox catalog/settings defaults (approved fallback).");
     }
+}
 
-    let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
-    apply_launch_posture(&mut plan, args, agent)?;
-
+/// Run a resolved launch plan: preview it, or start it and hand off, with the
+/// fork-to-native retry when a fork build fails its reply check.
+#[allow(clippy::too_many_arguments)]
+fn launch_after_plan(
+    args: &[String],
+    model: &str,
+    home: &std::path::Path,
+    launcher: &LlamaLauncher,
+    request: &LaunchRequest,
+    mut plan: LaunchPlan,
+    agent: AgentKind,
+    running_policy: RunningModelPolicy,
+) -> Result<(), String> {
     if has_flag(args, "--dry-run") {
         print_plan(&plan);
         return Ok(());
@@ -466,7 +509,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     // request with AutoBest off — the fork's tuned params/quant/context don't
     // apply to the native build (fork-only KV types would even fail its plan) —
     // and the failed launch already tore its own server/proxy down.
-    let outcome = match execute_launch(&launcher, &plan, &request, agent, &home, running_policy) {
+    let outcome = match execute_launch(launcher, &plan, request, agent, home, running_policy) {
         Ok(outcome) => outcome,
         Err(LiveError::Smoke(detail))
             if smoke_fallback(request.mode) == SmokeFallback::RetryNative =>
@@ -476,19 +519,19 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
                  Retrying on native llama.cpp …",
                 request.mode.as_str()
             );
-            let (mut native, _) = build_request(args, model, &home, &launcher, true)?;
+            let (mut native, _) = build_request(args, model, home, launcher, true)?;
             native.mode = Mode::Native;
-            let mut native_plan = plan_launch(&launcher, &native).map_err(|e| e.to_string())?;
+            let mut native_plan = plan_launch(launcher, &native).map_err(|e| e.to_string())?;
             apply_launch_posture(&mut native_plan, args, agent)?;
             // Same user action, second attempt: the question was already
             // answered (and the failed launch tore its own server down), so
             // asking again would be asking twice for one launch.
             let outcome = execute_launch(
-                &launcher,
+                launcher,
                 &native_plan,
                 &native,
                 agent,
-                &home,
+                home,
                 RunningModelPolicy::Continue,
             )
             .map_err(|e| e.to_string())?;
@@ -616,6 +659,40 @@ fn finish_stop(report: &StopReport) -> Result<(), String> {
     }
 }
 
+/// What status says about the engine build: the backend a probe last
+/// verified, and a fallback build in use.
+fn engine_backend_lines(settings_path: &std::path::Path) -> Vec<String> {
+    use localbox::fallback::{read_settings, FALLBACK_SETTING, VERIFIED_BACKEND_SETTING};
+    let Ok(settings) = read_settings(settings_path) else {
+        return Vec::new();
+    };
+    let text = |v: &serde_json::Value, key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or("?")
+            .to_string()
+    };
+    let mut lines = Vec::new();
+    if let Some(v) = settings.get(VERIFIED_BACKEND_SETTING) {
+        lines.push(format!(
+            "Verified backend: {} build {} answered with {}.",
+            text(v, "variant"),
+            text(v, "tag"),
+            text(v, "model")
+        ));
+    }
+    if let Some(v) = settings.get(FALLBACK_SETTING) {
+        lines.push(format!(
+            "Backend fallback: using the {} build because the {} build failed on driver {}; \
+             a driver change retries it on the next `localbox update`.",
+            text(v, "variant"),
+            text(v, "from"),
+            text(v, "driver")
+        ));
+    }
+    lines
+}
+
 fn cmd_status(args: &[String]) -> Result<(), String> {
     let proxy_port = match flag_value(args, "--proxy-port") {
         Some(v) => v.parse().map_err(|_| format!("bad port '{v}'"))?,
@@ -629,6 +706,9 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
         .unwrap_or(DEFAULT_SERVER_PORT);
     println!("{}", status_report(proxy_port, server_port));
     if let Some(home) = home_dir() {
+        for line in engine_backend_lines(&catalog_dir(&home).join("settings.json")) {
+            println!("{line}");
+        }
         let notice =
             localbox::migrate::v1_leftover_notice(&localbox::migrate::find_v1_leftovers(&home));
         if !notice.is_empty() {
@@ -1135,6 +1215,10 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     // resort for a host where the probe itself is wrong, not a routine flag.
     let load_probe = !has_flag(args, "--skip-load-probe");
     let explicit_mode = flag_value(args, "--mode");
+    let chosen_variant = parse_variant_flag(flag_value(args, "--variant"))?;
+    if chosen_variant.is_some() && explicit_mode.is_some_and(|m| m != "native") {
+        return Err("--variant applies to the native engine only (--mode native)".to_string());
+    }
     if has_flag(args, "--merge-models") {
         return merge_shipped_models(&home, check_only);
     }
@@ -1156,83 +1240,194 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
     // instead of silently falling back to CPU.
     let amd_gpu = driver_major.is_none() && host_has_amd_gpu();
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let driver_id = localbox::fallback::driver_fingerprint(&nvidia_smi_banner());
+    let settings_path = catalog_dir(&home).join("settings.json");
+    let native_root = localx_llama_core::Launcher::install_root(&launcher, Mode::Native);
+    let engine_dir = native_root
+        .parent()
+        .ok_or("the engine install root has no parent directory")?
+        .to_path_buf();
 
-    for mode in modes {
-        let root = localx_llama_core::Launcher::install_root(&launcher, mode);
-        println!("== {} ==", mode.as_str());
-        match runtime.block_on(plan_binary_update(
-            &catalog,
-            mode,
-            &root,
-            driver.as_ref(),
-            amd_gpu,
-            allow_downgrade,
-        )) {
-            Ok(UpdatePlan::UpToDate { tag }) => println!("Up to date ({tag})."),
-            Ok(UpdatePlan::WouldDowngrade {
-                installed,
-                resolved,
-            }) => println!(
-                concat!(
-                    "Refusing to downgrade: {} is installed, but the newest release ",
-                    "resolves to the older {}. The working engine was left in place; ",
-                    "upstream most likely withdrew or retagged a release. Pass ",
-                    "--allow-downgrade to install it anyway."
+    // Everything that reads or changes the engine and its settings runs as one
+    // unit under the engine lock: settling an interrupted fallback, reading the
+    // saved variant, planning, installing, and recording pins and the variant.
+    // A check changes nothing, so it takes no lock.
+    let update_all = |catalog: &localbox_launcher::catalog::Catalog,
+                      launcher: &LlamaLauncher|
+     -> Result<(), String> {
+        // The variant this run installs: the one asked for now, else the one
+        // the user chose before, else the build an automatic fallback moved to
+        // while the driver is still the one it was decided on, else the host
+        // decides. A driver change retires the fallback.
+        use localbox::fallback::FallbackStanding;
+        let standing = localbox::fallback::fallback_standing(
+            &localbox::fallback::read_settings(&settings_path)?,
+            driver_id.as_deref(),
+        );
+        let user_choice = catalog
+            .setting_str(localbox::update::NATIVE_VARIANT_SETTING)
+            .and_then(localbox::update::Variant::parse);
+        let forced = match (chosen_variant, user_choice, &standing) {
+            (Some(choice), _, _) => choice,
+            (None, Some(choice), _) => Some(choice),
+            (None, None, FallbackStanding::Holds(variant)) => {
+                println!(
+                    "Keeping the {} build an earlier backend fallback chose for this driver.",
+                    variant.as_str()
+                );
+                Some(*variant)
+            }
+            (
+                None,
+                None,
+                FallbackStanding::DriverChanged {
+                    from,
+                    model,
+                    recorded,
+                    now,
+                },
+            ) => {
+                println!(
+                    "The NVIDIA driver changed since the backend fallback (was {}, now {}): \
+                     the {from} build is tried again. Check it with `localbox probe {model}`; \
+                     if it still fails, `localbox probe {model} --fallback`.",
+                    recorded.as_deref().unwrap_or("none"),
+                    now.as_deref().unwrap_or("none"),
+                );
+                None
+            }
+            (None, None, FallbackStanding::None) => None,
+        };
+        // A fallback record is retired by a driver change or the user's own
+        // choice, once this run has the native build it planned.
+        let retire_fallback = !check_only
+            && match standing {
+                FallbackStanding::None => false,
+                FallbackStanding::Holds(_) => chosen_variant.is_some() || user_choice.is_some(),
+                FallbackStanding::DriverChanged { .. } => forced.is_none(),
+            };
+        for mode in modes.iter().copied() {
+            let root = localx_llama_core::Launcher::install_root(launcher, mode);
+            println!("== {} ==", mode.as_str());
+            let mode_forced = forced.filter(|_| mode == Mode::Native);
+            let planned = runtime.block_on(plan_binary_update(
+                catalog,
+                mode,
+                &root,
+                driver.as_ref(),
+                amd_gpu,
+                allow_downgrade,
+                mode_forced,
+            ));
+            let persist_choice = mode == Mode::Native && !check_only && chosen_variant.is_some();
+            if mode == Mode::Native && matches!(planned, Ok(UpdatePlan::UpToDate { .. })) {
+                if persist_choice {
+                    record_variant_choice(&settings_path, chosen_variant.flatten())?;
+                }
+                if retire_fallback {
+                    retire_fallback_record(&settings_path)?;
+                }
+            }
+            match planned {
+                Ok(UpdatePlan::UpToDate { tag }) => println!("Up to date ({tag})."),
+                Ok(UpdatePlan::WouldDowngrade {
+                    installed,
+                    resolved,
+                }) => println!(
+                    concat!(
+                        "Refusing to downgrade: {} is installed, but the newest release ",
+                        "resolves to the older {}. The working engine was left in place; ",
+                        "upstream most likely withdrew or retagged a release. Pass ",
+                        "--allow-downgrade to install it anyway."
+                    ),
+                    installed, resolved
                 ),
-                installed, resolved
-            ),
-            Ok(UpdatePlan::Install {
-                release,
-                assets,
-                replaces,
-            }) => {
-                let summary = asset_set_summary(&assets);
-                if let Some(stamped) = &replaces {
-                    let stamped = if stamped.is_empty() {
-                        "unrecorded"
-                    } else {
-                        stamped
-                    };
-                    println!(
+                Ok(UpdatePlan::Install {
+                    release,
+                    assets,
+                    replaces,
+                }) => {
+                    let summary = asset_set_summary(&assets);
+                    if let Some(stamped) = &replaces {
+                        let stamped = if stamped.is_empty() {
+                            "unrecorded"
+                        } else {
+                            stamped
+                        };
+                        println!(
                         "The installed {} build ({stamped}) is not the one this host should run.",
                         release.tag
                     );
+                    }
+                    if check_only {
+                        let verb = if replaces.is_some() {
+                            "reinstall"
+                        } else {
+                            "update to"
+                        };
+                        println!("Would {verb} {} (assets: {summary}).", release.tag);
+                        continue;
+                    }
+                    println!("Installing {} (assets: {summary}).", release.tag);
+                    // A newly resolved release has no local pin by definition, so
+                    // `install_asset` falls back to the digest the release itself
+                    // publishes and refuses anything that does not match. Known
+                    // pins are still passed, so re-installing a tag already in the
+                    // table is checked against the hash recorded at that time.
+                    let pins = assets
+                        .iter()
+                        .map(|asset| localbox::update::pin_for(catalog, &asset.name))
+                        .collect::<Vec<_>>();
+                    let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
+                    let variant =
+                        localbox::update::stamp_variant(mode, &names, driver_major, amd_gpu);
+                    let recorded = runtime.block_on(install_asset_set(
+                        &assets,
+                        &pins,
+                        &root,
+                        false,
+                        &release.tag,
+                        &variant,
+                        load_probe,
+                    ))?;
+                    println!("Installed {} into {}.", release.tag, root.display());
+                    record_installed_pins(&home, mode, &release.tag, &recorded)?;
+                    if persist_choice {
+                        record_variant_choice(&settings_path, chosen_variant.flatten())?;
+                    }
+                    if mode == Mode::Native && retire_fallback {
+                        retire_fallback_record(&settings_path)?;
+                    }
+                    if mode == Mode::Native {
+                        retire_stale_receipt(&settings_path, &release.tag, &variant)?;
+                    }
                 }
-                if check_only {
-                    let verb = if replaces.is_some() {
-                        "reinstall"
-                    } else {
-                        "update to"
-                    };
-                    println!("Would {verb} {} (assets: {summary}).", release.tag);
-                    continue;
+                Err(message) if mode == Mode::Native && matches!(chosen_variant, Some(Some(_))) => {
+                    // A build asked for by name that cannot be installed is a
+                    // failure the caller must see, not a skipped mode.
+                    return Err(format!(
+                        "the requested native build cannot be installed: {message}"
+                    ));
                 }
-                println!("Installing {} (assets: {summary}).", release.tag);
-                // A newly resolved release has no local pin by definition, so
-                // `install_asset` falls back to the digest the release itself
-                // publishes and refuses anything that does not match. Known
-                // pins are still passed, so re-installing a tag already in the
-                // table is checked against the hash recorded at that time.
-                let pins = assets
-                    .iter()
-                    .map(|asset| localbox::update::pin_for(&catalog, &asset.name))
-                    .collect::<Vec<_>>();
-                let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
-                let variant = localbox::update::stamp_variant(mode, &names, driver_major, amd_gpu);
-                let recorded = runtime.block_on(install_asset_set(
-                    &assets,
-                    &pins,
-                    &root,
-                    false,
-                    &release.tag,
-                    &variant,
-                    load_probe,
-                ))?;
-                println!("Installed {} into {}.", release.tag, root.display());
-                record_installed_pins(&home, mode, &release.tag, &recorded)?;
+                Err(message) => println!("Skipped: {message}"),
             }
-            Err(message) => println!("Skipped: {message}"),
         }
+        Ok(())
+    };
+
+    if check_only {
+        update_all(&catalog, &launcher)?;
+    } else {
+        localbox::fallback::with_engine_lock(&engine_dir, || {
+            report_recovery(localbox::fallback::recover(&native_root, &settings_path)?);
+            // Plan from settings.json as it is now, under the lock: recovery,
+            // or another command that finished before the lock was taken, may
+            // have changed it since the first load.
+            let catalog = localbox_launcher::catalog::Catalog::load(&catalog_dir(&home))
+                .map_err(|e| e.to_string())?;
+            let launcher = localbox::exec::build_launcher_with(catalog.clone(), &home);
+            update_all(&catalog, &launcher)
+        })?;
     }
     report_missing_shipped_models(&home);
     Ok(())
@@ -1356,6 +1551,700 @@ fn prune_retired_model_fields(home: &std::path::Path, check_only: bool) -> Resul
         user_path.display(),
         removed.join(", ")
     );
+    Ok(())
+}
+
+/// `--variant`: `Some(Some(v))` installs that build, `Some(None)` (`auto`)
+/// returns the choice to the host checks, `None` leaves the saved choice.
+fn parse_variant_flag(
+    value: Option<&str>,
+) -> Result<Option<Option<localbox::update::Variant>>, String> {
+    use localbox::update::Variant;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(Some(None)),
+        "cuda" => Ok(Some(Some(Variant::Cuda))),
+        "vulkan" => Ok(Some(Some(Variant::Vulkan))),
+        "cpu" => Ok(Some(Some(Variant::Cpu))),
+        other => Err(format!(
+            "unknown --variant '{other}': expected cuda, vulkan, cpu, or auto"
+        )),
+    }
+}
+
+/// Keep (or, for `auto`, forget) the user's native variant choice.
+fn record_variant_choice(
+    settings_path: &std::path::Path,
+    choice: Option<localbox::update::Variant>,
+) -> Result<(), String> {
+    use localbox::fallback::{read_settings, write_settings};
+    use localbox::update::NATIVE_VARIANT_SETTING;
+    let mut settings = read_settings(settings_path)?;
+    match choice {
+        Some(variant) => {
+            settings.insert(
+                NATIVE_VARIANT_SETTING.to_string(),
+                serde_json::Value::String(variant.as_str().to_string()),
+            );
+            println!(
+                "Recorded {NATIVE_VARIANT_SETTING} = {}; later updates keep this build \
+                 (`localbox update --variant auto` undoes it).",
+                variant.as_str()
+            );
+        }
+        None => {
+            if settings.remove(NATIVE_VARIANT_SETTING).is_some() {
+                println!(
+                    "Removed {NATIVE_VARIANT_SETTING}; the host checks choose the build again."
+                );
+            }
+        }
+    }
+    write_settings(settings_path, &settings)
+}
+
+/// Forget the automatic fallback record once it no longer applies.
+/// Forget a verified-backend receipt that no longer describes the installed
+/// native build (its tag or variant changed).
+fn retire_stale_receipt(
+    settings_path: &std::path::Path,
+    tag: &str,
+    variant: &str,
+) -> Result<(), String> {
+    use localbox::fallback::{read_settings, write_settings, VERIFIED_BACKEND_SETTING};
+    let mut settings = read_settings(settings_path)?;
+    let stale = settings.get(VERIFIED_BACKEND_SETTING).is_some_and(|v| {
+        v.get("tag").and_then(|t| t.as_str()) != Some(tag)
+            || v.get("variant").and_then(|t| t.as_str()) != Some(variant)
+    });
+    if stale {
+        settings.remove(VERIFIED_BACKEND_SETTING);
+        write_settings(settings_path, &settings)?;
+        println!(
+            "Removed {VERIFIED_BACKEND_SETTING}: it described the previous build; \
+             `localbox probe <model>` verifies this one."
+        );
+    }
+    Ok(())
+}
+
+fn retire_fallback_record(settings_path: &std::path::Path) -> Result<(), String> {
+    use localbox::fallback::{read_settings, write_settings, FALLBACK_SETTING};
+    let mut settings = read_settings(settings_path)?;
+    if settings.remove(FALLBACK_SETTING).is_some() {
+        write_settings(settings_path, &settings)?;
+        println!("Removed {FALLBACK_SETTING}: the earlier backend fallback no longer applies.");
+    }
+    Ok(())
+}
+
+fn report_recovery(recovery: localbox::fallback::Recovery) {
+    use localbox::fallback::Recovery;
+    match recovery {
+        Recovery::Clean => {}
+        Recovery::RestoredOriginal => eprintln!(
+            "An interrupted backend fallback was undone: the engine build and settings that \
+             were there before it are back."
+        ),
+        Recovery::FinishedCommit => eprintln!(
+            "An interrupted backend fallback had already verified its replacement; its \
+             cleanup is now finished."
+        ),
+    }
+}
+
+/// Why a probe failed. Only a failure whose evidence implicates the engine
+/// build is worth trying another build for: the build is shared by every
+/// model, so a model that is simply too big must never move the whole host
+/// to a slower build.
+enum ProbeFailure {
+    /// The build cannot run here (driver, kernel, device or start-up crash).
+    Backend(String),
+    /// The model does not fit at this quant and context.
+    Memory(String),
+    /// A failed load or reply with no evidence either way.
+    Unclear(String),
+    /// Not a load or reply failure (a download, a refusal, an I/O error).
+    Other(String),
+}
+
+impl ProbeFailure {
+    fn message(&self) -> &str {
+        match self {
+            Self::Backend(m) | Self::Memory(m) | Self::Unclear(m) | Self::Other(m) => m,
+        }
+    }
+
+    /// The reason class the `--json` failure envelope reports.
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Backend(_) => "backend",
+            Self::Memory(_) => "out-of-memory",
+            Self::Unclear(_) => "unclear",
+            Self::Other(_) => "other",
+        }
+    }
+
+    /// Whether the failure came from a server this probe started.
+    fn started_server(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+
+    fn from_launch(message: String, server_log: &std::path::Path) -> Self {
+        use localbox::fallback::{classify_failure, FailureCause};
+        let log = std::fs::read_to_string(server_log).unwrap_or_default();
+        match classify_failure(&log, &message) {
+            FailureCause::Backend => Self::Backend(message),
+            FailureCause::OutOfMemory => Self::Memory(message),
+            FailureCause::Unknown => Self::Unclear(message),
+        }
+    }
+}
+
+/// A test-only switch that makes a probe of a build whose stamp variant starts
+/// with this value fail before anything starts, so the fallback path can be
+/// exercised on a machine whose GPU works. Documented as test-only.
+const TEST_FAIL_BACKEND_ENV: &str = "LOCALBOX_TEST_FAIL_BACKEND";
+
+fn forced_test_failure(root: &std::path::Path) -> Option<String> {
+    let wanted = std::env::var(TEST_FAIL_BACKEND_ENV)
+        .ok()?
+        .to_ascii_lowercase();
+    let variant = localbox::update::read_stamp_variant(root)?;
+    wanted
+        .split(',')
+        .map(str::trim)
+        .any(|w| !w.is_empty() && variant.starts_with(w))
+        .then(|| {
+            format!(
+                "the {variant} build was failed on purpose ({TEST_FAIL_BACKEND_ENV}, testing only)"
+            )
+        })
+}
+
+/// One probe: resolve the plan against the build now installed, serve it,
+/// check a one-word reply, and stop what was started unless asked to keep it.
+fn probe_once(
+    launcher: &LlamaLauncher,
+    request: &LaunchRequest,
+    args: &[String],
+    home: &std::path::Path,
+    running_policy: RunningModelPolicy,
+    keep_serving: bool,
+) -> Result<LaunchPlan, ProbeFailure> {
+    let root = launcher.install_root(request.mode);
+    if let Some(reason) = forced_test_failure(&root) {
+        return Err(ProbeFailure::Backend(reason));
+    }
+    let mut plan =
+        plan_launch(launcher, request).map_err(|e| ProbeFailure::Other(e.to_string()))?;
+    apply_launch_posture(&mut plan, args, AgentKind::ServeOnly).map_err(ProbeFailure::Other)?;
+    // A probe checks the same path agents use (its server behind a no-think
+    // proxy, with the same reply check), but through a proxy of its own on a
+    // free loopback port, so it never starts, repoints or stops the shared
+    // proxy another model may be serving through.
+    let probe_port = free_loopback_port().map_err(ProbeFailure::Other)?;
+    plan.proxy.listen_port = probe_port;
+    plan.proxy.listen_host = "127.0.0.1".to_string();
+    // If anything claims the port before the proxy starts, refuse rather than
+    // reuse or replace it.
+    plan.proxy.start_only = true;
+    plan.base_url = format!("http://127.0.0.1:{probe_port}");
+    eprintln!("Launch arguments: {}", plan.argv.join(" "));
+    let log = localbox::live::server_log_path(home, plan.server_port);
+    let outcome = match execute_launch(
+        launcher,
+        &plan,
+        request,
+        AgentKind::ServeOnly,
+        home,
+        running_policy,
+    ) {
+        Ok(outcome) => outcome,
+        Err(LiveError::Server(m)) | Err(LiveError::Smoke(m)) => {
+            return Err(ProbeFailure::from_launch(m, &log))
+        }
+        Err(other) => return Err(ProbeFailure::Other(other.to_string())),
+    };
+    if !keep_serving {
+        for pid in [outcome.proxy_pid, outcome.server_pid]
+            .into_iter()
+            .flatten()
+        {
+            localbox::live::stop_and_wait(pid);
+        }
+    }
+    Ok(plan)
+}
+
+/// A loopback port nothing listens on right now, for a probe's own proxy.
+fn free_loopback_port() -> Result<u16, String> {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .map_err(|e| format!("could not find a free loopback port for the probe: {e}"))
+}
+
+/// The verified-backend record a passed probe leaves in settings.json.
+fn verified_record(stamp: &localbox::fallback::Stamp, plan: &LaunchPlan) -> serde_json::Value {
+    let verified_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    serde_json::json!({
+        "tag": stamp.tag,
+        "variant": stamp.variant,
+        "model": plan.key,
+        "gguf": plan.gguf_path.file_name().map(|n| n.to_string_lossy().into_owned()),
+        "verifiedAtUnix": verified_at,
+    })
+}
+
+/// The real effects behind a fallback run.
+struct ProbeHost<'a> {
+    catalog: &'a Catalog,
+    launcher: &'a LlamaLauncher,
+    request: &'a LaunchRequest,
+    args: &'a [String],
+    home: &'a std::path::Path,
+    runtime: &'a tokio::runtime::Runtime,
+    driver: Option<localbox::update::CudaDriver>,
+    amd_gpu: bool,
+    keep_serving: bool,
+    last_plan: Option<LaunchPlan>,
+    /// The build that failed first (e.g. `cuda-13.5`).
+    failed_variant: String,
+    /// The NVIDIA driver the fallback is decided on.
+    driver_id: Option<String>,
+}
+
+impl localbox::fallback::FallbackHost for ProbeHost<'_> {
+    fn resolve(
+        &mut self,
+        variant: localbox::update::Variant,
+    ) -> Result<localbox::fallback::Candidate, String> {
+        use localbox::update::{plan_binary_update, stamp_variant, UpdatePlan};
+        let root = self.launcher.install_root(Mode::Native);
+        match self.runtime.block_on(plan_binary_update(
+            self.catalog,
+            Mode::Native,
+            &root,
+            self.driver.as_ref(),
+            self.amd_gpu,
+            false,
+            Some(variant),
+        ))? {
+            UpdatePlan::Install {
+                release, assets, ..
+            } => {
+                let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
+                let stamped = stamp_variant(
+                    Mode::Native,
+                    &names,
+                    self.driver.as_ref().map(|d| d.version.major),
+                    self.amd_gpu,
+                );
+                Ok(localbox::fallback::Candidate {
+                    stamp: localbox::fallback::Stamp {
+                        tag: release.tag,
+                        variant: stamped,
+                    },
+                    assets,
+                })
+            }
+            other => Err(format!(
+                "unexpected update plan for an empty engine root: {other:?}"
+            )),
+        }
+    }
+
+    fn install(
+        &mut self,
+        candidate: &localbox::fallback::Candidate,
+        root: &std::path::Path,
+    ) -> Result<Vec<(String, String)>, String> {
+        let pins = candidate
+            .assets
+            .iter()
+            .map(|asset| localbox::update::pin_for(self.catalog, &asset.name))
+            .collect::<Vec<_>>();
+        self.runtime.block_on(localbox::update::install_asset_set(
+            &candidate.assets,
+            &pins,
+            root,
+            false,
+            &candidate.stamp.tag,
+            &candidate.stamp.variant,
+            true,
+        ))
+    }
+
+    fn probe(&mut self) -> Result<(), localbox::fallback::AttemptFailure> {
+        use localbox::fallback::AttemptFailure;
+        match probe_once(
+            self.launcher,
+            self.request,
+            self.args,
+            self.home,
+            RunningModelPolicy::Continue,
+            self.keep_serving,
+        ) {
+            Ok(plan) => {
+                self.last_plan = Some(plan);
+                Ok(())
+            }
+            Err(ProbeFailure::Backend(m)) => Err(AttemptFailure::Backend(m)),
+            Err(failure) => Err(AttemptFailure::Stop(failure.message().to_string())),
+        }
+    }
+
+    fn record(
+        &mut self,
+        current: &localbox::fallback::Settings,
+        stamp: &localbox::fallback::Stamp,
+        pins: &[(String, String)],
+    ) -> localbox::fallback::Settings {
+        let mut next = localbox::update::refreshed_settings(
+            current,
+            localbox::update::pinned_tag_setting_key(Mode::Native),
+            &stamp.tag,
+            pins,
+        );
+        // Not the user's variant choice: a fallback record tied to this
+        // driver, so a driver change brings the faster build back.
+        next.insert(
+            localbox::fallback::FALLBACK_SETTING.to_string(),
+            localbox::fallback::fallback_record(
+                stamp,
+                &self.failed_variant,
+                self.driver_id.as_deref(),
+                &self.request.key,
+            ),
+        );
+        if let Some(plan) = &self.last_plan {
+            next.insert(
+                localbox::fallback::VERIFIED_BACKEND_SETTING.to_string(),
+                verified_record(stamp, plan),
+            );
+        }
+        next
+    }
+
+    fn say(&mut self, line: &str) {
+        eprintln!("{line}");
+    }
+}
+
+/// A probe needs the proxy and the GPU to itself: running beside a serving
+/// model would repoint that model's endpoint to the probe and then take it
+/// down. So it runs only when nothing is serving, or when the user asked for
+/// the running model to be stopped first.
+fn probe_running_gate(
+    policy: RunningModelPolicy,
+    running: &[localbox::live::RunningModel],
+) -> Result<RunningModelPolicy, String> {
+    if running.is_empty() || policy == RunningModelPolicy::StopFirst {
+        return Ok(policy);
+    }
+    Err(format!(
+        "a model is already serving, and a probe would replace its endpoint; nothing was \
+         started or stopped. Stop it first (`localbox stop`) or pass --if-running stop:\n{}",
+        localbox::live::describe_running(running)
+    ))
+}
+
+/// Where a probe stopped, for the `--json` failure envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeStage {
+    /// Arguments, catalog, model or run-profile resolution.
+    Setup,
+    /// Another model is serving.
+    Occupied,
+    /// The engine lock or an interrupted fallback.
+    Engine,
+    /// Loading the model and checking its reply.
+    Probe,
+    /// Trying other builds.
+    Fallback,
+    /// Writing the verified record.
+    Record,
+}
+
+impl ProbeStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Occupied => "occupied",
+            Self::Engine => "engine",
+            Self::Probe => "probe",
+            Self::Fallback => "fallback",
+            Self::Record => "record",
+        }
+    }
+}
+
+/// A failed probe: the stage, a reason class, the message, and the server log
+/// when a server was started.
+struct ProbeError {
+    stage: ProbeStage,
+    reason: &'static str,
+    message: String,
+    log: Option<std::path::PathBuf>,
+}
+
+impl ProbeError {
+    fn at(stage: ProbeStage) -> impl Fn(String) -> Self {
+        move |message| Self {
+            stage,
+            reason: "other",
+            message,
+            log: None,
+        }
+    }
+}
+
+fn cmd_probe(args: &[String]) -> Result<(), String> {
+    let json = has_flag(args, "--json");
+    match probe_command(args, json) {
+        Ok(()) => Ok(()),
+        Err(failure) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": false,
+                        "model": args.first().filter(|a| !a.starts_with("--")),
+                        "stage": failure.stage.as_str(),
+                        "reason": failure.reason,
+                        "error": failure.message,
+                        "log": failure.log.as_ref().map(|p| p.display().to_string()),
+                    })
+                );
+            }
+            Err(match &failure.log {
+                Some(log) => format!(
+                    "{}. The server log is at {}",
+                    failure.message,
+                    log.display()
+                ),
+                None => failure.message,
+            })
+        }
+    }
+}
+
+fn probe_command(args: &[String], json: bool) -> Result<(), ProbeError> {
+    use localbox::fallback::{
+        read_settings, recover, run, rungs_after, with_engine_lock, write_settings, Stamp,
+        VERIFIED_BACKEND_SETTING,
+    };
+    use std::cell::{Cell, RefCell};
+    let setup = ProbeError::at(ProbeStage::Setup);
+    let running_policy = resolve_running_policy(args).map_err(&setup)?;
+    let model = args
+        .first()
+        .filter(|a| !a.starts_with("--"))
+        .ok_or_else(|| setup("a model key is required (run `localbox probe <model>`)".into()))?;
+    let fallback = has_flag(args, "--fallback");
+    let keep_serving = has_flag(args, "--keep-serving");
+    let home =
+        home_dir().ok_or_else(|| setup("could not determine the user home directory".into()))?;
+    let running_policy = probe_running_gate(running_policy, &localbox::live::running_models(&home))
+        .map_err(|message| ProbeError {
+            stage: ProbeStage::Occupied,
+            reason: "occupied",
+            message,
+            log: None,
+        })?;
+    let launcher = build_launcher(&home).map_err(&setup)?;
+    let (mut request, profile) =
+        build_request(args, model, &home, &launcher, false).map_err(&setup)?;
+    // A probe judges the visible reply, so reasoning stays off.
+    request.keep_thinking = false;
+    confirm_profile_fallback(args, &request.key, profile.as_ref()).map_err(&setup)?;
+    print_run_profile(args, profile.as_ref());
+    let root = launcher.install_root(request.mode);
+    let settings_path = catalog_dir(&home).join("settings.json");
+    let engine_dir = root
+        .parent()
+        .ok_or_else(|| setup("the engine install root has no parent directory".into()))?
+        .to_path_buf();
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| setup(e.to_string()))?;
+    // Where the run is, and what a failure means, for the failure envelope.
+    let stage = Cell::new(ProbeStage::Engine);
+    let reason = Cell::new("other");
+    let started_log: RefCell<Option<std::path::PathBuf>> = RefCell::new(None);
+
+    let result = with_engine_lock(&engine_dir, || {
+        if request.mode == Mode::Native {
+            report_recovery(recover(&root, &settings_path)?);
+        }
+        stage.set(ProbeStage::Setup);
+        // Release pins and the saved variant are read under the lock, after
+        // recovery, so they match the engine on disk.
+        let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
+        let original = Stamp::read(&root);
+        stage.set(ProbeStage::Probe);
+        let first = probe_once(
+            &launcher,
+            &request,
+            args,
+            &home,
+            running_policy,
+            keep_serving,
+        );
+        if let Err(failure) = &first {
+            reason.set(failure.reason());
+            if failure.started_server() {
+                *started_log.borrow_mut() = plan_launch(&launcher, &request)
+                    .ok()
+                    .map(|plan| localbox::live::server_log_path(&home, plan.server_port))
+                    .filter(|log| log.is_file());
+            }
+        }
+        let (plan, stamp, failures) = match first {
+            Ok(plan) => (plan, original.clone(), Vec::new()),
+            Err(ProbeFailure::Other(message)) => return Err(message),
+            Err(ProbeFailure::Memory(message)) => {
+                return Err(format!(
+                    "{} does not fit in this machine's memory at this quant and context \
+                     ({message}). The engine build was not changed: another build would not \
+                     help and would slow every model. Try a smaller quant or context \
+                     (localbox probe {} --quant <key> --context <key>; see localbox info {}), \
+                     or a smaller model",
+                    request.key, request.key, request.key
+                ))
+            }
+            Err(ProbeFailure::Unclear(message)) => {
+                return Err(format!(
+                    "{} failed to load or answer, and the log does not show whether the engine \
+                     build or the model is at fault ({message}). The engine build was not \
+                     changed. Read the server log; if it shows the GPU backend failing, install \
+                     another build with localbox update --variant vulkan (or cpu) and probe \
+                     again",
+                    request.key
+                ))
+            }
+            Err(ProbeFailure::Backend(message)) => {
+                let variant = original
+                    .as_ref()
+                    .map(|s| s.variant.clone())
+                    .unwrap_or_default();
+                let rungs = if request.mode == Mode::Native {
+                    rungs_after(&variant)
+                } else {
+                    Vec::new()
+                };
+                if !fallback || rungs.is_empty() {
+                    let next = if rungs.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "; to try the other builds this host can run: localbox probe {} --fallback",
+                            request.key
+                        )
+                    };
+                    return Err(format!(
+                        "the {} build could not run {}: {message}{next}",
+                        if variant.is_empty() {
+                            "installed"
+                        } else {
+                            &variant
+                        },
+                        request.key
+                    ));
+                }
+                eprintln!(
+                    "The {variant} build could not run {}: {message}",
+                    request.key
+                );
+                let banner = nvidia_smi_banner();
+                let driver_id = localbox::fallback::driver_fingerprint(&banner);
+                let driver = localbox::update::parse_cuda_driver_version(&banner).map(|version| {
+                    localbox::update::CudaDriver {
+                        version,
+                        gpus: localbox::update::parse_compute_capabilities(&nvidia_compute_caps()),
+                    }
+                });
+                let amd_gpu = driver.is_none() && host_has_amd_gpu();
+                let mut host = ProbeHost {
+                    catalog: &catalog,
+                    launcher: &launcher,
+                    request: &request,
+                    args,
+                    home: &home,
+                    runtime: &runtime,
+                    driver,
+                    amd_gpu,
+                    keep_serving,
+                    last_plan: None,
+                    failed_variant: variant.clone(),
+                    driver_id,
+                };
+                stage.set(ProbeStage::Fallback);
+                let success = run(&root, &settings_path, &rungs, &mut host)?;
+                let plan = host
+                    .last_plan
+                    .ok_or("the fallback passed without a launch plan")?;
+                let mut failures = vec![(variant, message)];
+                failures.extend(success.failures);
+                (plan, Some(success.stamp), failures)
+            }
+        };
+        let stamp = stamp.unwrap_or(Stamp {
+            tag: String::from("unrecorded"),
+            variant: String::from("unrecorded"),
+        });
+        // A fallback wrote its receipt together with its build; a first-try
+        // pass records it here.
+        stage.set(ProbeStage::Record);
+        if failures.is_empty() {
+            let mut settings = read_settings(&settings_path)?;
+            settings.insert(
+                VERIFIED_BACKEND_SETTING.to_string(),
+                verified_record(&stamp, &plan),
+            );
+            write_settings(&settings_path, &settings)?;
+        }
+        Ok((plan, stamp, failures))
+    });
+
+    let (plan, stamp, failures) = result.map_err(|message| ProbeError {
+        stage: stage.get(),
+        reason: reason.get(),
+        message,
+        log: started_log.borrow().clone(),
+    })?;
+    let reasons: Vec<serde_json::Value> = failures
+        .iter()
+        .map(|(variant, why)| serde_json::json!({"variant": variant, "reason": why}))
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "model": plan.key,
+                "backend": {"tag": stamp.tag, "variant": stamp.variant},
+                "fallbacks": reasons,
+                "serving": keep_serving,
+                "endpoint": if keep_serving { Some(plan.base_url.clone()) } else { None },
+                "launchArguments": plan.argv,
+            })
+        );
+    } else {
+        println!(
+            "Verified: {} answers on the {} build ({}).",
+            plan.key, stamp.variant, stamp.tag
+        );
+        for (variant, why) in &failures {
+            println!("  fell back from {variant}: {why}");
+        }
+        if keep_serving {
+            println!("Serving {} at {}", plan.key, plan.base_url);
+        }
+    }
     Ok(())
 }
 
@@ -1526,6 +2415,32 @@ fn cmd_nothink_proxy(args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    #[test]
+    fn a_probe_never_shares_the_proxy_with_a_serving_model() {
+        let serving = vec![localbox::live::RunningModel {
+            pid: 4242,
+            port: Some(8080),
+            model: Some("chat.gguf".into()),
+        }];
+        for policy in [
+            RunningModelPolicy::Ask,
+            RunningModelPolicy::Continue,
+            RunningModelPolicy::Cancel,
+        ] {
+            let err = probe_running_gate(policy, &serving).unwrap_err();
+            assert!(err.contains("nothing was started or stopped"), "{err}");
+        }
+        assert_eq!(
+            probe_running_gate(RunningModelPolicy::StopFirst, &serving).unwrap(),
+            RunningModelPolicy::StopFirst
+        );
+        assert_eq!(
+            probe_running_gate(RunningModelPolicy::Continue, &[]).unwrap(),
+            RunningModelPolicy::Continue
+        );
+    }
+
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|p| (*p).to_string()).collect()
     }

@@ -98,6 +98,27 @@ Out of the box, every binary download is pinned and verified:
   recorded pin is a hard failure. To opt out of pinning (trust-on-first-use),
   set it to `false` in `settings.json`.
 
+**Which native build is installed.** Three keys in `settings.json` describe
+it; LocalBox writes them, and only the first is meant to be set by hand:
+
+- `LlamaCppNativeVariant` (`cuda`, `vulkan` or `cpu`) — your own choice,
+  written by `localbox update --variant <v>` and removed by `--variant auto`.
+  Updates keep that build whatever the driver.
+- `LlamaCppNativeFallback` — the build `localbox probe <model> --fallback`
+  moved to, the build that failed, the model it was verified with, and the
+  NVIDIA driver version at the time. Updates keep the fallback build only
+  while the driver is the same; after a driver change they install the
+  driver-checked build again and remove this record.
+- `LlamaCppVerifiedBackend` — the release, build and model of the last
+  passing `localbox probe`. An update that installs a different native build
+  removes it.
+
+`LOCALBOX_TEST_FAIL_BACKEND` (environment, testing only; one value or a
+comma-separated list such as `cuda,vulkan`) makes a probe of a build whose
+variant starts with one of the values fail as a backend failure, so the
+fallback path can be exercised on a machine whose GPU works. Never set it in
+normal use.
+
 **Updates always track the latest release.** A normal update resolves each
 downloadable mode's newest GitHub release, selects this host's assets, installs
 them, and records the new tag and SHA-256 hashes in

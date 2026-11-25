@@ -4,6 +4,26 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`localbox probe` proves the engine runs a model, and can fall back to
+  another build.** It starts the model, checks a one-word reply through a
+  no-think proxy of its own on a free loopback port (the path agents use,
+  without touching the shared proxy), stops what it started (also after a failure or timeout, so no
+  half-loaded server holds the GPU or the engine files), and records the
+  verified backend, which `localbox status` shows. With `--fallback`, a CUDA
+  build that cannot run here is replaced by the Vulkan build, then the CPU
+  build, only after one of them answers; the original stays on disk until then
+  and is restored when none does. Only failures the server log ties to the
+  build (driver or toolkit mismatch, missing kernel or device, a crash while
+  the GPU backend starts) trigger it: running out of memory, or an unexplained
+  failure, leaves the shared engine alone. A fallback build is kept only for
+  the driver it was decided on, so a driver update brings the faster build
+  back on the next `localbox update`. A journal makes an interrupted fallback
+  settle on the next run into the original or the verified build, never a mix,
+  and refuses to delete anything it cannot identify; one OS-held lock keeps
+  two engine-changing commands from running at once.
+  `localbox update --variant cuda|vulkan|cpu|auto` chooses the native build
+  on purpose and keeps that choice on later updates.
+
 - **The native updater checks CUDA compatibility against the driver and GPU.**
   It matched CUDA builds to the driver by major version only, so a GTX 1650
   SUPER on a driver reporting CUDA 13.4 got the CUDA 13.5 llama.cpp build,
