@@ -221,11 +221,11 @@ impl RemoteIdentity {
     #[must_use]
     pub fn completes(&self, recorded: &RemoteIdentity, existing: u64) -> bool {
         recorded.size == Some(existing)
-            && self.size.map_or(true, |size| size == existing)
+            && self.size.is_none_or(|size| size == existing)
             && self
                 .etag
                 .as_ref()
-                .map_or(true, |tag| recorded.etag.as_ref() == Some(tag))
+                .is_none_or(|tag| recorded.etag.as_ref() == Some(tag))
     }
 }
 

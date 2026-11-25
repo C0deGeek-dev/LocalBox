@@ -2328,7 +2328,7 @@ fn apply_launch_posture(
         .unwrap_or_else(|_| "this-machine".to_string());
         let advertised = format!("http://{host}:{}", plan.proxy.listen_port);
         let guard = localbox_launcher::posture::evaluate_serve_guard(
-            &[advertised.clone()],
+            std::slice::from_ref(&advertised),
             &password,
             has_flag(args, "--allow-public-no-auth"),
         );

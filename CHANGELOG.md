@@ -4,6 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The minimum Rust version is now 1.89, matching LocalPilot.** Rust 1.82
+  could not read the edition-2024 manifests of the patched `quinn-proto`
+  (0.11.19) and `quinn-udp` (0.5.16), so their security advisories were held
+  as `cargo audit` exceptions. They are now updated and every exception in
+  `.cargo/audit.toml` is gone. Code newly flagged by the 1.89 lints was
+  tidied without behaviour changes.
+
 - **`localbox probe` proves the engine runs a model, and can fall back to
   another build.** It starts the model, checks a one-word reply through a
   no-think proxy of its own on a free loopback port (the path agents use,

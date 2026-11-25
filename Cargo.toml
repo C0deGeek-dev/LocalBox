@@ -12,7 +12,7 @@
 #                         the guided plan resolver, and the ratatui widgets
 #
 # Shared primitives come from the public localx-llama crate tier via a
-# rev-pinned git dependency. MSRV 1.82 / edition 2021, exact-pinned deps.
+# rev-pinned git dependency. MSRV 1.89 / edition 2021, exact-pinned deps.
 
 [workspace]
 resolver = "2"
@@ -27,7 +27,7 @@ edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 authors = ["David <David@c0degeek.dev>", "Bram (C0deGeek.dev)"]
 repository = "https://github.com/C0deGeek-dev/LocalBox"
-rust-version = "1.82"
+rust-version = "1.89"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

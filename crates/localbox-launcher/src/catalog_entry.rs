@@ -213,7 +213,7 @@ mod tests {
             &["Qwen3.5-27B.i1-Q4_K_M.gguf"],
             Some(805_306_368),
         );
-        let (_, entry) = synthesize_entry(&hf, &[selected.clone()], &selected);
+        let (_, entry) = synthesize_entry(&hf, std::slice::from_ref(&selected), &selected);
         let def: ModelDef = serde_json::from_value(entry).expect("valid ModelDef");
 
         assert_eq!(
@@ -250,7 +250,7 @@ mod tests {
     fn an_unrecognised_repo_leaves_the_parser_unset() {
         let hf = parse_hf_ref("owner/Some-Model-GGUF").unwrap();
         let selected = candidate("q4km", &["Some-Model-Q4_K_M.gguf"], None);
-        let (_, entry) = synthesize_entry(&hf, &[selected.clone()], &selected);
+        let (_, entry) = synthesize_entry(&hf, std::slice::from_ref(&selected), &selected);
         assert!(entry.get("Parser").is_none());
     }
 

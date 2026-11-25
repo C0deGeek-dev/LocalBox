@@ -1,19 +1,4 @@
 [advisories]
-ignore = [
-    # Optional reqwest HTTP/3 dependencies are locked but not compiled. The
-    # dependency_policy integration test rejects QUIC in every workspace
-    # feature/target graph. Patched quinn-proto requires edition-2024
-    # dependency metadata that Cargo 1.82 cannot parse, even when unbuilt.
-    # Remove these exceptions before enabling HTTP/3 or raising the MSRV.
-    "RUSTSEC-2026-0338",
-    "RUSTSEC-2026-0339",
-    "RUSTSEC-2026-0340",
-    "RUSTSEC-2026-0341",
-    "RUSTSEC-2026-0342",
-    # Same optional HTTP/3 graph, published 2026-11: quinn-proto 0.11.19 and
-    # quinn-udp 0.5.16 carry the fixes but use edition-2024 manifests that
-    # Cargo 1.82 cannot parse (checked 2026-11-25). Not compiled here.
-    "RUSTSEC-2026-0523",
-    "RUSTSEC-2026-0524",
-    "RUSTSEC-2026-0538",
-]
+# No exceptions. cargo audit reports the unmaintained/unsound advisories as
+# warnings; their acceptance and rationale are recorded in deny.toml.
+ignore = []
