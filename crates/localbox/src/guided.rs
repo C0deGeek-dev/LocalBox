@@ -696,8 +696,9 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
     };
     let mut show_all = false;
     // The starter row is offered only when a starter fits this machine.
-    let starter = match crate::starter::recommend(crate::starter::probe_memory(
-        crate::starter::configured_vram_gb(&catalog_dir(&home)),
+    let starter = match crate::starter::recommend(crate::starter::note_running(
+        crate::starter::probe_memory(crate::starter::configured_vram_gb(&catalog_dir(&home))),
+        &crate::live::running_models(&home),
     )) {
         crate::starter::Recommendation::Starter {
             rung,

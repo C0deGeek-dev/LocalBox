@@ -4,6 +4,18 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **The starter model fits the GPU memory free now, not the total.** The rule
+  assumed all but 1 GB of graphics memory was free, so a computer with
+  other programs on the GPU could be offered a model that does not fit.
+  `localbox starter` now reads free memory from `nvidia-smi`, keeps 0.5 GB
+  of headroom, and reports `vram_free_gb` in `--json`; without a reading it
+  falls back to the old rule and says the figure was assumed.
+  `--vram-free-gb` overrides the reading. Model servers running on the GPU
+  are not credited back, since their share cannot be measured on every
+  platform; `running_on_gpu` counts them and the reason names them.
+  `--download --expect <offer>` (the `offer` in `--json`) stops before
+  fetching when the recommendation has changed since it was shown.
+
 - **`serve --json` names the engine build it runs on.** The receipt's new
   `backend` (`tag` and `variant`) lets a caller check that the server runs
   the build a probe verified, including after a native retry.

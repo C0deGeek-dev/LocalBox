@@ -137,6 +137,8 @@ pub struct RunningModel {
     pub model: Option<String>,
     /// The model path exactly as its argv names it.
     pub path: Option<String>,
+    /// Its whole command line, for settings the fields above do not carry.
+    pub argv: Vec<String>,
 }
 
 /// What to do about a model that is already running.
@@ -282,6 +284,7 @@ fn running_models_among(rows: Vec<ProcessRow>, embed_pid: Option<u32>) -> Vec<Ru
             port: port_from_argv(&row.argv),
             model: model_from_argv(&row.argv),
             path: model_path_from_argv(&row.argv),
+            argv: row.argv,
         })
         .collect();
     found.sort_by_key(|model| model.pid);
@@ -1154,6 +1157,7 @@ mod tests {
 
     fn running(pid: u32, port: Option<u16>, model: Option<&str>) -> RunningModel {
         RunningModel {
+            argv: Vec::new(),
             pid,
             port,
             model: model.map(str::to_string),
@@ -1285,6 +1289,9 @@ mod tests {
         assert_eq!(
             found,
             vec![RunningModel {
+                argv: ["llama-server", "-m", "/m/Chat-Q4.gguf", "--port", "8080"]
+                    .map(String::from)
+                    .to_vec(),
                 pid: 40,
                 port: Some(8080),
                 model: Some("Chat-Q4.gguf".to_string()),
@@ -1316,6 +1323,7 @@ mod tests {
         assert_eq!(
             running_models_among(vec![row(13, "llama-server.exe", &[])], Some(12)),
             vec![RunningModel {
+                argv: Vec::new(),
                 pid: 13,
                 port: None,
                 model: None,

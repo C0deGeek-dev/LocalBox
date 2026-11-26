@@ -83,6 +83,24 @@ pub fn probe_vram_gb() -> u32 {
     0
 }
 
+/// GPU memory free right now, in GB, on the first GPU (the one a launch
+/// uses) from `nvidia-smi`. `None` when no GPU tool reports it.
+#[must_use]
+pub fn probe_vram_free_gb() -> Option<f64> {
+    let out = Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    parse_free_mib(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The first line of `nvidia-smi`'s `memory.free` query (MiB) as GB.
+fn parse_free_mib(text: &str) -> Option<f64> {
+    let mib: f64 = text.lines().next()?.trim().parse().ok()?;
+    (mib >= 0.0).then_some(mib / 1024.0)
+}
+
 /// Probe the GPU's name and memory for the guided launcher's hardware
 /// banner: `nvidia-smi` first, then AMD tools (`rocm-smi` where present,
 /// the CIM video-controller table on Windows). `None` = no GPU tool
@@ -623,6 +641,13 @@ pub fn spawn_server(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_gpu_memory_is_read_from_the_first_gpu_in_mib() {
+        assert_eq!(parse_free_mib("14979\n8000\n"), Some(14979.0 / 1024.0));
+        assert_eq!(parse_free_mib("[N/A]\n"), None);
+        assert_eq!(parse_free_mib(""), None);
+    }
 
     fn proxy_argv(listen: &str, target_host: &str, target_port: &str) -> Vec<String> {
         [

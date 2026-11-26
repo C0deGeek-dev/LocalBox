@@ -139,15 +139,28 @@ buffers together — at the 64k catalog context and at 32k:
 | Qwen3.5 4B | 4.5 GB | 3.8 GB |
 | Qwen3.5 9B | 6.7 GB | 6.0 GB |
 
-With a GPU, the largest one that fits the GPU's total memory, less 1 GB for
-the display, is chosen, at 64k when it fits and otherwise at 32k. A GPU too
+With a GPU, the largest one that fits the GPU memory *free now*, less 0.5 GB of
+headroom, is chosen, at 64k when it fits and otherwise at 32k: the display,
+browsers and games hold GPU memory, and the starter counts only what is left.
+Model servers already running on the GPU, LocalBox's included, are not
+credited back: the GPU does not report per-process use everywhere, and a
+server may sit partly on the CPU or another device, so any figure would be a
+guess. The reason line names how many are running (`localbox stop` stops
+LocalBox's for a reading without them). When the GPU does not report free memory
+(`nvidia-smi` is the source today), the rule falls back to the total less
+1 GB, and the reason line says that figure was assumed rather than measured. A GPU too
 small for the 2B means a CPU run: then RAM *available now*, less 2 GB for the
 system, decides, and the CPU tops out at the 4B for speed. When even the 2B
 does not fit, `localbox starter` says so with the numbers and exits with an
 error rather than offering a model that cannot run. The reason line always
-names the figure that decided. `--vram-gb`, `--ram-gb` and
+names the figure that decided. `--vram-gb`, `--vram-free-gb`, `--ram-gb` and
 `--ram-available-gb` replace the probed figures, to see what another machine
-would get.
+would get; `--vram-gb` alone leaves free GPU memory unknown.
+
+`--json` names the offer as `offer` (`<repo>:<quant>:<mode>:<context>`).
+`--download --expect <offer>` downloads only when the recommendation is still
+that offer, and otherwise stops before fetching anything, so a caller that
+showed one offer and got a yes never downloads a different model.
 
 `--download` installs the starter through the same path as
 `localbox download owner/repo` and prints the command that starts it the way

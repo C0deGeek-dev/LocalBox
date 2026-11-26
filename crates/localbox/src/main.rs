@@ -48,7 +48,7 @@ Usage:
                                       the CUDA build fails, keeping the
                                       original until one passes; the verified
                                       backend is recorded and shown by status
-  localbox starter [--download] [--json] [--vram-gb <n>] [--ram-gb <n>]
+  localbox starter [--download [--expect <offer>]] [--json] [--vram-gb <n>] [--vram-free-gb <n>] [--ram-gb <n>]
                    [--ram-available-gb <n>]
                                       recommend a small starter model sized to
                                       this machine's memory and show its
@@ -1083,17 +1083,34 @@ fn run_starter(args: &[String], json: bool, printed: &mut bool) -> Result<(), St
         number("--ram-gb")?,
         number("--ram-available-gb")?,
     );
+    let free_override = number("--vram-free-gb")?;
     let home = home_dir().ok_or("could not determine the user home directory")?;
-    let probed = probe_memory(localbox::starter::configured_vram_gb(&catalog_dir(&home)));
+    // Servers running now hold part of the GPU; the reason line names them.
+    let probed = localbox::starter::note_running(
+        probe_memory(localbox::starter::configured_vram_gb(&catalog_dir(&home))),
+        &localbox::live::running_models(&home),
+    );
     let memory = localbox::starter::Memory {
         vram_total_gb: overrides.0.unwrap_or(probed.vram_total_gb),
+        // A stated total without a stated free amount is not this GPU's
+        // measurement, so it is not paired with it.
+        vram_free_gb: free_override.or(if overrides.0.is_some() {
+            None
+        } else {
+            probed.vram_free_gb
+        }),
+        running_on_gpu: if free_override.is_some() || overrides.0.is_some() {
+            0
+        } else {
+            probed.running_on_gpu
+        },
         ram_total_gb: overrides.1.unwrap_or(probed.ram_total_gb),
         ram_available_gb: overrides
             .2
             .or(overrides.1)
             .unwrap_or(probed.ram_available_gb),
     };
-    let source = if overrides == (None, None, None) {
+    let source = if overrides == (None, None, None) && free_override.is_none() {
         "probe"
     } else {
         "override"
@@ -1114,6 +1131,27 @@ fn run_starter(args: &[String], json: bool, printed: &mut bool) -> Result<(), St
             return Err(reason.clone());
         }
     };
+    // What was offered is what is fetched: a caller that showed an offer and
+    // got a yes passes it back, and a recommendation that has changed since
+    // (memory freed or taken in between) stops here, before any download.
+    let offer = localbox::starter::offer_id(rung, *mode, context);
+    if let Some(expected) = flag_value(args, "--expect") {
+        if expected != offer {
+            let error = format!(
+                "the starter offer changed from {expected} to {offer} since it was shown \
+                 (GPU or RAM use changed); look at the new offer before downloading"
+            );
+            if json {
+                let mut value = to_json(&recommendation, memory, source, None);
+                value["status"] = serde_json::json!("error");
+                value["stage"] = serde_json::json!("offer");
+                value["error"] = serde_json::json!(error);
+                *printed = true;
+                println!("{value}");
+            }
+            return Err(error);
+        }
+    }
     // The Hub's own listing gives the exact size; without a network the
     // ladder's figure stands, labelled as approximate.
     let live_size = localbox_launcher::hf_meta::parse_hf_ref(rung.repo)
@@ -2759,6 +2797,7 @@ mod tests {
     #[test]
     fn a_probe_never_shares_the_proxy_with_a_serving_model() {
         let serving = vec![localbox::live::RunningModel {
+            argv: Vec::new(),
             pid: 4242,
             port: Some(8080),
             model: Some("chat.gguf".into()),

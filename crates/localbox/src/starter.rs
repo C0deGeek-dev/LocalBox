@@ -68,8 +68,12 @@ pub const LADDER: [Rung; 3] = [
     },
 ];
 
-/// GPU memory kept free for the display and driver.
+/// GPU memory kept back when only the total is known: the display and
+/// driver use some, and nothing measured how much.
 pub const GPU_RESERVE_GB: f64 = 1.0;
+/// GPU memory kept back from what is measured free right now, for the
+/// small allocations other programs make after the measurement.
+pub const GPU_FREE_HEADROOM_GB: f64 = 0.5;
 /// Available RAM kept free for the operating system and other programs.
 pub const RAM_RESERVE_GB: f64 = 2.0;
 
@@ -78,6 +82,12 @@ pub const RAM_RESERVE_GB: f64 = 2.0;
 pub struct Memory {
     /// Total GPU memory (0 when no GPU answered).
     pub vram_total_gb: f64,
+    /// GPU memory free right now on the first GPU, as measured, when the GPU
+    /// reports it. Nothing is added to the reading.
+    pub vram_free_gb: Option<f64>,
+    /// Model servers running on the GPU when the reading was taken (see
+    /// [`note_running`]).
+    pub running_on_gpu: u32,
     /// Total system RAM.
     pub ram_total_gb: f64,
     /// RAM available right now.
@@ -141,23 +151,49 @@ pub fn recommend(memory: Memory) -> Recommendation {
     let smallest = LADDER[0];
     let mut gpu_note = String::new();
     if memory.vram_total_gb > 0.0 {
-        let budget = memory.vram_total_gb - GPU_RESERVE_GB;
+        // What is free right now decides when the GPU reports it: other
+        // programs may already hold a lot of it. Only without a measurement
+        // does the rule fall back to the total less a fixed reserve, and it
+        // says so.
+        let (budget, measured) = match memory.vram_free_gb {
+            Some(free) => (free.min(memory.vram_total_gb) - GPU_FREE_HEADROOM_GB, true),
+            None => (memory.vram_total_gb - GPU_RESERVE_GB, false),
+        };
+        let have = match memory.vram_free_gb {
+            Some(free) => format!(
+                "{free:.1} GB of the GPU's {:.0} GB is free now{}",
+                memory.vram_total_gb,
+                running_note(memory)
+            ),
+            None => format!(
+                "the GPU has {:.0} GB in total; how much is free could not be measured, so \
+                 all but {GPU_RESERVE_GB:.0} GB is assumed free",
+                memory.vram_total_gb
+            ),
+        };
         if let Some((rung, context, need)) = largest_fit(LADDER.iter(), budget) {
+            let left = if measured {
+                format!("leaving at least {GPU_FREE_HEADROOM_GB:.1} GB of it free")
+            } else {
+                format!("leaving at least {GPU_RESERVE_GB:.0} GB for the display")
+            };
             return Recommendation::Starter {
                 rung,
                 mode: Mode::Gpu,
                 context,
                 need_gb: need,
                 reason: format!(
-                    "GPU with {:.0} GB total memory: {} needs about {need:.1} GB at {context} context, \
-                     leaving at least {GPU_RESERVE_GB:.0} GB for the display.",
-                    memory.vram_total_gb, rung.label
+                    "{}: {} needs about {need:.1} GB at {context} context, {left}.",
+                    capitalize(&have),
+                    rung.label
                 ),
             };
         }
         gpu_note = format!(
-            "The GPU's {:.0} GB total memory is too small for {} ({:.1} GB at 32k), so it runs on the CPU. ",
-            memory.vram_total_gb, smallest.label, smallest.need_32k_gb
+            "{} — too little for {} ({:.1} GB at 32k), so it runs on the CPU. ",
+            capitalize(&have),
+            smallest.label,
+            smallest.need_32k_gb
         );
     }
     let budget = memory.ram_available_gb - RAM_RESERVE_GB;
@@ -190,6 +226,49 @@ pub fn recommend(memory: Memory) -> Recommendation {
     }
 }
 
+/// What the free reading leaves out, in words.
+fn running_note(memory: Memory) -> String {
+    if memory.running_on_gpu == 0 {
+        return String::new();
+    }
+    format!(
+        " ({} model server(s) running on the GPU hold part of the rest; \
+         `localbox stop` stops LocalBox's for a reading without them)",
+        memory.running_on_gpu
+    )
+}
+
+/// Note the model servers that may hold GPU memory now. Their share is not
+/// credited back: the GPU does not report per-process use everywhere, and a
+/// server may sit partly on the CPU, on another device or on a CPU build, so
+/// any figure would be a guess. A server started with every layer on the CPU
+/// (`-ngl 0`) holds no GPU memory and is left out.
+#[must_use]
+pub fn note_running(memory: Memory, running: &[crate::live::RunningModel]) -> Memory {
+    let on_gpu = running
+        .iter()
+        .filter(|model| !runs_on_cpu(&model.argv))
+        .count();
+    Memory {
+        running_on_gpu: u32::try_from(on_gpu).unwrap_or(u32::MAX),
+        ..memory
+    }
+}
+
+/// Whether a llama-server argv keeps every layer off the GPU.
+fn runs_on_cpu(argv: &[String]) -> bool {
+    argv.windows(2).any(|pair| {
+        matches!(pair[0].as_str(), "-ngl" | "--n-gpu-layers" | "--gpu-layers") && pair[1] == "0"
+    })
+}
+
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
 /// This machine's memory: total GPU memory from the catalog's `VRAMGB` setting
 /// when the user set one, else from the GPU probe (0 when no GPU answers —
 /// never the launcher's fallback figure, which would invent a GPU); total and
@@ -202,6 +281,8 @@ pub fn probe_memory(configured_vram_gb: Option<u64>) -> Memory {
     #[allow(clippy::cast_precision_loss)]
     Memory {
         vram_total_gb: gpu_memory_gb(configured_vram_gb, crate::exec::probe_vram_gb()),
+        vram_free_gb: crate::exec::probe_vram_free_gb(),
+        running_on_gpu: 0,
         ram_total_gb: system.total_memory() as f64 / GIB,
         ram_available_gb: system.available_memory() as f64 / GIB,
     }
@@ -309,6 +390,13 @@ fn measured_tokens(context: &str) -> u64 {
     }
 }
 
+/// One recommendation as text a caller can hand back with `--expect`:
+/// `<repo>:<quant>:<mode>:<context>`.
+#[must_use]
+pub fn offer_id(rung: &Rung, mode: Mode, context: &str) -> String {
+    format!("{}:{}:{}:{context}", rung.repo, rung.quant, mode.as_str())
+}
+
 /// The scriptable form of a recommendation (`localbox starter --json`).
 #[must_use]
 pub fn to_json(
@@ -319,6 +407,8 @@ pub fn to_json(
 ) -> Value {
     let memory = json!({
         "vram_total_gb": round1(memory.vram_total_gb),
+        "vram_free_gb": memory.vram_free_gb.map(round1),
+        "running_on_gpu": memory.running_on_gpu,
         "ram_total_gb": round1(memory.ram_total_gb),
         "ram_available_gb": round1(memory.ram_available_gb),
         "source": memory_source,
@@ -338,6 +428,7 @@ pub fn to_json(
                 "model": rung.label,
                 "repo": rung.repo,
                 "quant": rung.quant,
+                "offer": offer_id(rung, *mode, context),
                 "projector": rung.projector,
                 "mode": mode.as_str(),
                 "context": context,
@@ -366,9 +457,98 @@ fn round1(value: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn server(args: &[&str]) -> crate::live::RunningModel {
+        crate::live::RunningModel {
+            pid: 1,
+            port: Some(8080),
+            model: Some("Qwen3.5-9B-Q4_K_M.gguf".to_string()),
+            path: None,
+            argv: args.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn running_servers_are_named_not_credited() {
+        // The 9B runs; only 4 GB reads as free, and that reading decides.
+        let busy = Memory {
+            vram_free_gb: Some(4.0),
+            ..memory(24.0, 64.0, 40.0)
+        };
+        let noted = note_running(
+            busy,
+            &[
+                server(&["llama-server", "-c", "65536"]),
+                server(&["llama-server", "-ngl", "0"]),
+            ],
+        );
+        assert_eq!(noted.vram_free_gb, Some(4.0));
+        assert_eq!(
+            noted.running_on_gpu, 1,
+            "a CPU-only server holds no GPU memory"
+        );
+        let Recommendation::Starter { rung, reason, .. } = recommend(noted) else {
+            panic!("expected a starter");
+        };
+        assert!(rung.need_32k_gb <= 3.5, "{}", rung.label);
+        assert!(
+            reason.contains("1 model server(s) running on the GPU hold part of the rest"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn free_gpu_memory_decides_when_it_is_measured() {
+        // 24 GB in total, but other programs hold all but 4 GB of it.
+        let busy = Memory {
+            vram_free_gb: Some(4.0),
+            ..memory(24.0, 64.0, 40.0)
+        };
+        let Recommendation::Starter {
+            rung, mode, reason, ..
+        } = recommend(busy)
+        else {
+            panic!("expected a starter");
+        };
+        assert_eq!(mode, Mode::Gpu);
+        assert!(
+            rung.need_32k_gb <= 4.0 - GPU_FREE_HEADROOM_GB,
+            "{}",
+            rung.label
+        );
+        assert!(
+            reason.starts_with("4.0 GB of the GPU's 24 GB is free now"),
+            "{reason}"
+        );
+
+        // Unmeasured: the fallback says it assumes.
+        let Recommendation::Starter { reason, .. } = recommend(memory(24.0, 64.0, 40.0)) else {
+            panic!("expected a starter");
+        };
+        assert!(
+            reason.contains("could not be measured, so all but 1 GB is assumed free"),
+            "{reason}"
+        );
+
+        // Too little free for any GPU rung: the CPU, with the measurement named.
+        let full = Memory {
+            vram_free_gb: Some(1.0),
+            ..memory(24.0, 64.0, 40.0)
+        };
+        let Recommendation::Starter { mode, reason, .. } = recommend(full) else {
+            panic!("expected a starter");
+        };
+        assert_eq!(mode, Mode::Cpu);
+        assert!(
+            reason.starts_with("1.0 GB of the GPU's 24 GB is free now"),
+            "{reason}"
+        );
+    }
+
     fn memory(vram: f64, total: f64, available: f64) -> Memory {
         Memory {
             vram_total_gb: vram,
+            vram_free_gb: None,
+            running_on_gpu: 0,
             ram_total_gb: total,
             ram_available_gb: available,
         }
@@ -442,8 +622,8 @@ mod tests {
                 rung, mode, reason, ..
             } => {
                 assert_eq!((rung.label, mode), ("Qwen3.5 4B", Mode::Cpu));
-                assert!(reason.contains("too small"), "{reason}");
-                assert!(reason.contains("2 GB total"), "{reason}");
+                assert!(reason.contains("too little"), "{reason}");
+                assert!(reason.contains("2 GB in total"), "{reason}");
             }
             other => panic!("{other:?}"),
         }
@@ -498,7 +678,7 @@ mod tests {
         let Recommendation::Starter { reason, .. } = recommend(memory(24.0, 64.0, 40.0)) else {
             panic!()
         };
-        assert!(reason.contains("24 GB total"), "{reason}");
+        assert!(reason.contains("24 GB in total"), "{reason}");
         let Recommendation::Starter { reason, .. } = recommend(memory(0.0, 16.0, 9.5)) else {
             panic!()
         };
