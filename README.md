@@ -92,15 +92,28 @@ installer if it differs.
 localx status
 ```
 
-You should see the installed tools and engine. **Installing the tools does not
-download an AI model**; choose one when you start using LocalBox.
+You should see the installed tools and engine. **Installing the tools alone does
+not download an AI model**: choose one in LocalBox, or, from the first release
+after v6.0.0, let `localx setup` offer one sized to this computer.
 
 Want to read the installer before running it, check platform support, or install
 a specific version? See the [installation guide](https://github.com/C0deGeek-dev/LocalPilot/blob/main/docs/install.md).
 
 ## Run your first model
 
-Open a terminal in the project folder you want to work on, then run:
+The quickest route to coding with a local model is the guided first run:
+
+```sh
+localx setup
+```
+
+It downloads the starter model LocalBox sizes for this computer (after you
+agree), finds the engine build that runs it (CUDA, then Vulkan, then CPU),
+serves it, and makes it LocalPilot's default (`localx setup` and `serve --again` arrive in the first release after
+v6.0.0; until then they need a current source build). After a restart, LocalPilot starts
+that setup-made default again through `localbox serve --again`.
+
+To choose the model and agent yourself, open a terminal in the project folder you want to work on, then run:
 
 ```sh
 localbox
@@ -132,6 +145,7 @@ Prefer simple text menus? Run `localbox --plain`.
 | See installed versions | `localx status` |
 | Diagnose installation problems | `localx doctor` |
 | Retry an incomplete installation | `localx install` |
+| Set up a local model for LocalPilot, step by step | `localx setup` |
 
 Ordinary installs use published releases; updates do not require Rust or Git.
 If a command is “not recognized” or “not found”, complete the PATH step above.
@@ -169,6 +183,7 @@ path local.
 | Run through LocalPilot | `localbox launch <model> --agent localpilot` |
 | Run through Codex | `localbox launch <model> --agent codex` |
 | Serve headless (no agent) | `localbox serve <model>` |
+| Start the last serve on a port again | `localbox serve --again` |
 | List the configured models | `localbox info` |
 | Serve health and the remedy | `localbox status` |
 | Stop everything | `localbox stop` |

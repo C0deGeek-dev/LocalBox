@@ -671,15 +671,24 @@ fn replay_gate(
     if serving.target_port.is_none() && !occupied {
         return Ok(ReplayGate::Start);
     }
-    let what = serving
-        .model
-        .clone()
-        .or_else(|| serving.reason.clone())
-        .unwrap_or_else(|| "a program LocalBox did not start".to_string());
-    Err(format!(
-        "port {port} is already in use ({what}); nothing was started or stopped. \
-         Free it (`localbox stop` stops LocalBox's own) to start {model} there"
-    ))
+    // Only a model behind LocalBox's own proxy is something `localbox stop`
+    // is the right answer for; anything else belongs to whoever started it.
+    Err(match &serving.model {
+        Some(other) => format!(
+            "LocalBox already serves {other} on port {port}; nothing was started or stopped. \
+             `localbox stop` (which stops every LocalBox model server) frees it for {model}"
+        ),
+        None => {
+            let what = serving
+                .reason
+                .clone()
+                .unwrap_or_else(|| "a program LocalBox did not start".to_string());
+            format!(
+                "port {port} is already in use ({what}); nothing was started or stopped. \
+                 Close or reconfigure the program using it, then retry"
+            )
+        }
+    })
 }
 
 /// Save how a successful `serve` was asked to start, so `serve --again` can
@@ -3037,6 +3046,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(foreign.contains("already in use"), "{foreign}");
+        assert!(!foreign.contains("localbox stop"), "{foreign}");
+        assert!(other.contains("localbox stop"), "{other}");
         // A LocalBox proxy whose model is unknown.
         assert!(replay_gate(&serving(Some(8080), None, Some("ambiguous")), true, "m").is_err());
     }

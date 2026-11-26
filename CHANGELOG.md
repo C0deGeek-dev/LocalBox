@@ -4,6 +4,14 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Docs: the README leads with `localx setup` as the guided route to a local
+  model for LocalPilot and lists `serve --again`; `usage.md` documents
+  `starter --expect`; troubleshooting covers `serve --again` refusals, the
+  Windows wait when `localbox serve` output is piped, and the installer route
+  for a missing `localpilot`.
+- `serve --again` suggests `localbox stop` only when another LocalBox model
+  holds the port; for any other program it says to close or reconfigure it.
+
 - **`localbox serve --again` starts the last serve again, unattended.**
   Every successful `serve` saves its request per proxy port (model,
   context, mode, quant, profile preference, untuned approval, vision,

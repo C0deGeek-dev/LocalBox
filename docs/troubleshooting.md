@@ -42,8 +42,27 @@ Part of the [LocalBox documentation](README.md).
 - **"another LocalBox command is changing the engine right now"** → an
   `update` or `probe` is already running; wait for it to finish. The lock is
   released when that process ends, however it ends.
-- **`localpilot` not on PATH** → install the CLI with
-  `cargo install localpilot`.
+- **`serve --again` refuses** → it starts only the last successful `serve`
+  on that proxy port. "LocalBox has no saved launch for port …" means no serve
+was recorded there yet,
+  or the last one used an option a replay cannot repeat (other raw server
+  arguments, `--keep-thinking`, network exposure): run `localbox serve <model>`
+  once. "LocalBox already serves … on port …" means another LocalBox model holds
+  the port: `localbox stop` frees it (it stops every LocalBox model server, not
+  only that one), then retry. "port … is already in use" means
+  another program holds it; `serve --again` leaves it alone, so close or
+  reconfigure that program, then retry (do not use `localbox stop` for it). "the saved launch
+  for port … is X, not Y" means `--expect-model` named another model than the
+  saved one.
+- **Piping `localbox serve` output waits until the model stops (Windows)** →
+  the model server LocalBox starts keeps a copy of the pipe, so a reader such
+  as `| Tee-Object` or `| more` sees the end only when the server exits.
+  Redirect to a file instead (`localbox serve <model> > serve.log 2>&1`), or
+  use `--json` and read the file. `localx setup` and LocalPilot are not
+  affected.
+- **`localpilot` not on PATH** → run the LocalX installer (or `localx
+  install`) and open a new terminal; `localx doctor` names an older copy that
+  runs instead.
 - **Start over on model files** → `localbox purge` stops servers and deletes
   downloaded GGUFs; they download again on the next launch.
 - **A model starts but runs far slower than it should (Windows)** → the GPU
