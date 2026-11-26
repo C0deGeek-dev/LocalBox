@@ -31,6 +31,11 @@ localbox update [--mode <m>] [--check] [--variant <cuda|vulkan|cpu|auto>]
 localbox probe <model> [--fallback] [--keep-serving] [--json]
                                     prove the engine can load the model and
                                     answer; --fallback tries other builds
+localbox starter [--download] [--json] [--vram-gb <n>] [--ram-gb <n>]
+                 [--ram-available-gb <n>]
+                                    recommend a starter model sized to this
+                                    machine's memory, with its download size;
+                                    --download fetches and checks it
 localbox version                    print the launcher version envelope
 ```
 

@@ -6,6 +6,8 @@
 //!   spawning, the agent-environment guard, and interactive agent launch.
 //! - [`live`] — launch orchestration: execute a resolved launch plan
 //!   (download → server → proxy → smoke → agent), stop, and status.
+//! - [`starter`] — the starter model rule: a small known model sized to the
+//!   machine's memory for a first run.
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +23,7 @@ pub mod live;
 pub mod manage;
 pub mod migrate;
 pub mod partials;
+pub mod starter;
 pub mod update;
 
 /// The product version shipped with this build (the repo `VERSION` file).

@@ -25,6 +25,10 @@ pub struct HfDiscovery {
     pub projectors: Vec<HfGgufFile>,
     /// Bounded plain text from remote metadata, when the Hub supplied one.
     pub description: Option<String>,
+    /// SHA-256 the Hub published, keyed by the file's exact download URL (repo
+    /// and repo-relative path), so a nested file keeps its digest and a catalog
+    /// entry pointing elsewhere never borrows one by matching a file name.
+    pub digests: std::collections::BTreeMap<String, String>,
 }
 
 impl HfDiscovery {
@@ -169,6 +173,16 @@ pub fn discover_hf_repo(hf: HfRef) -> Result<HfDiscovery, String> {
         .collect();
     projectors.sort_by(|a, b| a.rfilename.cmp(&b.rfilename));
     projectors.dedup_by(|a, b| a.rfilename == b.rfilename);
+    let digests = info
+        .files
+        .iter()
+        .filter_map(|file| {
+            Some((
+                localbox_launcher::fetch::hf_download_url(&hf.repo_id(), &file.rfilename),
+                file.sha256.clone()?,
+            ))
+        })
+        .collect();
     let files: Vec<QuantFile> = info
         .files
         .into_iter()
@@ -186,6 +200,7 @@ pub fn discover_hf_repo(hf: HfRef) -> Result<HfDiscovery, String> {
         candidates,
         projectors,
         description: info.description,
+        digests,
     })
 }
 
@@ -245,6 +260,165 @@ pub fn recommend_quant(candidates: &[QuantCandidate], vram_gb: i64) -> Option<&Q
                 .iter()
                 .find(|candidate| candidate.key == selected.key)
         })
+}
+
+/// What a Hugging Face install put in the catalog and on disk.
+#[derive(Debug)]
+pub struct HfInstall {
+    /// The catalog key the repo is registered under.
+    pub key: String,
+    /// The quant that was fetched.
+    pub quant: String,
+    /// Every file of that quant, downloaded now or already present.
+    pub paths: Vec<std::path::PathBuf>,
+    /// Files whose content was checked against a published SHA-256, either as
+    /// they were downloaded or, with `check_present`, already on disk.
+    pub verified: Vec<std::path::PathBuf>,
+}
+
+/// The from-Hugging-Face install itself: catalog the repo, then fetch the chosen
+/// quant. Each fetched file the Hub published a SHA-256 for is verified before
+/// it is put in place. Status lines go to `say`; download progress goes to
+/// stderr, so a caller printing JSON on stdout keeps it clean.
+///
+/// The projector recorded is, in order: the one the catalog already has for
+/// this repo (a different explicit `projector_request` is refused), the
+/// explicit request, then `projector_default` (a suggestion that never
+/// replaces a user's choice).
+///
+/// # Errors
+/// A message for an unknown repo, a Hub failure, a catalog write failure, a
+/// present file that fails its published digest, or a failed download.
+#[allow(clippy::too_many_arguments)]
+pub fn install_from_hf(
+    model: &str,
+    quant: Option<&str>,
+    projector_request: Option<&str>,
+    projector_default: Option<&str>,
+    kinds: &[localbox_launcher::fetch::DownloadKind],
+    check_present: bool,
+    home: &std::path::Path,
+    say: &mut dyn FnMut(&str),
+) -> Result<HfInstall, String> {
+    use crate::fetch::ProgressPrinter;
+    use localbox_launcher::fetch::DownloadKind;
+
+    let hf = localbox_launcher::hf_meta::parse_hf_ref(model).map_err(|_| {
+        format!(
+            "unknown model '{model}' — not a catalog name, and not a Hugging Face repo id \
+             (expected owner/repo or a https://huggingface.co/owner/repo URL). \
+             Run `localbox info` for the catalog names."
+        )
+    })?;
+    let discovery = discover_hf_repo(hf)?;
+    let chosen = discovery.select(quant)?;
+    let directory = crate::guided::catalog_dir(home);
+    let configured = discovery.configured_projector(&directory)?;
+    if let (Some(existing), Some(requested)) = (configured.as_deref(), projector_request) {
+        if existing != requested {
+            return Err(format!("this repo already uses vision projector '{existing}'; change VisionModule in the catalog to replace it"));
+        }
+    }
+    let projector = match configured.as_deref() {
+        Some(existing) => Some(existing),
+        None => discovery.select_projector(projector_request.or(projector_default))?,
+    };
+    if let Some(projector) = projector {
+        say(&format!(
+            "Vision projector: {projector} (download with --vision)."
+        ));
+    }
+    let outcome = discovery.register_with_projector(&directory, &chosen.key, projector)?;
+    match &outcome {
+        CatalogInsert::Inserted(key) => say(&format!(
+            "Added '{key}' to your catalog for {} ({} quant(s)).",
+            discovery.hf.repo_id(),
+            discovery.candidates.len()
+        )),
+        CatalogInsert::Updated { key, added_quants } if added_quants.is_empty() => {
+            say(&format!("Updated vision projector for '{key}'."));
+        }
+        CatalogInsert::Updated { key, added_quants } => say(&format!(
+            "Updated '{key}' for {} with {} missing quant(s): {}.",
+            discovery.hf.repo_id(),
+            added_quants.len(),
+            added_quants.join(", ")
+        )),
+        CatalogInsert::AlreadyPresent(key) => say(&format!(
+            "{} is already complete in your catalog as '{key}'.",
+            discovery.hf.repo_id()
+        )),
+    }
+    let key = outcome.key();
+    // Resolve and fetch through the now-updated catalog. This keeps a repeat
+    // repo install, an ordinary `download <key>`, and launch-on-miss on exactly
+    // the same paths and URLs, including existing user-owned quant mappings.
+    let launcher = crate::exec::build_launcher(home)?;
+    let targets = launcher
+        .model_download_targets(key, Some(&chosen.key))
+        .map_err(|e| e.to_string())?;
+    let gguf_count = targets
+        .iter()
+        .filter(|target| target.kind == DownloadKind::Gguf)
+        .count();
+    if gguf_count == 0 {
+        return Err(format!("'{key}' resolves to no GGUF files"));
+    }
+    say(&format!(
+        "Downloading quant '{}' ({gguf_count} file(s)) …",
+        chosen.key
+    ));
+
+    let mut verified = Vec::new();
+    if check_present {
+        for target in targets
+            .iter()
+            .filter(|target| target.present && kinds.contains(&target.kind))
+        {
+            let Some(expected) = discovery.digests.get(&target.url) else {
+                continue;
+            };
+            say(&format!(
+                "Checking {} against its published SHA-256 …",
+                target.path.display()
+            ));
+            let actual = localbox_launcher::fetch::file_sha256(&target.path)
+                .map_err(|e| format!("could not read {}: {e}", target.path.display()))?;
+            if &actual != expected {
+                return Err(format!(
+                    "{} is on disk but does not match the SHA-256 its host published \
+                     (expected {expected}, got {actual}). It was left in place; delete it and \
+                     run this again to download a fresh copy.",
+                    target.path.display()
+                ));
+            }
+            verified.push(target.path.clone());
+        }
+    }
+    let mut printer = ProgressPrinter::default();
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let fetched = runtime
+        .block_on(launcher.fetch_model_files_checked(
+            key,
+            Some(&chosen.key),
+            kinds,
+            &discovery.digests,
+            &mut |progress| printer.report(progress),
+        ))
+        .map_err(|e| e.to_string())?;
+    let mut paths = Vec::with_capacity(fetched.len());
+    for (path, checked) in fetched {
+        if checked && !verified.contains(&path) {
+            verified.push(path.clone());
+        }
+        paths.push(path);
+    }
+    Ok(HfInstall {
+        key: key.to_string(),
+        quant: chosen.key,
+        paths,
+        verified,
+    })
 }
 
 #[cfg(test)]
@@ -312,11 +486,13 @@ mod tests {
             candidates: vec![candidate("q4km", Some(1.0))],
             projectors: Vec::new(),
             description: None,
+            digests: std::collections::BTreeMap::new(),
         };
         assert_eq!(discovery.select_projector(None).unwrap(), None);
         discovery.projectors.push(HfGgufFile {
             rfilename: "mmproj-F16.gguf".to_string(),
             size: Some(8),
+            sha256: None,
         });
         assert_eq!(
             discovery.select_projector(None).unwrap(),
@@ -325,6 +501,7 @@ mod tests {
         discovery.projectors.push(HfGgufFile {
             rfilename: "mmproj-Q8_0.gguf".to_string(),
             size: Some(4),
+            sha256: None,
         });
         assert!(discovery
             .select_projector(None)

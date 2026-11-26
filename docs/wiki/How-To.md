@@ -27,6 +27,7 @@ localbox info                    # list the configured models by tier
 localbox info <model>            # one model in detail (any of its names works)
 localbox download <model>        # put its files on disk without starting anything
 localbox download owner/repo      # install straight from a Hugging Face repo id
+localbox starter --download      # a small starter model sized to this machine
 localbox purge                   # stop servers, delete downloaded model files
 ```
 

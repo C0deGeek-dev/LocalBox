@@ -37,6 +37,14 @@ pub enum FetchError {
         received: u64,
         expected: u64,
     },
+    /// The complete file's SHA-256 is not the one its host published, so it
+    /// was discarded rather than put in place.
+    #[error("download of {url} does not match its published SHA-256 (expected {expected}, got {actual}); the file was discarded")]
+    DigestMismatch {
+        url: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 /// A model-file fetch failure: either the catalog could not name what to fetch,
@@ -308,8 +316,81 @@ pub async fn download_with_resume(
     dest: &Path,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(), FetchError> {
+    download_verified(client, url, dest, None, on_progress)
+        .await
+        .map(|_| ())
+}
+
+/// SHA-256 of a file on disk as lowercase hex, read in fixed-size blocks.
+///
+/// # Errors
+/// The file cannot be read.
+pub fn file_sha256(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut block = vec![0_u8; 1 << 20];
+    loop {
+        let read = file.read(&mut block)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&block[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// Put a complete partial in place, checking it first against `expected` when
+/// the host published a digest. A mismatching file is removed with its record:
+/// its bytes are not the published file, so neither a resume nor a launch may
+/// use them.
+fn publish(
+    url: &str,
+    partial: &Path,
+    record: &Path,
+    dest: &Path,
+    expected: Option<&str>,
+) -> Result<(), FetchError> {
+    if let Some(expected) = expected {
+        let actual = file_sha256(partial).map_err(|e| FetchError::Io(e.to_string()))?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            let _ = fs::remove_file(partial);
+            let _ = fs::remove_file(record);
+            return Err(FetchError::DigestMismatch {
+                url: url.to_string(),
+                expected: expected.to_ascii_lowercase(),
+                actual,
+            });
+        }
+    }
+    fs::rename(partial, dest).map_err(|e| FetchError::Io(e.to_string()))?;
+    let _ = fs::remove_file(record);
+    Ok(())
+}
+
+/// [`download_with_resume`], and when `expected_sha256` is given, the whole
+/// file — resumed bytes included — must hash to it before it is put in place.
+/// An existing destination file is left alone; checking one already on disk is
+/// the caller's choice ([`file_sha256`]). Returns `true` only when this call
+/// put the file in place after it matched `expected_sha256`; `false` when no
+/// digest was given or the file was already there (nothing was hashed).
+///
+/// # Errors
+/// As [`download_with_resume`], plus [`FetchError::DigestMismatch`].
+pub async fn download_verified(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    expected_sha256: Option<&str>,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<bool, FetchError> {
     if dest.is_file() {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| FetchError::Io(e.to_string()))?;
@@ -346,9 +427,8 @@ pub async fn download_with_resume(
     let mut received = match outcome {
         RangeOutcome::AlreadyComplete => {
             on_progress(existing, Some(existing));
-            fs::rename(&partial, dest).map_err(|e| FetchError::Io(e.to_string()))?;
-            let _ = fs::remove_file(&record);
-            return Ok(());
+            publish(url, &partial, &record, dest, expected_sha256)?;
+            return Ok(expected_sha256.is_some());
         }
         RangeOutcome::Restart => 0,
         RangeOutcome::Append => existing,
@@ -396,9 +476,8 @@ pub async fn download_with_resume(
             expected,
         });
     }
-    fs::rename(&partial, dest).map_err(|e| FetchError::Io(e.to_string()))?;
-    let _ = fs::remove_file(&record);
-    Ok(())
+    publish(url, &partial, &record, dest, expected_sha256)?;
+    Ok(expected_sha256.is_some())
 }
 
 /// One GET of `url`, ranged from `from` when it is past zero, classified under
@@ -713,6 +792,117 @@ mod tests {
         // total; the last one is the complete file.
         assert_eq!(events.first(), Some(&(6, Some(12))));
         assert_eq!(events.last(), Some(&(12, Some(12))));
+    }
+
+    fn fetch_verified(url: &str, dest: &Path, expected: &str) -> Result<bool, FetchError> {
+        let client = reqwest::Client::new();
+        block_on(download_verified(
+            &client,
+            url,
+            dest,
+            Some(expected),
+            &mut |_, _| {},
+        ))
+    }
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn a_resumed_file_is_published_only_when_the_whole_file_matches_its_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        std::fs::write(partial_path(&dest), b"first-").unwrap();
+        record(&dest, "\"v1\"", 12);
+        let (url, server) = serve(vec![reply(
+            "206 Partial Content",
+            &["ETag: \"v1\"", "Content-Range: bytes 6-11/12"],
+            b"second",
+        )]);
+
+        // The digest covers the bytes that were already on disk too.
+        let checked = fetch_verified(
+            &url,
+            &dest,
+            &sha256_of(b"first-second").to_ascii_uppercase(),
+        )
+        .unwrap();
+        assert!(checked, "the receipt says the digest was checked");
+
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"first-second");
+        assert_eq!(file_sha256(&dest).unwrap(), sha256_of(b"first-second"));
+    }
+
+    #[test]
+    fn a_destination_already_present_is_not_reported_as_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        // Another process finished the file between planning and fetching.
+        std::fs::write(&dest, b"whatever-is-there").unwrap();
+
+        let checked = fetch_verified("http://127.0.0.1:9/unused", &dest, &sha256_of(b"x")).unwrap();
+
+        assert!(
+            !checked,
+            "nothing was hashed, so nothing may be called verified"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"whatever-is-there");
+    }
+
+    #[test]
+    fn a_file_that_does_not_match_its_digest_is_discarded_not_published() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        // A stale prefix from another file: the size matches, the content not.
+        std::fs::write(partial_path(&dest), b"wrong-").unwrap();
+        record(&dest, "\"v1\"", 12);
+        let (url, server) = serve(vec![reply(
+            "206 Partial Content",
+            &["ETag: \"v1\"", "Content-Range: bytes 6-11/12"],
+            b"second",
+        )]);
+
+        let error = fetch_verified(&url, &dest, &sha256_of(b"first-second")).unwrap_err();
+
+        server.join().unwrap();
+        assert!(
+            matches!(error, FetchError::DigestMismatch { .. }),
+            "{error}"
+        );
+        assert!(!dest.exists(), "nothing is put in place");
+        assert!(
+            !partial_path(&dest).exists(),
+            "the bad bytes cannot be resumed"
+        );
+        assert!(!identity_path(&dest).exists());
+    }
+
+    #[test]
+    fn an_already_complete_partial_is_checked_before_it_is_published() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("m.gguf");
+        std::fs::write(partial_path(&dest), b"0123456789ab").unwrap();
+        record(&dest, "\"v1\"", 12);
+        let (url, server) = serve(vec![reply(
+            "416 Range Not Satisfiable",
+            &["ETag: \"v1\"", "Content-Range: bytes */12"],
+            b"",
+        )]);
+
+        let error = fetch_verified(&url, &dest, &sha256_of(b"something-else")).unwrap_err();
+
+        server.join().unwrap();
+        assert!(
+            matches!(error, FetchError::DigestMismatch { .. }),
+            "{error}"
+        );
+        assert!(!dest.exists());
     }
 
     #[test]

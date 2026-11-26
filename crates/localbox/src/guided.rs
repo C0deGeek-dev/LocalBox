@@ -695,6 +695,19 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         return Ok(());
     };
     let mut show_all = false;
+    // The starter row is offered only when a starter fits this machine.
+    let starter = match crate::starter::recommend(crate::starter::probe_memory(
+        crate::starter::configured_vram_gb(&catalog_dir(&home)),
+    )) {
+        crate::starter::Recommendation::Starter {
+            rung,
+            mode,
+            context,
+            reason,
+            ..
+        } => Some((rung, mode, context, reason)),
+        crate::starter::Recommendation::NoFit { .. } => None,
+    };
 
     loop {
         let catalog_dir = catalog_dir(&home);
@@ -728,6 +741,15 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         }
         let add_model_index = rows.len();
         rows.push(MenuRow::plain("[Add a Hugging Face model]"));
+        // After Add, so the rows above keep their places whether or not a
+        // starter fits this machine.
+        let starter_index = starter.as_ref().map(|(rung, _, _, _)| {
+            rows.push(MenuRow::plain(format!(
+                "[Starter model for this machine: {} · about {:.1} GB download]",
+                rung.label, rung.size_gb
+            )));
+            rows.len() - 1
+        });
         let cancel_index = rows.len();
         rows.push(MenuRow::plain("[Cancel]"));
 
@@ -748,6 +770,19 @@ pub fn run_guided(plain_requested: bool) -> Result<(), String> {
         if show_all_offered && index == add_model_index - 1 {
             show_all = true;
             continue;
+        }
+        if let (Some(position), Some((rung, mode, context, reason))) = (starter_index, &starter) {
+            if index == position {
+                chooser.set_panel(None);
+                if starter_flow(chooser.as_mut(), &home, rung, *mode, context, reason) {
+                    show_all = true;
+                }
+                if chooser.quit_requested() {
+                    chooser.release();
+                    return Ok(());
+                }
+                continue;
+            }
         }
         if index == add_model_index {
             chooser.set_panel(None);
@@ -995,7 +1030,7 @@ fn add_hf_model_flow(chooser: &mut dyn Chooser, home: &Path, vram: i64) -> bool 
     let Some(selected_key) = selected_key else {
         return true;
     };
-    match download_guided_quant(chooser, home, &key, &selected_key) {
+    match download_guided_quant(chooser, home, &key, &selected_key, &discovery.digests) {
         Ok(paths) => chooser.announce(&format!(
             "{catalog_message}\nDownloaded '{}' ({} file(s)).",
             selected_key,
@@ -1009,11 +1044,113 @@ fn add_hf_model_flow(chooser: &mut dyn Chooser, home: &Path, vram: i64) -> bool 
     true
 }
 
+/// Offer the starter model: show its exact download size and why it fits, and
+/// download it only after an explicit choice. Returns `true` when the catalog
+/// changed.
+fn starter_flow(
+    chooser: &mut dyn Chooser,
+    home: &Path,
+    rung: &crate::starter::Rung,
+    mode: crate::starter::Mode,
+    context: &str,
+    reason: &str,
+) -> bool {
+    chooser.notice("Reading the starter's download size — nothing is downloading …");
+    let discovery = match localbox_launcher::hf_meta::parse_hf_ref(rung.repo)
+        .map_err(|e| e.to_string())
+        .and_then(discover_hf_repo)
+    {
+        Ok(discovery) => discovery,
+        Err(error) => {
+            chooser.announce_error(&plain_warning("starter model", &error));
+            return false;
+        }
+    };
+    let candidate = match discovery.select(Some(rung.quant)) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            chooser.announce_error(&plain_warning("starter model", &error));
+            return false;
+        }
+    };
+    let size = candidate_size_gb(&candidate).map_or_else(
+        || format!("about {:.1} GB", rung.size_gb),
+        |gb| format!("{gb:.1} GB"),
+    );
+    chooser.set_panel(Some((
+        "Starter model".to_string(),
+        format!(
+            "{} ({} {}): {size} download.\n{reason}\nIt runs at {context} context. \
+             Files with a SHA-256 published on the Hub are checked against it.",
+            rung.label, rung.repo, rung.quant
+        ),
+    )));
+    let rows = [
+        MenuRow::plain(format!("[Download {} — {size}]", rung.label)),
+        MenuRow::plain("[Cancel — make no changes]"),
+    ];
+    if chooser.choose("Download the starter model?", &rows, 0) != Some(0) {
+        return false;
+    }
+    chooser.release();
+    let installed = crate::hf_install::install_from_hf(
+        rung.repo,
+        Some(rung.quant),
+        None,
+        Some(rung.projector),
+        &[DownloadKind::Gguf],
+        true,
+        home,
+        &mut |line| chooser.notice(line),
+    );
+    let installed = match installed {
+        Ok(installed) => installed,
+        Err(error) => {
+            chooser.announce_error(&plain_warning("starter model", &error));
+            return true;
+        }
+    };
+    let checked = installed
+        .paths
+        .iter()
+        .filter(|path| installed.verified.contains(path))
+        .count();
+    let check_note = if checked == installed.paths.len() {
+        "checked against the published SHA-256".to_string()
+    } else {
+        format!(
+            "{checked} of {} file(s) checked against a published SHA-256",
+            installed.paths.len()
+        )
+    };
+    let start = match crate::starter::start_plan(
+        &catalog_dir(home),
+        &installed.key,
+        &installed.quant,
+        mode,
+        context,
+    ) {
+        Ok(argv) => format!(
+            "Start it as it was sized with `localbox {}` (the settings its memory need was \
+             measured with; drop --no-auto-best to use a LocalBench tune instead). Picking it \
+             from the list uses your saved tune or the catalog's launch defaults.",
+            argv.join(" ")
+        ),
+        Err(limitation) => limitation,
+    };
+    chooser.announce(&format!(
+        "Starter model ready as '{}' ({check_note}).\n{start}",
+        installed.key
+    ));
+    true
+}
+
 fn download_guided_quant(
     chooser: &mut dyn Chooser,
     home: &Path,
     key: &str,
     quant: &str,
+    digests: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<PathBuf>, String> {
     let launcher = crate::exec::build_launcher(home)?;
     let targets = launcher
@@ -1031,10 +1168,11 @@ fn download_guided_quant(
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let mut printer = ProgressPrinter::default();
     let paths = runtime
-        .block_on(launcher.fetch_model_files(
+        .block_on(launcher.fetch_model_files_verified(
             key,
             Some(quant),
             &[DownloadKind::Gguf],
+            digests,
             &mut |progress| printer.report(progress),
         ))
         .map_err(|e| e.to_string())?;

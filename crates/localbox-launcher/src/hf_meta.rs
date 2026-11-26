@@ -49,11 +49,15 @@ pub enum HfRefError {
 }
 
 /// A GGUF file in a Hugging Face repo: its repo-relative name and, when the Hub
-/// reported it (`?blobs=true`), its byte size.
+/// reported them (`?blobs=true`), its byte size and the SHA-256 of its stored
+/// content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HfGgufFile {
     pub rfilename: String,
     pub size: Option<u64>,
+    /// Lowercase hex SHA-256 the Hub publishes for a file kept in large-file
+    /// storage; `None` when the listing gave none.
+    pub sha256: Option<String>,
 }
 
 /// The Hub metadata LocalBox carries into catalog synthesis. Descriptions are
@@ -363,6 +367,22 @@ struct Sibling {
     rfilename: String,
     #[serde(default)]
     size: Option<u64>,
+    #[serde(default)]
+    lfs: Option<LfsPointer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LfsPointer {
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+/// A digest is kept only in the exact shape SHA-256 hex has, so a malformed
+/// value can never be compared against a download.
+fn sha256_hex(value: Option<String>) -> Option<String> {
+    value
+        .map(|digest| digest.trim().to_ascii_lowercase())
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// The GGUF-only subset of a sibling list, preserving Hub order.
@@ -374,6 +394,7 @@ fn gguf_files(siblings: Vec<Sibling>) -> Vec<HfGgufFile> {
         .map(|s| HfGgufFile {
             rfilename: s.rfilename,
             size: s.size,
+            sha256: sha256_hex(s.lfs.and_then(|lfs| lfs.sha256)),
         })
         .collect()
 }
@@ -546,18 +567,26 @@ mod tests {
             Sibling {
                 rfilename: "README.md".to_string(),
                 size: Some(10),
+                lfs: None,
             },
             Sibling {
                 rfilename: "model.Q4_K_M.gguf".to_string(),
                 size: Some(4_000),
+                lfs: Some(LfsPointer {
+                    sha256: Some(format!("  {}  ", "AB".repeat(32))),
+                }),
             },
             Sibling {
                 rfilename: "MODEL.IQ4_XS.GGUF".to_string(),
                 size: None,
+                lfs: Some(LfsPointer {
+                    sha256: Some("not-a-digest".to_string()),
+                }),
             },
             Sibling {
                 rfilename: "config.json".to_string(),
                 size: Some(1),
+                lfs: None,
             },
         ];
         let files = gguf_files(siblings);
@@ -566,11 +595,13 @@ mod tests {
             vec![
                 HfGgufFile {
                     rfilename: "model.Q4_K_M.gguf".to_string(),
-                    size: Some(4_000)
+                    size: Some(4_000),
+                    sha256: Some("ab".repeat(32)),
                 },
                 HfGgufFile {
                     rfilename: "MODEL.IQ4_XS.GGUF".to_string(),
-                    size: None
+                    size: None,
+                    sha256: None,
                 },
             ]
         );

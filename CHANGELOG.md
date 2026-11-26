@@ -4,6 +4,18 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`localbox starter` recommends a model sized to this machine.** It picks
+  Qwen3.5 2B, 4B or 9B from the GPU's total memory, or from the RAM available
+  now when there is no GPU or it is too small, using memory needs measured with
+  a running server at 64k and 32k context. It shows the download size and the
+  reason before anything downloads, says when nothing fits instead of forcing
+  a model, and `--download` installs it. `--json` gives scripts the model,
+  where it should run (GPU or CPU) and the context to launch with. The guided
+  launcher offers the same model as a starter row.
+- **Hugging Face downloads are checked against the Hub's SHA-256.** A model
+  installed from a repo is verified, resumed bytes included, before it is put
+  in place; a mismatching file is discarded instead of loaded.
+
 - **The minimum Rust version is now 1.89, matching LocalPilot.** Rust 1.82
   could not read the edition-2024 manifests of the patched `quinn-proto`
   (0.11.19) and `quinn-udp` (0.5.16), so their security advisories were held

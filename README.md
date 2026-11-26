@@ -112,7 +112,8 @@ LocalX, or select another supported agent you already have installed.
 
 Models are separate downloads and can take substantial disk space. Read the
 picker's hardware-fit hints before launching; model size and settings determine
-how much memory you need.
+how much memory you need. No model yet? `localbox starter` recommends a small
+one sized to this machine and shows its download size first.
 
 Prefer simple text menus? Run `localbox --plain`.
 
@@ -162,6 +163,7 @@ path local.
 | Goal | Command |
 |---|---|
 | Pick or add a model interactively | `localbox` |
+| Get a starter model sized to this machine | `localbox starter --download` |
 | Guided launcher with plain-text menus | `localbox --plain` |
 | Launch a model into Claude Code | `localbox launch <model>` |
 | Run through LocalPilot | `localbox launch <model> --agent localpilot` |

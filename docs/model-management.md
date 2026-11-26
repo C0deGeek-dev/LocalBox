@@ -118,6 +118,77 @@ since they cannot load without the missing shard; the finished shards of a
 quant in use stay. A candidate idle for 14 days or more is marked stale, but
 age alone never makes a partial a candidate.
 
+## A starter model for this machine
+
+No model yet? `localbox starter` recommends one small, known model sized to
+this machine's memory and shows its download size before anything downloads:
+
+```
+localbox starter              # recommendation, download size, and why
+localbox starter --download   # fetch it (resumable) and check it
+localbox starter --json       # one JSON object for scripts
+```
+
+The starters are Qwen3.5 2B, 4B and 9B (Q4_K_M, about 1.2, 2.6 and 5.3 GB).
+Each one's memory need was measured with a running server — weights, cache and
+buffers together — at the 64k catalog context and at 32k:
+
+| Model | 64k | 32k |
+|---|---|---|
+| Qwen3.5 2B | 2.3 GB | 2.0 GB |
+| Qwen3.5 4B | 4.5 GB | 3.8 GB |
+| Qwen3.5 9B | 6.7 GB | 6.0 GB |
+
+With a GPU, the largest one that fits the GPU's total memory, less 1 GB for
+the display, is chosen, at 64k when it fits and otherwise at 32k. A GPU too
+small for the 2B means a CPU run: then RAM *available now*, less 2 GB for the
+system, decides, and the CPU tops out at the 4B for speed. When even the 2B
+does not fit, `localbox starter` says so with the numbers and exits with an
+error rather than offering a model that cannot run. The reason line always
+names the figure that decided. `--vram-gb`, `--ram-gb` and
+`--ram-available-gb` replace the probed figures, to see what another machine
+would get.
+
+`--download` installs the starter through the same path as
+`localbox download owner/repo` and prints the command that starts it the way
+it was sized: `localbox serve <key> --quant <downloaded quant> --context
+<64k|32k> --no-auto-best`, plus `--server-arg --n-gpu-layers --server-arg 0`
+for a CPU recommendation so a GPU build does not put it on a too-small GPU.
+`--no-auto-best` is deliberate: it reproduces the catalog defaults the memory
+need was measured with and skips any saved tune. If you have tuned the model
+with LocalBench, drop it to use the tune. If your catalog entry for that repo
+lacks the sized context, or sets it to more tokens than were measured, no
+command is printed; the message says what to set under `Contexts`. A vision projector
+you already chose for the repo is kept; the starter suggests `mmproj-F16.gguf`
+only for a new entry, and fetches only the model file.
+
+The JSON form carries `mode` (`gpu` or `cpu`), `context` and, after a
+download, `serve_args` (or `limitation`), `files` and `verified` (the files
+actually hashed against a published digest). With `--download`, status lines
+go to stderr and stdout holds only the JSON. Any failure under `--json` still
+prints one object — `"status": "no_fit"` with the numbers, or `"status":
+"error"` with `stage` (`setup` or `download`) and `error` — and exits
+non-zero.
+
+The guided launcher offers the same model as **[Starter model for this
+machine]**, with its exact size and the reason, and downloads only after you
+choose it. It then shows the same start command; picking the model from the
+list uses the catalog's launch defaults instead.
+
+### Downloads checked against the Hub's SHA-256
+
+For a model installed from a Hugging Face repo — `localbox starter`,
+`localbox download owner/repo`, or the guided Add flow — the Hub publishes each
+large file's SHA-256. The finished file is checked against it, resumed bytes
+included, before it is put in place; a file that does not match is discarded,
+partial and all, and the error says so. A digest is matched by the file's
+exact download location (repository and path within it), so a file in a
+subfolder keeps its digest and a catalog entry pointing at another repository
+never borrows one. `localbox starter --download` also
+checks a starter that is already on disk, and leaves a mismatching one in place
+with instructions instead of deleting it. A download by catalog key, where no
+published digest is at hand, is checked by size and server identity as before.
+
 ## Adding a Hugging Face model interactively
 
 Run `localbox` and choose **[Add a Hugging Face model]**. Paste an

@@ -20,7 +20,7 @@ use localx_llama_runtime::server::server_exe_name;
 
 use crate::catalog::Catalog;
 use crate::fetch::{
-    download_with_resume, hf_download_url, DownloadKind, DownloadProgress, ModelDownload,
+    download_verified, hf_download_url, DownloadKind, DownloadProgress, ModelDownload,
     ModelFetchError,
 };
 
@@ -366,6 +366,53 @@ impl LlamaLauncher {
         kinds: &[DownloadKind],
         on_progress: &mut dyn FnMut(&DownloadProgress<'_>),
     ) -> Result<Vec<PathBuf>, ModelFetchError> {
+        self.fetch_model_files_verified(
+            key,
+            quant,
+            kinds,
+            &std::collections::BTreeMap::new(),
+            on_progress,
+        )
+        .await
+    }
+
+    /// [`Self::fetch_model_files`], verifying each downloaded file whose exact
+    /// download URL `digests` lists (URL -> SHA-256 hex, as the host published
+    /// it) before it is put in place. Files already on disk are not re-read.
+    ///
+    /// # Errors
+    /// As [`Self::fetch_model_files`]; a digest mismatch discards that file.
+    pub async fn fetch_model_files_verified(
+        &self,
+        key: &str,
+        quant: Option<&str>,
+        kinds: &[DownloadKind],
+        digests: &std::collections::BTreeMap<String, String>,
+        on_progress: &mut dyn FnMut(&DownloadProgress<'_>),
+    ) -> Result<Vec<PathBuf>, ModelFetchError> {
+        Ok(self
+            .fetch_model_files_checked(key, quant, kinds, digests, on_progress)
+            .await?
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect())
+    }
+
+    /// [`Self::fetch_model_files_verified`], also saying for each file whether
+    /// this call put it in place after it matched its published digest
+    /// (`true`), or it was already on disk — even one that appeared while this
+    /// call ran — or had no digest (`false`).
+    ///
+    /// # Errors
+    /// As [`Self::fetch_model_files`]; a digest mismatch discards that file.
+    pub async fn fetch_model_files_checked(
+        &self,
+        key: &str,
+        quant: Option<&str>,
+        kinds: &[DownloadKind],
+        digests: &std::collections::BTreeMap<String, String>,
+        on_progress: &mut dyn FnMut(&DownloadProgress<'_>),
+    ) -> Result<Vec<(PathBuf, bool)>, ModelFetchError> {
         let targets = self.model_download_targets(key, quant)?;
         let client = reqwest::Client::new();
         let mut fetched = Vec::new();
@@ -373,6 +420,7 @@ impl LlamaLauncher {
             .into_iter()
             .filter(|target| kinds.contains(&target.kind))
         {
+            let mut checked = false;
             if !target.present {
                 let mut report = |received: u64, total: Option<u64>| {
                     on_progress(&DownloadProgress {
@@ -382,15 +430,17 @@ impl LlamaLauncher {
                         total,
                     });
                 };
-                download_with_resume(&client, &target.url, &target.path, &mut report)
-                    .await
-                    .map_err(|source| ModelFetchError::Download {
-                        kind: target.kind,
-                        path: target.path.clone(),
-                        source,
-                    })?;
+                let expected = digests.get(&target.url).map(String::as_str);
+                checked =
+                    download_verified(&client, &target.url, &target.path, expected, &mut report)
+                        .await
+                        .map_err(|source| ModelFetchError::Download {
+                            kind: target.kind,
+                            path: target.path.clone(),
+                            source,
+                        })?;
             }
-            fetched.push(target.path);
+            fetched.push((target.path, checked));
         }
         Ok(fetched)
     }

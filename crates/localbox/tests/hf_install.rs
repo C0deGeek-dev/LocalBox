@@ -131,6 +131,75 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// A split quant in a subfolder: each shard is checked against the digest the
+/// Hub lists for its own repo-relative path.
+fn nested_split_listing(second_shard_digest: &str) -> &'static str {
+    let one = sha256_hex(b"shard-one");
+    Box::leak(
+        format!(
+            r#"{{"siblings":[
+            {{"rfilename":"Q6_K/tiny-Q6_K-00001-of-00002.gguf","size":9,"lfs":{{"sha256":"{one}","size":9}}}},
+            {{"rfilename":"Q6_K/tiny-Q6_K-00002-of-00002.gguf","size":9,"lfs":{{"sha256":"{second_shard_digest}","size":9}}}}
+        ]}}"#
+        )
+        .into_boxed_str(),
+    )
+}
+
+fn nested_split_files() -> Vec<(String, Vec<u8>)> {
+    vec![
+        (
+            "Q6_K/tiny-Q6_K-00001-of-00002.gguf".to_string(),
+            b"shard-one".to_vec(),
+        ),
+        (
+            "Q6_K/tiny-Q6_K-00002-of-00002.gguf".to_string(),
+            b"shard-two".to_vec(),
+        ),
+    ]
+}
+
+#[test]
+fn nested_split_shards_are_each_checked_against_their_own_published_digest() {
+    let temp = tempfile::tempdir().expect("temp home");
+    configure_home(temp.path());
+    let good = spawn_hub(
+        nested_split_listing(&sha256_hex(b"shard-two")),
+        nested_split_files(),
+    );
+    let ok = run_localbox(temp.path(), &good, &["download", "owner/tiny"]);
+    assert!(
+        ok.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&ok.stdout),
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(find_file(&temp.path().join("gguf"), "tiny-Q6_K-00002-of-00002.gguf").is_some());
+
+    let bad_temp = tempfile::tempdir().expect("temp home");
+    configure_home(bad_temp.path());
+    let bad = spawn_hub(
+        nested_split_listing(&sha256_hex(b"not-shard-two")),
+        nested_split_files(),
+    );
+    let failed = run_localbox(bad_temp.path(), &bad, &["download", "owner/tiny"]);
+    assert!(!failed.status.success());
+    let stderr = String::from_utf8_lossy(&failed.stderr);
+    assert!(stderr.contains("SHA-256"), "{stderr}");
+    let gguf = bad_temp.path().join("gguf");
+    assert!(find_file(&gguf, "tiny-Q6_K-00001-of-00002.gguf").is_some());
+    assert!(find_file(&gguf, "tiny-Q6_K-00002-of-00002.gguf").is_none());
+    assert!(find_file(&gguf, "tiny-Q6_K-00002-of-00002.gguf.partial").is_none());
+}
+
 #[test]
 fn download_catalogues_every_quant_but_fetches_only_the_selected_one() {
     let temp = tempfile::tempdir().expect("temp home");

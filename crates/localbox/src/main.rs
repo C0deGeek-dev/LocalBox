@@ -48,6 +48,15 @@ Usage:
                                       the CUDA build fails, keeping the
                                       original until one passes; the verified
                                       backend is recorded and shown by status
+  localbox starter [--download] [--json] [--vram-gb <n>] [--ram-gb <n>]
+                   [--ram-available-gb <n>]
+                                      recommend a small starter model sized to
+                                      this machine's memory and show its
+                                      download size; --download fetches it and
+                                      checks it against the SHA-256 the Hub
+                                      publishes; --json prints one object for
+                                      scripts (status on stderr); the memory
+                                      flags replace the probed figures
   localbox stop                       stop every model server and the proxy
   localbox status                     report serve health and the remedy
   localbox info [model]               list the configured models, or one in detail
@@ -154,6 +163,7 @@ fn run() -> ExitCode {
         "embed-stop" => cmd_embed_stop(),
         "update" => cmd_update(&args[1..]),
         "probe" => cmd_probe(&args[1..]),
+        "starter" => cmd_starter(&args[1..]),
         "version" => cmd_version(),
         "nothink-proxy" => cmd_nothink_proxy(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -819,6 +829,198 @@ fn cmd_download(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Recommend the starter model for this machine's memory, show its download
+/// size, and with `--download` fetch and verify it. `--json` prints one JSON
+/// object on stdout (status lines and progress go to stderr); `--vram-gb`,
+/// `--ram-gb` and `--ram-available-gb` replace the probed figures.
+fn cmd_starter(args: &[String]) -> Result<(), String> {
+    let json = has_flag(args, "--json");
+    let mut printed = false;
+    let result = run_starter(args, json, &mut printed);
+    if let Err(error) = &result {
+        // A script asked for one JSON object; give it one even when the
+        // failure came before any recommendation could be made.
+        if json && !printed {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "localbox-starter-v1",
+                    "status": "error",
+                    "stage": "setup",
+                    "error": error,
+                })
+            );
+        }
+    }
+    result
+}
+
+fn run_starter(args: &[String], json: bool, printed: &mut bool) -> Result<(), String> {
+    use localbox::starter::{probe_memory, recommend, to_json, Recommendation};
+    let number = |flag: &str| -> Result<Option<f64>, String> {
+        match flag_value(args, flag) {
+            Some(raw) => raw
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map(Some)
+                .ok_or_else(|| format!("{flag} takes a number of GB, not '{raw}'")),
+            None if has_flag(args, flag) => Err(format!("{flag} takes a number of GB")),
+            None => Ok(None),
+        }
+    };
+    let overrides = (
+        number("--vram-gb")?,
+        number("--ram-gb")?,
+        number("--ram-available-gb")?,
+    );
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let probed = probe_memory(localbox::starter::configured_vram_gb(&catalog_dir(&home)));
+    let memory = localbox::starter::Memory {
+        vram_total_gb: overrides.0.unwrap_or(probed.vram_total_gb),
+        ram_total_gb: overrides.1.unwrap_or(probed.ram_total_gb),
+        ram_available_gb: overrides
+            .2
+            .or(overrides.1)
+            .unwrap_or(probed.ram_available_gb),
+    };
+    let source = if overrides == (None, None, None) {
+        "probe"
+    } else {
+        "override"
+    };
+    let recommendation = recommend(memory);
+    let (rung, mode, context) = match &recommendation {
+        Recommendation::Starter {
+            rung,
+            mode,
+            context,
+            ..
+        } => (rung, mode, context),
+        Recommendation::NoFit { reason } => {
+            if json {
+                *printed = true;
+                println!("{}", to_json(&recommendation, memory, source, None));
+            }
+            return Err(reason.clone());
+        }
+    };
+    // The Hub's own listing gives the exact size; without a network the
+    // ladder's figure stands, labelled as approximate.
+    let live_size = localbox_launcher::hf_meta::parse_hf_ref(rung.repo)
+        .ok()
+        .and_then(|hf| localbox::hf_install::discover_hf_repo(hf).ok())
+        .and_then(|discovery| discovery.select(Some(rung.quant)).ok())
+        .and_then(|candidate| localbox::hf_install::candidate_size_gb(&candidate));
+    let size = live_size.map(|gb| (gb, "hub"));
+    let mut value = to_json(&recommendation, memory, source, size);
+    if !json {
+        let shown = match size {
+            Some((gb, _)) => format!("{gb:.1} GB download"),
+            None => format!(
+                "about {:.1} GB download (the Hub could not be reached)",
+                rung.size_gb
+            ),
+        };
+        println!(
+            "Starter model: {} ({} {}), {shown}",
+            rung.label, rung.repo, rung.quant
+        );
+        println!(
+            "Runs on: {} at {context} context",
+            mode.as_str().to_uppercase()
+        );
+        if let Some(reason) = value["reason"].as_str() {
+            println!("Why: {reason}");
+        }
+    }
+    if !has_flag(args, "--download") {
+        if json {
+            *printed = true;
+            println!("{value}");
+        } else {
+            println!("Download it with `localbox starter --download`.");
+        }
+        return Ok(());
+    }
+    let kinds = [localbox_launcher::fetch::DownloadKind::Gguf];
+    let installed = match localbox::hf_install::install_from_hf(
+        rung.repo,
+        Some(rung.quant),
+        None,
+        Some(rung.projector),
+        &kinds,
+        true,
+        &home,
+        &mut |line| {
+            if json {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
+        },
+    ) {
+        Ok(installed) => installed,
+        Err(error) => {
+            if json {
+                value["status"] = serde_json::json!("error");
+                value["stage"] = serde_json::json!("download");
+                value["error"] = serde_json::json!(error);
+                *printed = true;
+                println!("{value}");
+            }
+            return Err(error);
+        }
+    };
+    let start = localbox::starter::start_plan(
+        &catalog_dir(&home),
+        &installed.key,
+        &installed.quant,
+        *mode,
+        context,
+    );
+    value["catalog_key"] = serde_json::json!(installed.key);
+    value["catalog_quant"] = serde_json::json!(installed.quant);
+    value["files"] = serde_json::json!(installed
+        .paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>());
+    value["verified"] = serde_json::json!(installed
+        .verified
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>());
+    value["context_in_catalog"] = serde_json::json!(start.is_ok());
+    match &start {
+        Ok(argv) => value["serve_args"] = serde_json::json!(argv),
+        Err(limitation) => value["limitation"] = serde_json::json!(limitation),
+    }
+    if json {
+        *printed = true;
+        println!("{value}");
+    } else {
+        for path in &installed.paths {
+            let state = if installed.verified.contains(path) {
+                "checked against the published SHA-256"
+            } else {
+                "not checked: no published SHA-256"
+            };
+            println!("ready: {} ({state})", path.display());
+        }
+        match &start {
+            Ok(argv) => println!(
+                "Start it with `localbox {}`. That uses the settings its memory need was \
+                 measured with; if you have tuned this model with LocalBench, drop \
+                 --no-auto-best to use the tune instead.",
+                argv.join(" ")
+            ),
+            Err(limitation) => println!("{limitation}"),
+        }
+    }
+    Ok(())
+}
+
 /// Install a model straight from a Hugging Face repo reference: resolve its GGUF
 /// listing, catalog every quant, pick one (`--quant` or a default), and download
 /// only that variant through the ordinary catalog-backed fetch path. Multi-part
@@ -829,96 +1031,24 @@ fn download_from_hf(
     home: &std::path::Path,
     args: &[String],
 ) -> Result<(), String> {
-    use localbox::fetch::ProgressPrinter;
-    use localbox::guided::CatalogInsert;
-    use localbox::hf_install::discover_hf_repo;
-    use localbox_launcher::fetch::DownloadKind;
-
-    let hf = localbox_launcher::hf_meta::parse_hf_ref(model).map_err(|_| {
-        format!(
-            "unknown model '{model}' — not a catalog name, and not a Hugging Face repo id \
-             (expected owner/repo or a https://huggingface.co/owner/repo URL). \
-             Run `localbox info` for the catalog names."
-        )
-    })?;
-    let discovery = discover_hf_repo(hf)?;
-    let chosen = discovery.select(quant)?;
-    let directory = catalog_dir(home);
-    let configured = discovery.configured_projector(&directory)?;
     let requested = flag_value(args, "--mmproj").filter(|value| !value.starts_with("--"));
     if has_flag(args, "--mmproj") && requested.is_none() {
         return Err("--mmproj requires a projector filename".to_string());
     }
-    if let (Some(existing), Some(requested)) = (configured.as_deref(), requested) {
-        if existing != requested {
-            return Err(format!("this repo already uses vision projector '{existing}'; change VisionModule in the catalog to replace it"));
-        }
-    }
-    let projector = match configured.as_deref() {
-        Some(existing) => Some(existing),
-        None => discovery.select_projector(requested)?,
-    };
-    if let Some(projector) = projector {
-        println!("Vision projector: {projector} (download with --vision).");
-    }
-    let outcome = discovery.register_with_projector(&directory, &chosen.key, projector)?;
     let kinds = download_kinds_for_flags(has_flag(args, "--vision"), has_flag(args, "--draft"));
-    match &outcome {
-        CatalogInsert::Inserted(key) => {
-            println!(
-                "Added '{key}' to your catalog for {} ({} quant(s)).",
-                discovery.hf.repo_id(),
-                discovery.candidates.len()
-            );
-        }
-        CatalogInsert::Updated { key, added_quants } if added_quants.is_empty() => {
-            println!("Updated vision projector for '{key}'.");
-        }
-        CatalogInsert::Updated { key, added_quants } => {
-            println!(
-                "Updated '{key}' for {} with {} missing quant(s): {}.",
-                discovery.hf.repo_id(),
-                added_quants.len(),
-                added_quants.join(", ")
-            );
-        }
-        CatalogInsert::AlreadyPresent(key) => {
-            println!(
-                "{} is already complete in your catalog as '{key}'.",
-                discovery.hf.repo_id()
-            );
-        }
-    }
-    let key = outcome.key();
-    // Resolve and fetch through the now-updated catalog. This keeps a repeat
-    // repo install, an ordinary `download <key>`, and launch-on-miss on exactly
-    // the same paths and URLs, including existing user-owned quant mappings.
-    let launcher = build_launcher(home)?;
-    let targets = launcher
-        .model_download_targets(key, Some(&chosen.key))
-        .map_err(|e| e.to_string())?;
-    let gguf_count = targets
-        .iter()
-        .filter(|target| target.kind == DownloadKind::Gguf)
-        .count();
-    if gguf_count == 0 {
-        return Err(format!("'{key}' resolves to no GGUF files"));
-    }
-    println!(
-        "Downloading quant '{}' ({gguf_count} file(s)) …",
-        chosen.key
-    );
-
-    let mut printer = ProgressPrinter::default();
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let fetched = runtime
-        .block_on(
-            launcher.fetch_model_files(key, Some(&chosen.key), &kinds, &mut |progress| {
-                printer.report(progress)
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-    for path in fetched {
+    let installed = localbox::hf_install::install_from_hf(
+        model,
+        quant,
+        requested,
+        None,
+        &kinds,
+        false,
+        home,
+        &mut |line| {
+            println!("{line}");
+        },
+    )?;
+    for path in installed.paths {
         println!("ready: {}", path.display());
     }
     print_partials_hint(home);
