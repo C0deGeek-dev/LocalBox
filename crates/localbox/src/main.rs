@@ -630,7 +630,16 @@ fn launch_after_plan(
             eprintln!("Serving {} at {}", plan.key, plan.base_url);
             // The native retry re-derived its request with profiles off.
             let used = if retried_native { None } else { profile };
-            println!("{}", serve_receipt(args, &plan, used, retried_native));
+            let mode = if retried_native {
+                Mode::Native
+            } else {
+                request.mode
+            };
+            let backend = localbox::fallback::Stamp::read(&launcher.install_root(mode));
+            println!(
+                "{}",
+                serve_receipt(args, &plan, used, retried_native, backend.as_ref())
+            );
         } else {
             println!("{report}");
             println!("Serving {} at {}", plan.key, plan.base_url);
@@ -640,14 +649,15 @@ fn launch_after_plan(
     Ok(())
 }
 
-/// What `serve --json` started: the run profile the server was launched with
-/// and the exact arguments it runs, so a caller can check the live server
-/// rather than an earlier probe.
+/// What `serve --json` started: the run profile the server was launched with,
+/// the exact arguments it runs and the engine build it runs on, so a caller
+/// can check the live server rather than an earlier probe.
 fn serve_receipt(
     args: &[String],
     plan: &LaunchPlan,
     profile: Option<&RunProfileResolution>,
     retried_native: bool,
+    backend: Option<&localbox::fallback::Stamp>,
 ) -> serde_json::Value {
     let mut profile_json = run_profile_json(args, profile);
     if retried_native {
@@ -661,6 +671,7 @@ fn serve_receipt(
         "proxyPort": plan.proxy.listen_port,
         "contextTokens": plan.context_tokens,
         "retriedNative": retried_native,
+        "backend": backend.map(|stamp| serde_json::json!({"tag": stamp.tag, "variant": stamp.variant})),
         "profile": profile_json,
         "launchArguments": plan.argv,
     })
@@ -3004,7 +3015,16 @@ mod tests {
         let (request, profile) =
             build_request(&setup_args, "m", home.path(), &launcher, false).unwrap();
         let plan = plan_launch(&launcher, &request).unwrap();
-        let receipt = serve_receipt(&setup_args, &plan, profile.as_ref(), false);
+        let stamp = localbox::fallback::Stamp {
+            tag: "b1".to_string(),
+            variant: "vulkan".to_string(),
+        };
+        let receipt = serve_receipt(&setup_args, &plan, profile.as_ref(), false, Some(&stamp));
+        assert_eq!(receipt["backend"]["variant"], "vulkan");
+        assert_eq!(
+            serve_receipt(&setup_args, &plan, profile.as_ref(), false, None)["backend"],
+            serde_json::Value::Null
+        );
 
         let argv = plan.argv.join(" ");
         assert!(argv.contains("--n-cpu-moe 9"), "{argv}");

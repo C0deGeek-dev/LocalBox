@@ -4,6 +4,10 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`serve --json` names the engine build it runs on.** The receipt's new
+  `backend` (`tag` and `variant`) lets a caller check that the server runs
+  the build a probe verified, including after a native retry.
+
 - **`models --json` says what is serving.** A new `serving` object names the
   proxy port (configured, or `--proxy-port`), the port it forwards to, the
   model file the server there loaded and the one catalog key for that file
