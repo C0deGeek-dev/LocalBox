@@ -4,6 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`--prefer-profile pure|balanced` for launch, serve and probe.** Compatible
+  saved tunes of that kind rank first, ahead of a higher-scoring tune of the
+  other kind; with none of that kind the next compatible tune is used, and
+  defaults only when there is none. `probe --json` now reports the run profile
+  it used, and `serve --json` prints a receipt of the started server: the run
+  profile and the exact arguments it runs.
+
 - **`localbox starter` recommends a model sized to this machine.** It picks
   Qwen3.5 2B, 4B or 9B from the GPU's total memory, or from the RAM available
   now when there is no GPU or it is too small, using memory needs measured with

@@ -49,6 +49,8 @@ Options for `launch` / `serve`:
 | `--auto-best` | Require a usable saved tune; refuse fallback. |
 | `--no-auto-best` | Deliberately use catalog/settings defaults. |
 | `--allow-untuned` | Permit non-interactive fallback after the warning was reviewed. |
+| `--json` (serve) | After the server is up, print one JSON object on stdout — `ok`, `model`, `endpoint`, ports, `contextTokens`, `retriedNative`, the `profile` it was launched with and the exact `launchArguments` — with the status lines on stderr; a failure prints `ok: false` and the error. Redirect it to a file rather than a pipe: on Windows the detached server can keep an inherited pipe open, so a pipe reader waits until the server stops. |
+| `--prefer-profile <p>` | Rank compatible saved tunes of kind `pure` or `balanced` first. A preference, not a filter: with none of that kind another compatible tune is used, and defaults only when there is none (with `--allow-untuned`). The chosen tune is printed as `Run profile:`. |
 | `--adopt-tune` | Carry a matching older tune's runnable settings into the current version, record provenance, and use it in this launch. |
 | `--vision` | Load the model's multimodal projector when it has one; a configured missing projector downloads on demand. |
 | `--keep-thinking` | Let the model's thinking reach the agent unfiltered. |
@@ -81,7 +83,8 @@ pass is recorded as the verified backend, which `localbox status` shows.
 It takes the same `--quant`, `--context`, `--mode` and run-profile flags as
 `serve`; `--keep-serving` leaves the model and the probe's proxy running
 (the endpoint is printed), and `--json` prints the result (backend, any fallbacks with their
-reasons, launch arguments) for scripts; a failure prints `ok: false` with
+reasons, the run profile it used — the saved tune's kind, quant, context, mode, score and file, or which defaults —
+and the launch arguments) for scripts; a failure prints `ok: false` with
 the stage it stopped at, a reason class, the message and, when a server was
 started, its log. A probe needs the proxy and the GPU to itself, so it refuses to run
 while another model is serving unless you pass `--if-running stop`.

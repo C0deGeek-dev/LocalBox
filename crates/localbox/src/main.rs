@@ -111,6 +111,11 @@ Options for launch/serve:
   --auto-best           compatibility spelling: require the saved tuned profile
   --no-auto-best        explicitly use catalog/settings defaults instead
   --allow-untuned       allow non-interactive fallback when no tuned profile exists
+  --json                serve only: print a JSON receipt (profile, arguments)
+                        once the server is up; status lines go to stderr
+  --prefer-profile <p>  rank compatible saved tunes of kind pure or balanced
+                        first (a preference: another compatible tune is used
+                        when none of that kind exists)
   --adopt-tune          carry a matching older tune into the current version
   --vision              load the vision projector when the model has one
   --draft               load the catalog's draft model for speculative
@@ -149,7 +154,7 @@ fn run() -> ExitCode {
         "" => run_guided(false),
         "--plain" => run_guided(true),
         "launch" => cmd_launch(&args[1..], AgentKind::Claude),
-        "serve" => cmd_launch(&args[1..], AgentKind::ServeOnly),
+        "serve" => cmd_serve(&args[1..]),
         "stop" => cmd_stop(),
         "status" => cmd_status(&args[1..]),
         "info" => cmd_info(&args[1..]),
@@ -321,6 +326,7 @@ fn build_request(
     if has_flag(args, "--adopt-tune") && has_flag(args, "--no-auto-best") {
         return Err("--adopt-tune cannot be combined with --no-auto-best".to_string());
     }
+    let preferred = parse_preferred_profile(args)?;
     let mut profile = (!disable_profile && !has_flag(args, "--no-auto-best")).then(|| {
         resolve_run_profile(
             home,
@@ -329,9 +335,11 @@ fn build_request(
                 quant: explicit_quant.then_some(request.quant.as_deref()).flatten(),
                 context_key: explicit_context.then_some(request.context_key.as_str()),
                 mode: (explicit_mode || required_mode.is_some()).then_some(request.mode),
-                preferred_profile: launcher
-                    .inkling2_runtime_root(&request.key)
-                    .map(|_| localx_llama_core::tuner::Profile::Balanced),
+                preferred_profile: preferred.or_else(|| {
+                    launcher
+                        .inkling2_runtime_root(&request.key)
+                        .map(|_| localx_llama_core::tuner::Profile::Balanced)
+                }),
                 ..RunProfileQuery::default()
             },
         )
@@ -369,6 +377,46 @@ fn build_request(
             .map(str::to_string),
     );
     Ok((request, profile))
+}
+
+/// `--prefer-profile <pure|balanced>`: rank compatible saved tunes of that
+/// kind first. A preference, not a filter: with none of that kind, the next
+/// compatible saved tune is used, and defaults only when there is none.
+fn parse_preferred_profile(
+    args: &[String],
+) -> Result<Option<localx_llama_core::tuner::Profile>, String> {
+    match flag_value(args, "--prefer-profile") {
+        Some(raw) => serde_json::from_value(serde_json::json!(raw.to_ascii_lowercase()))
+            .map(Some)
+            .map_err(|_| format!("--prefer-profile takes pure or balanced, not '{raw}'")),
+        None if has_flag(args, "--prefer-profile") => {
+            Err("--prefer-profile takes pure or balanced".to_string())
+        }
+        None => Ok(None),
+    }
+}
+
+/// The run profile a launch resolved, for `--json` callers: the saved tune's
+/// identity, or which defaults were used.
+fn run_profile_json(args: &[String], profile: Option<&RunProfileResolution>) -> serde_json::Value {
+    match profile.and_then(|resolution| resolution.entry.as_ref().map(|entry| (resolution, entry)))
+    {
+        Some((resolution, entry)) => serde_json::json!({
+            "source": "tuned",
+            "profile": entry.profile,
+            "quant": entry.quant,
+            "context": entry.context_key,
+            "mode": entry.mode.as_str(),
+            "score": entry.score,
+            "scoreUnit": entry.score_unit,
+            "path": resolution.path.display().to_string(),
+        }),
+        None => serde_json::json!({
+            "source": "defaults",
+            "why": if has_flag(args, "--no-auto-best") { "no-auto-best" } else { "no compatible saved tune" },
+            "path": profile.map(|resolution| resolution.path.display().to_string()),
+        }),
+    }
 }
 
 fn confirm_profile_fallback(
@@ -442,6 +490,24 @@ fn resolve_running_policy(args: &[String]) -> Result<RunningModelPolicy, String>
     }
 }
 
+/// `serve`: a launch with no agent. With `--json`, a failure is one object too.
+fn cmd_serve(args: &[String]) -> Result<(), String> {
+    let result = cmd_launch(args, AgentKind::ServeOnly);
+    if let Err(error) = &result {
+        if has_flag(args, "--json") {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": false,
+                    "model": args.first().filter(|a| !a.starts_with("--")),
+                    "error": error,
+                })
+            );
+        }
+    }
+    result
+}
+
 fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
     // Validate before resolving a model or touching the network: a typo in
     // this flag decides what happens to someone's running model, so it must
@@ -470,6 +536,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
         plan,
         agent,
         running_policy,
+        profile.as_ref(),
     )
 }
 
@@ -508,11 +575,13 @@ fn launch_after_plan(
     mut plan: LaunchPlan,
     agent: AgentKind,
     running_policy: RunningModelPolicy,
+    profile: Option<&RunProfileResolution>,
 ) -> Result<(), String> {
     if has_flag(args, "--dry-run") {
         print_plan(&plan);
         return Ok(());
     }
+    let mut retried_native = false;
 
     // A fork build (turboquant/prism) that fails its reply check falls back to
     // native llama.cpp once, rather than hard-stopping. The retry re-derives its
@@ -546,19 +615,53 @@ fn launch_after_plan(
             )
             .map_err(|e| e.to_string())?;
             plan = native_plan;
+            retried_native = true;
             outcome
         }
         Err(e) => return Err(e.to_string()),
     };
     if agent == AgentKind::ServeOnly {
-        println!(
-            "{}",
-            status_report(plan.proxy.listen_port, plan.server_port)
-        );
-        println!("Serving {} at {}", plan.key, plan.base_url);
+        let report = status_report(plan.proxy.listen_port, plan.server_port);
+        if has_flag(args, "--json") {
+            // stdout carries the receipt alone; the human lines move to stderr.
+            eprintln!("{report}");
+            eprintln!("Serving {} at {}", plan.key, plan.base_url);
+            // The native retry re-derived its request with profiles off.
+            let used = if retried_native { None } else { profile };
+            println!("{}", serve_receipt(args, &plan, used, retried_native));
+        } else {
+            println!("{report}");
+            println!("Serving {} at {}", plan.key, plan.base_url);
+        }
     }
     let _ = outcome;
     Ok(())
+}
+
+/// What `serve --json` started: the run profile the server was launched with
+/// and the exact arguments it runs, so a caller can check the live server
+/// rather than an earlier probe.
+fn serve_receipt(
+    args: &[String],
+    plan: &LaunchPlan,
+    profile: Option<&RunProfileResolution>,
+    retried_native: bool,
+) -> serde_json::Value {
+    let mut profile_json = run_profile_json(args, profile);
+    if retried_native {
+        profile_json["why"] = serde_json::json!("native retry after a failed reply check");
+    }
+    serde_json::json!({
+        "ok": true,
+        "model": plan.key,
+        "endpoint": plan.base_url,
+        "serverPort": plan.server_port,
+        "proxyPort": plan.proxy.listen_port,
+        "contextTokens": plan.context_tokens,
+        "retriedNative": retried_native,
+        "profile": profile_json,
+        "launchArguments": plan.argv,
+    })
 }
 
 fn print_plan(plan: &localbox_launcher::orchestrate::LaunchPlan) {
@@ -2360,6 +2463,7 @@ fn probe_command(args: &[String], json: bool) -> Result<(), ProbeError> {
                 "fallbacks": reasons,
                 "serving": keep_serving,
                 "endpoint": if keep_serving { Some(plan.base_url.clone()) } else { None },
+                "profile": run_profile_json(args, profile.as_ref()),
                 "launchArguments": plan.argv,
             })
         );
@@ -2687,6 +2791,179 @@ mod tests {
         // No configured value: the port such an installation actually opened.
         let bare = tempfile::tempdir().unwrap();
         assert_eq!(resolved_proxy_port(bare.path()), DEFAULT_PROXY_PORT);
+    }
+
+    fn tuner_store(home: &std::path::Path, entries: &[(&str, &str, f64)]) {
+        let with_overrides: Vec<(&str, &str, f64, Option<i64>)> = entries
+            .iter()
+            .map(|(quant, profile, score)| (*quant, *profile, *score, None))
+            .collect();
+        tuner_store_with(home, &with_overrides);
+    }
+
+    fn tuner_store_with(home: &std::path::Path, entries: &[(&str, &str, f64, Option<i64>)]) {
+        let tuner = home.join(".local-llm").join("tuner");
+        std::fs::create_dir_all(&tuner).unwrap();
+        let entries: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(quant, profile, score, n_cpu_moe)| {
+                let overrides = n_cpu_moe.map_or_else(
+                    || serde_json::json!({}),
+                    |n| serde_json::json!({ "NCpuMoe": n }),
+                );
+                serde_json::json!({
+                    "quant": quant, "contextKey": "64k", "mode": "native", "vramGB": 24,
+                    "prompt_length": "short", "profile": profile, "score": score,
+                    "scoreUnit": "tok/s", "args": [], "overrides": overrides,
+                    "measured_at": "2026-01-01T00:00:00Z",
+                    "tuner_version": localx_llama_core::CURRENT_TUNER_VERSION
+                })
+            })
+            .collect();
+        std::fs::write(
+            tuner.join("best-m.json"),
+            serde_json::json!({"schema": 1, "key": "m", "entries": entries}).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn launcher_for_m(home: &std::path::Path) -> LlamaLauncher {
+        let catalog = localbox_launcher::catalog::Catalog::from_layers(
+            &serde_json::Map::new(),
+            &serde_json::from_str(r#"{"Models":{"m":{"Repo":"o/m"}}}"#).unwrap(),
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        LlamaLauncher::new(catalog, "0.0.0", home.to_path_buf(), 24)
+    }
+
+    #[test]
+    fn a_preferred_balanced_tune_beats_a_higher_scoring_pure_one() {
+        let home = tempfile::tempdir().unwrap();
+        tuner_store(
+            home.path(),
+            &[("q8", "pure", 200.0), ("q4", "balanced", 80.0)],
+        );
+        let launcher = launcher_for_m(home.path());
+
+        let (request, profile) = build_request(
+            &args(&["--prefer-profile", "balanced"]),
+            "m",
+            home.path(),
+            &launcher,
+            false,
+        )
+        .unwrap();
+        let entry = profile.as_ref().unwrap().entry.as_ref().unwrap();
+        assert_eq!(entry.profile, localx_llama_core::tuner::Profile::Balanced);
+        assert_eq!(request.quant.as_deref(), Some("q4"));
+        let reported = run_profile_json(&[], profile.as_ref());
+        assert_eq!(reported["source"], "tuned");
+        assert_eq!(reported["profile"], "balanced");
+        assert_eq!(reported["quant"], "q4");
+
+        // Without the preference the score decides, as before.
+        let (request, _) = build_request(&[], "m", home.path(), &launcher, false).unwrap();
+        assert_eq!(request.quant.as_deref(), Some("q8"));
+    }
+
+    fn launcher_for_m_with_quant(home: &std::path::Path) -> LlamaLauncher {
+        let settings = serde_json::json!({ "LlamaCppGgufRoot": home.join("gguf") });
+        let catalog = localbox_launcher::catalog::Catalog::from_layers(
+            settings.as_object().unwrap(),
+            &serde_json::from_str(
+                r#"{"Models":{"m":{"Root":"m","Repo":"o/m","Quants":{"q4":"m-q4.gguf"},
+                    "Quant":"q4","Contexts":{"":32768,"64k":65536}}}}"#,
+            )
+            .unwrap(),
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        LlamaLauncher::new(catalog, "0.0.0", home.to_path_buf(), 24)
+    }
+
+    #[test]
+    fn with_one_quant_and_context_the_balanced_tune_reaches_the_server_arguments() {
+        let home = tempfile::tempdir().unwrap();
+        tuner_store_with(
+            home.path(),
+            &[
+                ("q4", "pure", 200.0, Some(3)),
+                ("q4", "balanced", 80.0, Some(9)),
+            ],
+        );
+        let launcher = launcher_for_m_with_quant(home.path());
+        // The exact call setup makes: explicit quant and context, then serve.
+        let setup_args = args(&[
+            "--quant",
+            "q4",
+            "--context",
+            "64k",
+            "--prefer-profile",
+            "balanced",
+            "--allow-untuned",
+            "--json",
+        ]);
+
+        let (request, profile) =
+            build_request(&setup_args, "m", home.path(), &launcher, false).unwrap();
+        let plan = plan_launch(&launcher, &request).unwrap();
+        let receipt = serve_receipt(&setup_args, &plan, profile.as_ref(), false);
+
+        let argv = plan.argv.join(" ");
+        assert!(argv.contains("--n-cpu-moe 9"), "{argv}");
+        assert!(!argv.contains("--n-cpu-moe 3"), "{argv}");
+        assert_eq!(receipt["profile"]["profile"], "balanced");
+        assert_eq!(receipt["profile"]["source"], "tuned");
+        assert!(receipt["launchArguments"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--n-cpu-moe" && pair[1] == "9"));
+
+        let (request, _) = build_request(
+            &args(&["--quant", "q4", "--context", "64k"]),
+            "m",
+            home.path(),
+            &launcher,
+            false,
+        )
+        .unwrap();
+        let argv = plan_launch(&launcher, &request).unwrap().argv.join(" ");
+        assert!(
+            argv.contains("--n-cpu-moe 3"),
+            "the score decides without it: {argv}"
+        );
+    }
+
+    #[test]
+    fn a_profile_preference_is_not_a_filter() {
+        let home = tempfile::tempdir().unwrap();
+        tuner_store(home.path(), &[("q8", "pure", 200.0)]);
+        let launcher = launcher_for_m(home.path());
+
+        let (request, profile) = build_request(
+            &args(&["--prefer-profile", "balanced"]),
+            "m",
+            home.path(),
+            &launcher,
+            false,
+        )
+        .unwrap();
+        assert!(
+            profile.unwrap().is_tuned(),
+            "another compatible tune is used"
+        );
+        assert_eq!(request.quant.as_deref(), Some("q8"));
+        assert!(build_request(
+            &args(&["--prefer-profile", "fastest"]),
+            "m",
+            home.path(),
+            &launcher,
+            false
+        )
+        .unwrap_err()
+        .contains("pure or balanced"));
     }
 
     #[test]
