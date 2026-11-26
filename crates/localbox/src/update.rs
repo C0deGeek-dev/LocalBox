@@ -1293,7 +1293,7 @@ pub fn classify_load_probe(
     match code {
         Some(0) => Ok(first_line(stdout, stderr)),
         Some(STATUS_DLL_NOT_FOUND) => Err(with_excerpt(
-            "the staged llama-server could not start because a runtime library it links against is missing from this host (Windows STATUS_DLL_NOT_FOUND). The release archive links that dependency dynamically and does not package it."
+            "the staged llama-server could not start because Windows could not find a DLL it needs (STATUS_DLL_NOT_FOUND)."
                 .to_string(),
         )),
         Some(STATUS_ENTRYPOINT_NOT_FOUND) => Err(with_excerpt(
@@ -1360,7 +1360,52 @@ pub fn probe_staged_server(server: &Path) -> Result<String, String> {
         ),
         Err(_) => (String::new(), String::new()),
     };
-    classify_load_probe(status.and_then(|status| status.code()), &stdout, &stderr)
+    let code = status.and_then(|status| status.code());
+    classify_load_probe(code, &stdout, &stderr).map_err(|message| {
+        if code != Some(STATUS_DLL_NOT_FOUND) {
+            return message;
+        }
+        match vc_runtime_remedy(&missing_vc_runtime_on_this_host()) {
+            Some(remedy) => format!("{message} {remedy}"),
+            None => message,
+        }
+    })
+}
+
+/// The DLLs every llama.cpp Windows build loads from the Microsoft Visual C++
+/// Redistributable. A fresh Windows has none of them.
+const VC_RUNTIME_DLLS: [&str; 3] = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"];
+
+/// Which of [`VC_RUNTIME_DLLS`] are absent from `system_dir`.
+fn missing_vc_runtime(system_dir: &Path) -> Vec<&'static str> {
+    VC_RUNTIME_DLLS
+        .into_iter()
+        .filter(|dll| !system_dir.join(dll).is_file())
+        .collect()
+}
+
+/// The runtime DLLs missing from this host's system directory, checked only on
+/// x64 Windows (the one architecture whose redistributable link is named).
+fn missing_vc_runtime_on_this_host() -> Vec<&'static str> {
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return Vec::new();
+    }
+    std::env::var_os("SystemRoot")
+        .map(|root| missing_vc_runtime(&Path::new(&root).join("System32")))
+        .unwrap_or_default()
+}
+
+/// What to do when the missing DLL is most likely the Visual C++ runtime:
+/// only said when its DLLs are in fact absent.
+fn vc_runtime_remedy(missing: &[&str]) -> Option<String> {
+    (!missing.is_empty()).then(|| {
+        format!(
+            "This computer has no {}, which llama.cpp's Windows builds load from the \
+             Microsoft Visual C++ Redistributable (x64): install it from \
+             https://aka.ms/vs/17/release/vc_redist.x64.exe, then run this again.",
+            missing.join(", ")
+        )
+    })
 }
 
 pub async fn install_asset_set(
@@ -3015,7 +3060,7 @@ built with Clang
         let verdict = classify_load_probe(Some(0xC000_0135_u32 as i32), "", "");
         let message = verdict.expect_err("a binary that cannot load must be rejected");
         assert!(
-            message.contains("runtime library"),
+            message.contains("could not find a DLL it needs"),
             "the rejection did not name the cause: {message}"
         );
         assert!(
@@ -3027,6 +3072,32 @@ built with Clang
         assert!(wrong_version
             .expect_err("a wrong-version library must be rejected")
             .contains("entry points"));
+    }
+
+    #[test]
+    fn the_visual_cpp_runtime_is_named_only_when_its_dlls_are_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            missing_vc_runtime(dir.path()),
+            vec!["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"]
+        );
+        std::fs::write(dir.path().join("vcruntime140.dll"), b"").unwrap();
+        std::fs::write(dir.path().join("msvcp140.dll"), b"").unwrap();
+        assert_eq!(missing_vc_runtime(dir.path()), vec!["vcruntime140_1.dll"]);
+        std::fs::write(dir.path().join("vcruntime140_1.dll"), b"").unwrap();
+        assert!(missing_vc_runtime(dir.path()).is_empty());
+
+        assert_eq!(vc_runtime_remedy(&[]), None);
+        let remedy = vc_runtime_remedy(&["vcruntime140.dll", "msvcp140.dll"]).unwrap();
+        assert!(
+            remedy.contains("vcruntime140.dll, msvcp140.dll"),
+            "{remedy}"
+        );
+        assert!(
+            remedy.contains("Microsoft Visual C++ Redistributable"),
+            "{remedy}"
+        );
+        assert!(remedy.contains("vc_redist.x64.exe"), "{remedy}");
     }
 
     #[test]

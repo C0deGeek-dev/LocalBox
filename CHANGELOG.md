@@ -4,6 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- Windows: `localbox.exe` links the C runtime statically, so it starts on a
+  Windows without the Visual C++ Redistributable; the release checks every
+  shipped binary for runtime imports. When a staged llama.cpp build cannot
+  start because Windows cannot find a DLL, the error now says so plainly and,
+  when the Visual C++ runtime DLLs are absent, names the Microsoft
+  redistributable and its download link.
+
 - Docs: the README leads with `localx setup` as the guided route to a local
   model for LocalPilot and lists `serve --again`; `usage.md` documents
   `starter --expect`; troubleshooting covers `serve --again` refusals, the

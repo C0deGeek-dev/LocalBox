@@ -14,10 +14,14 @@ Part of the [LocalBox documentation](README.md).
   is missing, run the exact mode command from the error, for example
   `localbox update --mode native`. A checksum/extraction failure leaves the
   prior engine and stamp active, and so does a staged build that cannot start:
-  "the staged llama-server could not start because a runtime library it links
-  against is missing from this host" means the release archive is incomplete
-  for this machine, not that your install broke — the working engine is still
-  there. Report it upstream, pin a release that carries its dependencies, or
+  "the staged llama-server could not start because Windows could not find a
+  DLL it needs" means the build needs a library this computer does not have —
+  the working engine is still there. When the message goes on to name
+  `vcruntime140.dll`/`msvcp140.dll`, that library is the Microsoft Visual C++
+  Redistributable (x64), which every llama.cpp Windows build loads and a fresh
+  Windows does not have: install it from
+  https://aka.ms/vs/17/release/vc_redist.x64.exe and run the command again.
+  Otherwise report it upstream, pin a release that carries its dependencies, or
   rerun with `--skip-load-probe` if you are certain the probe is wrong;
   `localbox launch <model> --dry-run` prints the full plan (paths, argv,
   environment) without touching the system.
