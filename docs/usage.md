@@ -11,6 +11,9 @@ localbox                            open the guided launcher (pick a model)
 localbox --plain                    guided launcher with plain-text menus
 localbox launch <model> [options]   resolve, start, and hand off to an agent
 localbox serve <model> [options]    start the model (and proxy) headless
+localbox serve --again [--proxy-port <p>] [--expect-model <key>] [--json]
+                                    start the launch the last serve on this
+                                    proxy port saved, with no questions
 localbox stop                       stop every model server and the proxy, and wait for them to exit
 localbox status                     report serve health and the remedy
 localbox info [model]               list the configured models, or one in detail
@@ -72,6 +75,29 @@ localbox launch q36plus --mode turboquant --quant q6kp
 localbox serve q36plus --context 64k
 localbox launch ornith35hapex --context 16k --vision
 ```
+
+### Starting the same model again
+
+Every successful `localbox serve` saves how it was asked to start, per proxy
+port, in `~/.local-llm/state/serve-again-<port>.json`: the model, context,
+mode, quant, profile preference, `--allow-untuned`, `--vision`, `--draft`
+and, when the serve passed exactly
+`--server-arg --n-gpu-layers --server-arg 0` (or `-ngl`/`--gpu-layers`),
+that it runs on the CPU only. It keeps the request, not the resolved server
+arguments, so a newer tune or engine still applies.
+`localbox serve --again` starts that request again without asking anything
+— after a restart, say, which is how LocalPilot reaches the model you
+adopted. With `--expect-model <key>` it refuses a record for another model,
+and `--proxy-port` must be the port LocalBox now serves on.
+It does nothing when that model already serves there, and refuses before
+loading anything (touching nothing) when the port is in use by anything else;
+its proxy is started fresh, so a program that takes the port while the model
+loads is reported rather than replaced. Every `serve` on a port takes turns
+with the others, so a second call finds the model serving. A serve that used
+any other option — other raw `--server-arg` values, `--keep-thinking` (it
+bypasses the proxy), `--lan`, `--password`, an option given twice or a flag
+`--again` does not know — saves nothing and removes the older record for its
+port, so `--again` never starts something different from what was asked.
 
 ### Checking the engine on this machine
 

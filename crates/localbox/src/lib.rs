@@ -8,6 +8,7 @@
 //!   (download → server → proxy → smoke → agent), stop, and status.
 //! - [`starter`] — the starter model rule: a small known model sized to the
 //!   machine's memory for a first run.
+//! - [`replay`] — the saved launch `serve --again` starts again unattended.
 
 #![forbid(unsafe_code)]
 
@@ -23,6 +24,7 @@ pub mod live;
 pub mod manage;
 pub mod migrate;
 pub mod partials;
+pub mod replay;
 pub mod starter;
 pub mod update;
 

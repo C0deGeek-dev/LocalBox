@@ -4,6 +4,17 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`localbox serve --again` starts the last serve again, unattended.**
+  Every successful `serve` saves its request per proxy port (model,
+  context, mode, quant, profile preference, untuned approval, vision,
+  draft and CPU-only placement); `serve --again [--proxy-port <p>]
+  [--expect-model <key>] [--json]` replays it, does nothing when that model
+  already serves there, and refuses before loading anything when the port
+  is in use; its proxy starts fresh and never replaces a listener. Serves on
+  one port take turns. A serve with options a replay cannot repeat (other
+  raw server arguments, `--keep-thinking`, network exposure, a repeated
+  option) saves nothing and removes the older record.
+
 - **The starter model fits the GPU memory free now, not the total.** The rule
   assumed all but 1 GB of graphics memory was free, so a computer with
   other programs on the GPU could be offered a model that does not fit.

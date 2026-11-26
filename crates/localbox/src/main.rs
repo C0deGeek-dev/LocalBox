@@ -40,6 +40,13 @@ Usage:
                                       <ask|continue|stop|cancel> for when a model
                                       is already running (default: ask on a
                                       terminal, cancel without one)
+  localbox serve --again [--proxy-port <p>] [--expect-model <key>] [--json]
+                                      start the launch the last successful
+                                      serve on this proxy port saved (its model,
+                                      quant, context and profile choice), with
+                                      no questions; does nothing when that model
+                                      already serves there, and refuses when
+                                      the port runs something else
   localbox probe <model> [options] [--fallback] [--keep-serving] [--json]
                                       prove the installed engine can load the
                                       model and answer (a short serve, a
@@ -494,7 +501,19 @@ fn resolve_running_policy(args: &[String]) -> Result<RunningModelPolicy, String>
 
 /// `serve`: a launch with no agent. With `--json`, a failure is one object too.
 fn cmd_serve(args: &[String]) -> Result<(), String> {
-    let result = cmd_launch(args, AgentKind::ServeOnly);
+    if has_flag(args, "--again") {
+        return cmd_serve_again(args);
+    }
+    // Every serve on a port holds that port's lock from launch to saved
+    // record, so a replay and a manual serve never interleave.
+    let result = match home_dir() {
+        Some(home) if !has_flag(args, "--dry-run") => {
+            localbox::replay::with_port_lock(&replay_dir(&home), resolved_proxy_port(&home), || {
+                cmd_launch(args, AgentKind::ServeOnly)
+            })
+        }
+        _ => cmd_launch(args, AgentKind::ServeOnly),
+    };
     if let Err(error) = &result {
         if has_flag(args, "--json") {
             println!(
@@ -510,7 +529,188 @@ fn cmd_serve(args: &[String]) -> Result<(), String> {
     result
 }
 
+/// Where LocalBox keeps the launches `serve --again` replays.
+fn replay_dir(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".local-llm").join("state")
+}
+
+/// `serve --again`: start the launch the last successful `serve` on this
+/// proxy port saved, unattended. With `--json`, a failure is one object too.
+fn cmd_serve_again(args: &[String]) -> Result<(), String> {
+    let result = serve_again(args);
+    if let Err(error) = &result {
+        if has_flag(args, "--json") {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": false,
+                    "model": flag_value(args, "--expect-model"),
+                    "error": error,
+                })
+            );
+        }
+    }
+    result
+}
+
+fn serve_again(args: &[String]) -> Result<(), String> {
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--again" | "--json" => {}
+            "--proxy-port" | "--expect-model" => {
+                rest.next().ok_or_else(|| format!("{arg} needs a value"))?;
+            }
+            other if !other.starts_with("--") => {
+                return Err(format!(
+                    "serve --again takes no model ('{other}'); it starts the saved one"
+                ))
+            }
+            other => return Err(format!("serve --again does not take {other}")),
+        }
+    }
+    let home = home_dir().ok_or("could not determine the user home directory")?;
+    let configured = resolved_proxy_port(&home);
+    let port = match flag_value(args, "--proxy-port") {
+        Some(v) => v.parse().map_err(|_| format!("bad port '{v}'"))?,
+        None => configured,
+    };
+    if port != configured {
+        return Err(format!(
+            "LocalBox now serves on port {configured}, not {port}, so the saved launch for {port} cannot start there"
+        ));
+    }
+    let dir = replay_dir(&home);
+    localbox::replay::with_port_lock(&dir, port, || {
+        let record = localbox::replay::read(&dir, port)?.ok_or_else(|| {
+            format!(
+                "LocalBox has no saved launch for port {port}; start the model once with \
+                 `localbox serve <model> ...` (or run `localx setup`), then --again can start it"
+            )
+        })?;
+        if let Some(expected) = flag_value(args, "--expect-model") {
+            if expected != record.model {
+                return Err(format!(
+                    "the saved launch for port {port} is {}, not {expected}; nothing was started",
+                    record.model
+                ));
+            }
+        }
+        let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
+        let serving = observe_serving(&home, &catalog, port);
+        let occupied = !localbox::exec::os_listener_pids(port).is_empty();
+        if replay_gate(&serving, occupied, &record.model)? == ReplayGate::AlreadyServing {
+            if has_flag(args, "--json") {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": true,
+                        "model": record.model,
+                        "proxyPort": port,
+                        "alreadyServing": true,
+                    })
+                );
+            } else {
+                println!("{} is already serving on port {port}.", record.model);
+            }
+            return Ok(());
+        }
+        let launch = replay_launch(&record, has_flag(args, "--json"));
+        eprintln!(
+            "Starting the saved launch: localbox serve {}",
+            launch.args.join(" ")
+        );
+        cmd_launch_with(&launch.args, AgentKind::ServeOnly, launch.start_only)
+    })
+}
+
+/// How `serve --again` launches a saved serve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplayLaunch {
+    args: Vec<String>,
+    /// Start the proxy fresh and leave any listener that appeared on its port
+    /// alone, instead of the normal replace-or-repoint lifecycle.
+    start_only: bool,
+}
+
+/// The launch a replay of `record` runs: the saved request, never asking about
+/// a running model, always start-only.
+fn replay_launch(record: &localbox::replay::ServeRecord, json: bool) -> ReplayLaunch {
+    let mut args = record.serve_args();
+    args.extend(["--if-running".to_string(), "cancel".to_string()]);
+    if json {
+        args.push("--json".to_string());
+    }
+    ReplayLaunch {
+        args,
+        start_only: true,
+    }
+}
+
+/// What `serve --again` does about the port it would start on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayGate {
+    /// The saved model already serves there: nothing to start.
+    AlreadyServing,
+    /// Nothing listens there: start the saved launch.
+    Start,
+}
+
+/// Decide from what LocalBox observes on the port and whether anything
+/// listens there at all. Anything but the saved model or a free port is
+/// refused before a model is loaded, and nothing is stopped.
+fn replay_gate(
+    serving: &localbox::manage::Serving,
+    occupied: bool,
+    model: &str,
+) -> Result<ReplayGate, String> {
+    let port = serving.proxy_port;
+    if serving.model.as_deref() == Some(model) {
+        return Ok(ReplayGate::AlreadyServing);
+    }
+    if serving.target_port.is_none() && !occupied {
+        return Ok(ReplayGate::Start);
+    }
+    let what = serving
+        .model
+        .clone()
+        .or_else(|| serving.reason.clone())
+        .unwrap_or_else(|| "a program LocalBox did not start".to_string());
+    Err(format!(
+        "port {port} is already in use ({what}); nothing was started or stopped. \
+         Free it (`localbox stop` stops LocalBox's own) to start {model} there"
+    ))
+}
+
+/// Save how a successful `serve` was asked to start, so `serve --again` can
+/// start it again; a serve that cannot be replayed unattended removes the
+/// older record for its port instead. Never fails the serve itself.
+fn save_serve_record(args: &[String], home: &std::path::Path, plan: &LaunchPlan) {
+    let dir = replay_dir(home);
+    let port = plan.proxy.listen_port;
+    let saved = match localbox::replay::ServeRecord::from_serve_args(args, &plan.key, port) {
+        Ok(record) => localbox::replay::write(&dir, &record),
+        Err(why) => {
+            eprintln!("Note: `localbox serve --again` will not start this launch: {why}.");
+            localbox::replay::remove(&dir, port)
+        }
+    };
+    if let Err(error) = saved {
+        eprintln!("Warning: the launch for `serve --again` was not saved: {error}");
+    }
+}
+
 fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
+    cmd_launch_with(args, default_agent, false)
+}
+
+/// [`cmd_launch`], with `start_only` set when the proxy must be started
+/// fresh and any listener already on its port left alone.
+fn cmd_launch_with(
+    args: &[String],
+    default_agent: AgentKind,
+    start_only: bool,
+) -> Result<(), String> {
     // Validate before resolving a model or touching the network: a typo in
     // this flag decides what happens to someone's running model, so it must
     // not surface only after the slow work is done.
@@ -529,6 +729,7 @@ fn cmd_launch(args: &[String], default_agent: AgentKind) -> Result<(), String> {
 
     let mut plan = plan_launch(&launcher, &request).map_err(|e| e.to_string())?;
     apply_launch_posture(&mut plan, args, agent)?;
+    plan.proxy.start_only |= start_only;
     launch_after_plan(
         args,
         model,
@@ -604,6 +805,7 @@ fn launch_after_plan(
             native.mode = Mode::Native;
             let mut native_plan = plan_launch(launcher, &native).map_err(|e| e.to_string())?;
             apply_launch_posture(&mut native_plan, args, agent)?;
+            native_plan.proxy.start_only |= plan.proxy.start_only;
             // Same user action, second attempt: the question was already
             // answered (and the failed launch tore its own server down), so
             // asking again would be asking twice for one launch.
@@ -623,6 +825,7 @@ fn launch_after_plan(
         Err(e) => return Err(e.to_string()),
     };
     if agent == AgentKind::ServeOnly {
+        save_serve_record(args, home, &plan);
         let report = status_report(plan.proxy.listen_port, plan.server_port);
         if has_flag(args, "--json") {
             // stdout carries the receipt alone; the human lines move to stderr.
@@ -2793,6 +2996,80 @@ fn cmd_nothink_proxy(args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    #[test]
+    fn serve_again_starts_only_on_a_free_port_or_reuses_its_own_model() {
+        use super::{replay_gate, ReplayGate};
+        let serving = |target: Option<u16>, model: Option<&str>, reason: Option<&str>| {
+            localbox::manage::Serving {
+                proxy_port: 11_435,
+                target_port: target,
+                model_path: None,
+                model: model.map(str::to_string),
+                reason: reason.map(str::to_string),
+            }
+        };
+        // Nothing there.
+        assert_eq!(
+            replay_gate(
+                &serving(None, None, Some("no proxy is running")),
+                false,
+                "m"
+            ),
+            Ok(ReplayGate::Start)
+        );
+        // The saved model already serves.
+        assert_eq!(
+            replay_gate(&serving(Some(8080), Some("m"), None), true, "m"),
+            Ok(ReplayGate::AlreadyServing)
+        );
+        // Another model behind LocalBox's proxy.
+        let other = replay_gate(&serving(Some(8080), Some("other"), None), true, "m").unwrap_err();
+        assert!(
+            other.contains("other") && other.contains("nothing was started"),
+            "{other}"
+        );
+        // A foreign listener LocalBox cannot read a target from.
+        let foreign = replay_gate(
+            &serving(None, None, Some("not a LocalBox proxy")),
+            true,
+            "m",
+        )
+        .unwrap_err();
+        assert!(foreign.contains("already in use"), "{foreign}");
+        // A LocalBox proxy whose model is unknown.
+        assert!(replay_gate(&serving(Some(8080), None, Some("ambiguous")), true, "m").is_err());
+    }
+
+    #[test]
+    fn a_replay_launch_is_start_only_and_never_asks_about_a_running_model() {
+        let record = localbox::replay::ServeRecord::from_serve_args(
+            &["m".to_string(), "--quant".to_string(), "q4km".to_string()],
+            "m",
+            11_435,
+        )
+        .unwrap();
+        let launch = super::replay_launch(&record, true);
+        assert!(launch.start_only);
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|w| w == ["--if-running", "cancel"]));
+        assert!(launch.args.iter().any(|a| a == "--json"));
+        assert!(launch.args.windows(2).any(|w| w == ["--quant", "q4km"]));
+    }
+
+    #[test]
+    fn serve_again_takes_only_its_own_options() {
+        let call = |list: &[&str]| {
+            super::serve_again(&list.iter().map(ToString::to_string).collect::<Vec<_>>())
+                .unwrap_err()
+        };
+        assert!(call(&["--again", "qwen"]).contains("takes no model"));
+        assert!(call(&["--again", "--lan"]).contains("does not take --lan"));
+        assert!(call(&["--again", "--server-arg", "-ngl"]).contains("does not take --server-arg"));
+        assert!(call(&["--again", "--proxy-port"]).contains("needs a value"));
+    }
 
     #[test]
     fn a_probe_never_shares_the_proxy_with_a_serving_model() {
