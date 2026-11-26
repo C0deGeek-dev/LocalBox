@@ -479,10 +479,7 @@ mod tests {
         ];
         assert_eq!(serving_key("G:/gguf/a/model-Q8.gguf", &candidates), Ok("a"));
         // Same file name, different folder: still the right key.
-        assert_eq!(
-            serving_key("G:\\gguf\\b\\model-Q4.gguf", &candidates),
-            Ok("b")
-        );
+        assert_eq!(serving_key("G:/gguf/b/model-Q4.gguf", &candidates), Ok("b"));
         assert_eq!(
             serving_key(
                 "G:/gguf/split/IQ1_M/Split-IQ1_M-00001-of-00002.gguf",
