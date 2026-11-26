@@ -60,7 +60,9 @@ Usage:
   localbox stop                       stop every model server and the proxy
   localbox status                     report serve health and the remedy
   localbox info [model]               list the configured models, or one in detail
-  localbox models [--json]            list launchable models and tuned-profile state
+  localbox models [--json] [--proxy-port <p>]
+                                      list launchable models, tuned-profile state
+                                      and the model the proxy serves now
   localbox download <model|hf-repo> [--quant <key>] [--vision] [--draft]
                     [--mmproj <filename>]
                                       fetch a model's files without starting it
@@ -855,11 +857,104 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// What the LocalBox proxy on `proxy_port` serves now: its target port from
+/// its own argv, the model server on that port, and the catalog key for the
+/// file that server loaded.
+fn observe_serving(
+    home: &std::path::Path,
+    catalog: &Catalog,
+    proxy_port: u16,
+) -> localbox::manage::Serving {
+    let mut serving = localbox::manage::Serving {
+        proxy_port,
+        target_port: None,
+        model_path: None,
+        model: None,
+        reason: None,
+    };
+    let target = match localbox::exec::proxy_target_port(proxy_port) {
+        Ok(target) => target,
+        Err(reason) => {
+            serving.reason = Some(reason);
+            return serving;
+        }
+    };
+    serving.target_port = Some(target);
+    // The model server is the one process that holds the target socket on any
+    // address, not one whose argv merely names the port.
+    let mut owners = localbox::exec::os_listener_pids(target);
+    owners.sort_unstable();
+    owners.dedup();
+    if owners.len() > 1 {
+        serving.reason = Some(format!(
+            "more than one process listens on port {target}, so which one serves it is not certain"
+        ));
+        return serving;
+    }
+    let servers: Vec<_> = localbox::live::running_models(home)
+        .into_iter()
+        .filter(|model| owners.contains(&model.pid))
+        .collect();
+    let path = match servers.as_slice() {
+        [] => {
+            serving.reason = Some(format!("no model server is listening on port {target}"));
+            return serving;
+        }
+        [server] => server.path.clone(),
+        _ => {
+            serving.reason = Some(format!("more than one model server holds port {target}"));
+            return serving;
+        }
+    };
+    let Some(path) = path else {
+        serving.reason = Some("the model server's command line names no model file".to_string());
+        return serving;
+    };
+    serving.model_path = Some(path.clone());
+    let launcher = match localbox::exec::build_launcher(home) {
+        Ok(launcher) => launcher,
+        Err(error) => {
+            serving.reason = Some(error);
+            return serving;
+        }
+    };
+    let candidates: Vec<(String, Vec<std::path::PathBuf>)> = catalog
+        .model_keys()
+        .into_iter()
+        .filter_map(|key| {
+            let def = catalog.model(key)?;
+            let paths: Vec<std::path::PathBuf> = if def.quants.is_empty() {
+                launcher
+                    .expected_gguf_path(def, None)
+                    .ok()
+                    .into_iter()
+                    .collect()
+            } else {
+                def.quants
+                    .keys()
+                    .filter_map(|quant| launcher.expected_gguf_path(def, Some(quant)).ok())
+                    .collect()
+            };
+            Some((key.to_string(), paths))
+        })
+        .collect();
+    match localbox::manage::serving_key(&path, &candidates) {
+        Ok(key) => serving.model = Some(key.to_string()),
+        Err(reason) => serving.reason = Some(reason.to_string()),
+    }
+    serving
+}
+
 fn cmd_models(args: &[String]) -> Result<(), String> {
     use localbox::manage::{models_catalog, render_models_catalog};
     let home = home_dir().ok_or("could not determine the user home directory")?;
     let catalog = Catalog::load(&catalog_dir(&home)).map_err(|e| e.to_string())?;
-    let contract = models_catalog(&catalog, &home);
+    let mut contract = models_catalog(&catalog, &home);
+    let proxy_port = match flag_value(args, "--proxy-port") {
+        Some(v) => v.parse().map_err(|_| format!("bad port '{v}'"))?,
+        None => resolved_proxy_port(&home),
+    };
+    localbox::manage::mark_serving(&mut contract, observe_serving(&home, &catalog, proxy_port));
     if has_flag(args, "--json") {
         println!(
             "{}",
@@ -2656,6 +2751,7 @@ mod tests {
             pid: 4242,
             port: Some(8080),
             model: Some("chat.gguf".into()),
+            path: Some("chat.gguf".into()),
         }];
         for policy in [
             RunningModelPolicy::Ask,

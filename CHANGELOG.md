@@ -4,6 +4,13 @@ Past-tense record of shipped changes.
 
 ## Unreleased
 
+- **`models --json` says what is serving.** A new `serving` object names the
+  proxy port (configured, or `--proxy-port`), the port it forwards to, the
+  model file the server there loaded and the one catalog key for that file
+  (or `null` with a reason), and each entry's `active` is now filled in. A
+  caller can tell which model a proxy really serves instead of guessing from
+  the server's file name.
+
 - **`--prefer-profile pure|balanced` for launch, serve and probe.** Compatible
   saved tunes of that kind rank first, ahead of a higher-scoring tune of the
   other kind; with none of that kind the next compatible tune is used, and

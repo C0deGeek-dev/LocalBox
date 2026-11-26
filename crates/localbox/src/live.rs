@@ -135,6 +135,8 @@ pub struct RunningModel {
     pub port: Option<u16>,
     /// The model file it was started with, file name only.
     pub model: Option<String>,
+    /// The model path exactly as its argv names it.
+    pub path: Option<String>,
 }
 
 /// What to do about a model that is already running.
@@ -167,11 +169,16 @@ pub const NON_INTERACTIVE_RUNNING_CHOICE: RunningModelChoice = RunningModelChoic
 
 /// The model file name from a llama-server argv, if it names one.
 fn model_from_argv(argv: &[String]) -> Option<String> {
-    let index = argv.iter().position(|a| a == "-m" || a == "--model")?;
-    let path = argv.get(index + 1)?;
-    std::path::Path::new(path)
+    let path = model_path_from_argv(argv)?;
+    std::path::Path::new(&path)
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
+}
+
+/// The model path a llama-server argv names, as written.
+fn model_path_from_argv(argv: &[String]) -> Option<String> {
+    let index = argv.iter().position(|a| a == "-m" || a == "--model")?;
+    argv.get(index + 1).cloned()
 }
 
 /// The port from a llama-server argv, if it names one.
@@ -274,6 +281,7 @@ fn running_models_among(rows: Vec<ProcessRow>, embed_pid: Option<u32>) -> Vec<Ru
             pid: row.pid,
             port: port_from_argv(&row.argv),
             model: model_from_argv(&row.argv),
+            path: model_path_from_argv(&row.argv),
         })
         .collect();
     found.sort_by_key(|model| model.pid);
@@ -1149,6 +1157,7 @@ mod tests {
             pid,
             port,
             model: model.map(str::to_string),
+            path: model.map(str::to_string),
         }
     }
 
@@ -1279,6 +1288,7 @@ mod tests {
                 pid: 40,
                 port: Some(8080),
                 model: Some("Chat-Q4.gguf".to_string()),
+                path: Some("/m/Chat-Q4.gguf".to_string()),
             }]
         );
     }
@@ -1309,6 +1319,7 @@ mod tests {
                 pid: 13,
                 port: None,
                 model: None,
+                path: None,
             }]
         );
     }

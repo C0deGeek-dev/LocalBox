@@ -279,6 +279,100 @@ pub fn proxy_process_pids(port: u16) -> Vec<u32> {
     pids
 }
 
+/// The loopback port the LocalBox proxy on `listen_port` forwards to.
+/// Conservative on purpose: exactly one process may hold that port on any
+/// address (so an IPv6 proxy cannot answer for an IPv4 listener, or the other
+/// way round), it must be a LocalBox proxy for that port whose
+/// `--target-host` is loopback, and the proxy's own `/health` on
+/// `127.0.0.1:<listen_port>`, when it reports a target, must agree.
+///
+/// # Errors
+/// Why no single proxy target was established, in user terms.
+pub fn proxy_target_port(listen_port: u16) -> Result<u16, String> {
+    let mut listeners = os_listener_pids(listen_port);
+    listeners.sort_unstable();
+    listeners.dedup();
+    let mut system = sysinfo::System::new();
+    let pids: Vec<sysinfo::Pid> = listeners
+        .iter()
+        .map(|pid| sysinfo::Pid::from_u32(*pid))
+        .collect();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&pids),
+        true,
+        sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::Always),
+    );
+    let argvs: Vec<(u32, Vec<String>)> = listeners
+        .iter()
+        .map(|pid| {
+            let argv = system
+                .process(sysinfo::Pid::from_u32(*pid))
+                .map(|process| {
+                    process
+                        .cmd()
+                        .iter()
+                        .map(|a| a.to_string_lossy().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            (*pid, argv)
+        })
+        .collect();
+    let health = loopback_get(listen_port, "/health", Duration::from_secs(2))
+        .map(|body| parse_proxy_health(&body));
+    proxy_target_among(listen_port, &argvs, health.as_ref())
+}
+
+/// [`proxy_target_port`] over every distinct process that listens on the
+/// port, on any address, and the proxy's `/health` answer.
+fn proxy_target_among(
+    listen_port: u16,
+    listeners: &[(u32, Vec<String>)],
+    health: Option<&localbox_launcher::proxy::ProxyHealth>,
+) -> Result<u16, String> {
+    let argv = match listeners {
+        [] => return Err(format!("nothing is listening on port {listen_port}")),
+        [(_, argv)] => argv,
+        _ => {
+            return Err(format!(
+                "more than one process listens on port {listen_port}, so which one serves it is not certain"
+            ))
+        }
+    };
+    if !is_proxy_argv_for_port(argv, listen_port) {
+        return Err(format!(
+            "the process listening on port {listen_port} is not a LocalBox proxy"
+        ));
+    }
+    let host = flag_after(argv, "--target-host").unwrap_or("127.0.0.1");
+    if !is_loopback_host(host) {
+        return Err(format!(
+            "the LocalBox proxy on port {listen_port} forwards to {host}, not to this computer"
+        ));
+    }
+    let port: u16 = flag_after(argv, "--target-port")
+        .and_then(|port| port.parse().ok())
+        .ok_or_else(|| format!("the LocalBox proxy on port {listen_port} names no target port"))?;
+    if let Some(health) = health.filter(|health| health.target_port != 0) {
+        if health.target_port != port || !is_loopback_host(&health.target_host) {
+            return Err(format!(
+                "the LocalBox proxy on port {listen_port} reports {}:{}, not its started target",
+                health.target_host, health.target_port
+            ));
+        }
+    }
+    Ok(port)
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
+fn flag_after<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+    let index = argv.iter().position(|a| a == flag)?;
+    argv.get(index + 1).map(String::as_str)
+}
+
 /// Force-kill a process by PID.
 pub fn kill_pid(pid: u32) {
     let mut system = sysinfo::System::new();
@@ -529,6 +623,87 @@ pub fn spawn_server(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn proxy_argv(listen: &str, target_host: &str, target_port: &str) -> Vec<String> {
+        [
+            "localbox.exe",
+            "nothink-proxy",
+            "--listen",
+            listen,
+            "--listen-host",
+            "127.0.0.1",
+            "--target-host",
+            target_host,
+            "--target-port",
+            target_port,
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn the_proxy_target_needs_one_loopback_proxy_holding_the_port() {
+        let health = |host: &str, port: u16| localbox_launcher::proxy::ProxyHealth {
+            status: "ok".into(),
+            target_host: host.into(),
+            target_port: port,
+        };
+        let proxy = (10, proxy_argv("11435", "127.0.0.1", "8081"));
+        assert_eq!(
+            proxy_target_among(11435, std::slice::from_ref(&proxy), None),
+            Ok(8081)
+        );
+        assert_eq!(
+            proxy_target_among(
+                11435,
+                std::slice::from_ref(&proxy),
+                Some(&health("127.0.0.1", 8081))
+            ),
+            Ok(8081)
+        );
+        // Another process on the same port (say, on the other address family):
+        // which one answers the endpoint is not certain, so nothing is claimed.
+        let other = (
+            11,
+            vec![
+                "python.exe".to_string(),
+                "-m".to_string(),
+                "http.server".to_string(),
+            ],
+        );
+        assert!(
+            proxy_target_among(11435, &[other.clone(), proxy.clone()], None)
+                .unwrap_err()
+                .contains("more than one process")
+        );
+        assert!(proxy_target_among(11435, &[other], None)
+            .unwrap_err()
+            .contains("not a LocalBox proxy"));
+        // A proxy forwarding off this computer never names a local server.
+        let remote = (12, proxy_argv("11435", "10.0.0.7", "8081"));
+        assert!(proxy_target_among(11435, &[remote], None)
+            .unwrap_err()
+            .contains("not to this computer"));
+        // Its own /health must agree with what it was started with.
+        assert!(proxy_target_among(
+            11435,
+            std::slice::from_ref(&proxy),
+            Some(&health("127.0.0.1", 9000))
+        )
+        .unwrap_err()
+        .contains("reports 127.0.0.1:9000"));
+        // A proxy for another port does not count.
+        assert!(proxy_target_among(
+            11435,
+            &[(13, proxy_argv("11436", "127.0.0.1", "8081"))],
+            None
+        )
+        .is_err());
+        assert!(proxy_target_among(11435, &[], None)
+            .unwrap_err()
+            .contains("nothing is listening"));
+    }
 
     #[test]
     fn no_gpu_host_uses_the_shared_fallback_not_zero() {

@@ -24,6 +24,20 @@ guided launcher also offers to adopt its still-runnable settings, and
 `localbox models` for the concise human catalog or `localbox models --json` for
 the versioned schema-1 contract consumed by LocalPilot.
 
+The contract also says what the LocalBox proxy serves right now. `serving`
+names the proxy port (the configured one, or `--proxy-port <port>`), the port
+that proxy forwards to, the model file the server on that port loaded, and
+`model`: the one catalog key whose model file that is. Only the processes that
+hold the listening sockets count, and only when exactly one process holds each
+port on any address: the LocalBox proxy on the proxy port (its target read from
+its own command line, refused unless it is on this computer, and checked
+against the proxy's own `/health`), then the model server on the target port. Model files
+compare as whole paths, so two models with the same file name stay apart
+(separators and case are folded on Windows only). When any step does not lead
+to exactly one key, `model` is `null` and `reason` says why, and each entry's
+`active` stays unknown; otherwise `active` is `true` for that key and `false`
+for the rest.
+
 The current compatibility schema is `localbox-autobest-v1`. The top
 level object keeps launcher-owned routing fields and an `entries` array. Each
 entry is matched at launch time using:

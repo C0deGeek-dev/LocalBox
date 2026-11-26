@@ -186,6 +186,73 @@ pub struct ModelsCatalog {
     pub schema: u32,
     /// Sorted launchable catalog entries.
     pub models: Vec<ModelCatalogEntry>,
+    /// What the LocalBox proxy on one port serves, when it was looked up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serving: Option<Serving>,
+}
+
+/// The model behind a LocalBox proxy port: the proxy's own target, the model
+/// server on that port, the file it loaded, and the one catalog key whose
+/// model file that is. `model` is `None`, with `reason` saying why, when any
+/// step does not lead to exactly one key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Serving {
+    pub proxy_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_path: Option<String>,
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// The single catalog key whose expected model file is `model_path`. Paths
+/// compare whole (so two models sharing a file name stay apart), with
+/// separators unified and, on Windows, case folded.
+///
+/// # Errors
+/// `"no catalog model uses this file"` or `"more than one catalog model uses
+/// this file"`.
+pub fn serving_key<'a>(
+    model_path: &str,
+    candidates: &'a [(String, Vec<std::path::PathBuf>)],
+) -> Result<&'a str, &'static str> {
+    let wanted = comparable_path(model_path);
+    let mut keys = candidates
+        .iter()
+        .filter(|(_, paths)| {
+            paths
+                .iter()
+                .any(|path| comparable_path(&path.to_string_lossy()) == wanted)
+        })
+        .map(|(key, _)| key.as_str());
+    match (keys.next(), keys.next()) {
+        (Some(key), None) => Ok(key),
+        (None, _) => Err("no catalog model uses this file"),
+        (Some(_), Some(_)) => Err("more than one catalog model uses this file"),
+    }
+}
+
+fn comparable_path(path: &str) -> String {
+    // Backslash and case are equivalent spellings only on Windows.
+    if cfg!(windows) {
+        path.replace('\\', "/").to_lowercase()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Record `serving` on the catalog. Each entry is marked active or not only
+/// when the serving model was established; otherwise activity stays unknown.
+pub fn mark_serving(catalog: &mut ModelsCatalog, serving: Serving) {
+    if let Some(model) = serving.model.as_deref() {
+        for entry in &mut catalog.models {
+            entry.active = Some(model == entry.name);
+        }
+    }
+    catalog.serving = Some(serving);
 }
 
 fn mode_name(mode: localx_llama_core::Mode) -> String {
@@ -252,6 +319,7 @@ pub fn models_catalog(catalog: &Catalog, home: &Path) -> ModelsCatalog {
     ModelsCatalog {
         schema: MODELS_CATALOG_SCHEMA,
         models,
+        serving: None,
     }
 }
 
@@ -394,6 +462,116 @@ pub fn newest_log(dir: &Path) -> Option<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_serving_key_matches_the_whole_model_path() {
+        let root = std::path::PathBuf::from("G:/gguf");
+        let candidates = vec![
+            (
+                "split".to_string(),
+                vec![root.join("split/IQ1_M/Split-IQ1_M-00001-of-00002.gguf")],
+            ),
+            (
+                "a".to_string(),
+                vec![root.join("a/model-Q4.gguf"), root.join("a/model-Q8.gguf")],
+            ),
+            ("b".to_string(), vec![root.join("b/model-Q4.gguf")]),
+        ];
+        assert_eq!(serving_key("G:/gguf/a/model-Q8.gguf", &candidates), Ok("a"));
+        // Same file name, different folder: still the right key.
+        assert_eq!(
+            serving_key("G:\\gguf\\b\\model-Q4.gguf", &candidates),
+            Ok("b")
+        );
+        assert_eq!(
+            serving_key(
+                "G:/gguf/split/IQ1_M/Split-IQ1_M-00001-of-00002.gguf",
+                &candidates
+            ),
+            Ok("split")
+        );
+        assert_eq!(
+            serving_key("G:/elsewhere/model-Q4.gguf", &candidates),
+            Err("no catalog model uses this file")
+        );
+        let shared = vec![
+            ("x".to_string(), vec![root.join("same/file.gguf")]),
+            ("y".to_string(), vec![root.join("same/file.gguf")]),
+        ];
+        assert_eq!(
+            serving_key("G:/gguf/same/file.gguf", &shared),
+            Err("more than one catalog model uses this file")
+        );
+        if cfg!(windows) {
+            assert_eq!(serving_key("g:/GGUF/A/MODEL-Q4.GGUF", &candidates), Ok("a"));
+            assert_eq!(
+                serving_key("G:\\gguf\\b\\model-Q4.gguf", &candidates),
+                Ok("b")
+            );
+        } else {
+            assert!(serving_key("G:/GGUF/A/MODEL-Q4.GGUF", &candidates).is_err());
+        }
+    }
+
+    #[test]
+    fn marking_what_serves_sets_active_on_every_entry() {
+        let mut catalog = ModelsCatalog {
+            schema: 1,
+            models: Vec::new(),
+            serving: None,
+        };
+        let entry = |name: &str| ModelCatalogEntry {
+            name: name.to_string(),
+            aliases: Vec::new(),
+            display_name: None,
+            repository: "o/r".to_string(),
+            default_quant: None,
+            required_mode: None,
+            run_profile: RunProfileSummary {
+                source: "defaults".to_string(),
+                origin: None,
+                adopted_from_tuner_version: None,
+                adopted_at: None,
+                source_path: "p".to_string(),
+                reason: None,
+                warning: None,
+                quant: None,
+                context: None,
+                mode: None,
+            },
+            active: None,
+        };
+        catalog.models = vec![entry("a"), entry("b")];
+        mark_serving(
+            &mut catalog,
+            Serving {
+                proxy_port: 11435,
+                target_port: Some(8080),
+                model_path: Some("G:/gguf/b/m.gguf".into()),
+                model: Some("b".into()),
+                reason: None,
+            },
+        );
+        assert_eq!(catalog.models[0].active, Some(false));
+        assert_eq!(catalog.models[1].active, Some(true));
+        let json = serde_json::to_value(&catalog).unwrap();
+        assert_eq!(json["serving"]["proxyPort"], 11435);
+        assert_eq!(json["serving"]["model"], "b");
+
+        // Not established: activity stays unknown.
+        catalog.models = vec![entry("a"), entry("b")];
+        mark_serving(
+            &mut catalog,
+            Serving {
+                proxy_port: 11435,
+                target_port: Some(8080),
+                model_path: Some("G:/gguf/same/file.gguf".into()),
+                model: None,
+                reason: Some("more than one catalog model uses this file".into()),
+            },
+        );
+        assert!(catalog.models.iter().all(|entry| entry.active.is_none()));
+    }
     use serde_json::{Map, Value};
 
     fn catalog() -> Catalog {
